@@ -1,0 +1,11 @@
+node_modules/
+logs/
+.bun-cache/
+.npm-cache/
+.tmp-naplink/
+.tmp/
+*.tgz
+config/app.toml
+doc/
+CODEX_PROMPTING_GUIDE.md
+bun.lock

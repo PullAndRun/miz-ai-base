@@ -1,0 +1,31 @@
+[miz.gateway]
+url = ""
+accessToken = ""
+
+[miz.postgresql]
+url = ""
+database = ""
+username = ""
+password = ""
+
+[miz.naplink]
+logLevel = ""
+connectTimeoutMs = 0
+pingIntervalMs = 0
+apiTimeoutMs = 0
+apiRetries = 0
+reconnectMaxAttempts = 0
+
+[miz.plugins]
+commandPrefix = ""
+directory = ""
+
+[miz.ff14]
+priceAlertCron = ""
+maxListingCount = 0
+
+[[miz.ff14.priceAlerts]]
+groupId = ""
+region = ""
+itemName = ""
+minimumPrice = 0
