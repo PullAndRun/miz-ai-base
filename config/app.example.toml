@@ -21,6 +21,7 @@ commandPrefix = ""
 directory = ""
 
 [miz.ff14]
+priceAlertEnabled = true
 priceAlertCron = ""
 maxListingCount = 0
 

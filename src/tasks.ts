@@ -32,6 +32,11 @@ const startFf14PriceAlertTask = (
   gateway: Gateway,
   logger: Logger,
 ): TaskRuntime => {
+  if (!config.ff14.priceAlertEnabled) {
+    logger.info("plugin", "ff14 price alert task disabled: config switch is off");
+    return createNoopTask();
+  }
+
   const alerts = config.ff14.priceAlerts;
   if (alerts.length === 0) {
     logger.info("plugin", "ff14 price alert task disabled: no configured alerts");

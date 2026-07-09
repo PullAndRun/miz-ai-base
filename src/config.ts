@@ -35,6 +35,7 @@ const rawMizConfigSchema = z.object({
     .optional(),
   ff14: z
     .object({
+      priceAlertEnabled: z.boolean().optional(),
       priceAlertCron: nonEmptyStringSchema.optional(),
       maxListingCount: z.number().int().positive().optional(),
       priceAlerts: z
@@ -67,6 +68,7 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     directory: config.plugins?.directory ?? "plugins",
   },
   ff14: {
+    priceAlertEnabled: config.ff14?.priceAlertEnabled ?? true,
     priceAlertCron: config.ff14?.priceAlertCron ?? "0 * * * *",
     maxListingCount: config.ff14?.maxListingCount ?? 10,
     priceAlerts: config.ff14?.priceAlerts ?? [],
