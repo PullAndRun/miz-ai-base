@@ -1,0 +1,18 @@
+services:
+  miz:
+    image: oven/bun:latest
+    container_name: bot-miz
+    restart: always
+    working_dir: /app
+    command: >-
+      sh -c 'test ! -f tools/yt-dlp || chmod +x tools/yt-dlp;
+      test ! -f tools/ffmpeg || chmod +x tools/ffmpeg;
+      bun install --production && bun run start:docker'
+    volumes:
+      - .:/app
+    networks:
+      - diana
+
+networks:
+  diana:
+    external: true

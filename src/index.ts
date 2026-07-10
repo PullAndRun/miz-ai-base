@@ -5,15 +5,26 @@ import { createPluginRuntime } from "@/plugins";
 import { startScheduledTasks, type TaskRuntime } from "@/tasks";
 
 const registerShutdownHandlers = (gateway: Gateway, tasks: TaskRuntime, logger: Logger) => {
-  const stop = (signal: "SIGINT" | "SIGTERM") => {
+  let stopping = false;
+  const stop = async (signal: "SIGINT" | "SIGTERM") => {
+    if (stopping) {
+      return;
+    }
+
+    stopping = true;
     logger.info("miz", `received ${signal}, shutting down`);
-    tasks.stop();
-    gateway.dispose();
-    process.exit(0);
+    try {
+      await tasks.stop();
+    } catch (error) {
+      logger.error("miz", "scheduled tasks failed to stop cleanly", error);
+    } finally {
+      gateway.dispose();
+      process.exit(0);
+    }
   };
 
-  process.once("SIGINT", () => stop("SIGINT"));
-  process.once("SIGTERM", () => stop("SIGTERM"));
+  process.once("SIGINT", () => void stop("SIGINT"));
+  process.once("SIGTERM", () => void stop("SIGTERM"));
 };
 
 const main = async () => {

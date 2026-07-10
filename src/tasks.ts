@@ -27,7 +27,7 @@ import {
 } from "@/vtb";
 
 export type TaskRuntime = {
-  stop(): void;
+  stop(): Promise<void>;
 };
 
 export const startScheduledTasks = async (
@@ -42,12 +42,12 @@ export const startScheduledTasks = async (
   const vtbTask = await startVtbTask(config, gateway, logger);
 
   return {
-    stop: () => {
+    stop: async () => {
       ff14Task.stop();
       wallpaperTask.stop();
       newsTask.stop();
       ytDlpUpdateTask.stop();
-      vtbTask.stop();
+      await vtbTask.stop();
     },
   };
 };
@@ -60,6 +60,11 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
 
   if (config.vtb.subscriptions.length === 0) {
     logger.info("plugin", "vtb task disabled: no configured subscriptions");
+    return createNoopTask();
+  }
+
+  if (!hasVtbApiEndpoints(config.vtb)) {
+    logger.warn("plugin", "vtb task disabled: required API URLs are missing");
     return createNoopTask();
   }
 
@@ -78,6 +83,7 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
   }
 
   let running = false;
+  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
     if (running) {
       logger.warn("plugin", "vtb task skipped: previous run is still active");
@@ -85,11 +91,10 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
     }
 
     running = true;
-    try {
-      await pollVtbSubscriptions(config, gateway, logger, repository);
-    } finally {
+    currentRun = pollVtbSubscriptions(config, gateway, logger, repository).finally(() => {
       running = false;
-    }
+    });
+    await currentRun;
   };
 
   const task = cron.schedule(cronExpression, () => {
@@ -102,9 +107,12 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
   });
 
   return {
-    stop: () => {
+    stop: async () => {
       task.stop();
-      void closeVtbRepository();
+      await currentRun?.catch((error) => {
+        logger.warn("plugin", "vtb task ended with an error during shutdown", normalizeError(error));
+      });
+      await closeVtbRepository();
     },
   };
 };
@@ -277,7 +285,7 @@ const startYtDlpUpdateTask = (config: MizConfig, logger: Logger): TaskRuntime =>
   });
 
   logger.info("plugin", "yt-dlp update task started", { cronExpression });
-  return { stop: () => task.stop() };
+  return { stop: async () => task.stop() };
 };
 
 const startNewsTask = (config: MizConfig, gateway: Gateway, logger: Logger): TaskRuntime => {
@@ -288,6 +296,11 @@ const startNewsTask = (config: MizConfig, gateway: Gateway, logger: Logger): Tas
 
   if (config.news.groupIds.length === 0) {
     logger.info("plugin", "news task disabled: no configured groups");
+    return createNoopTask();
+  }
+
+  if (!config.news.apiUrl) {
+    logger.warn("plugin", "news task disabled: API URL is missing");
     return createNoopTask();
   }
 
@@ -321,7 +334,7 @@ const startNewsTask = (config: MizConfig, gateway: Gateway, logger: Logger): Tas
     groups: config.news.groupIds.length,
   });
 
-  return { stop: () => task.stop() };
+  return { stop: async () => task.stop() };
 };
 
 const pushNewsToConfiguredGroups = async (
@@ -360,6 +373,11 @@ const startWallpaperTask = (
     return createNoopTask();
   }
 
+  if (!config.wallpaper.apiUrl || !config.wallpaper.imageBaseUrl) {
+    logger.warn("plugin", "wallpaper task disabled: API URL or image base URL is missing");
+    return createNoopTask();
+  }
+
   const cronExpression = config.wallpaper.cron;
   if (!cron.validate(cronExpression)) {
     logger.warn("plugin", "wallpaper task disabled: invalid cron expression", {
@@ -392,7 +410,7 @@ const startWallpaperTask = (
   logger.info("plugin", "wallpaper task started", { cronExpression });
 
   return {
-    stop: () => {
+    stop: async () => {
       task.stop();
     },
   };
@@ -457,6 +475,11 @@ const startFf14PriceAlertTask = (
     return createNoopTask();
   }
 
+  if (!config.ff14.itemSearchApiUrl || !config.ff14.marketApiUrl) {
+    logger.warn("plugin", "ff14 price alert task disabled: required API URLs are missing");
+    return createNoopTask();
+  }
+
   const cronExpression = config.ff14.priceAlertCron;
   if (!cron.validate(cronExpression)) {
     logger.warn("plugin", "ff14 price alert task disabled: invalid cron expression", {
@@ -492,7 +515,7 @@ const startFf14PriceAlertTask = (
   });
 
   return {
-    stop: () => {
+    stop: async () => {
       task.stop();
     },
   };
@@ -563,8 +586,11 @@ const runFf14PriceAlerts = async (
 };
 
 const createNoopTask = (): TaskRuntime => ({
-  stop: () => {},
+  stop: async () => {},
 });
+
+const hasVtbApiEndpoints = (config: MizConfig["vtb"]) =>
+  Boolean(config.userApiUrl && config.cardApiUrl && config.liveApiUrl && config.dynamicApiUrl);
 
 const normalizeError = (error: unknown) => {
   if (error instanceof Error) {

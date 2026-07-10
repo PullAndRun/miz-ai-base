@@ -7,6 +7,7 @@ logs/
 src/generated/
 *.tgz
 config/app.toml
+config/app.docker.toml
 doc/
 CODEX_PROMPTING_GUIDE.md
 bun.lock

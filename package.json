@@ -4,8 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "bun run prisma:generate && bun run src/index.ts",
+    "start": "bun run prisma:generate && bun run scripts/start.ts normal",
+    "start:docker": "bun run prisma:generate && bun run scripts/start.ts docker",
     "dev": "bun run prisma:generate && bun --watch src/index.ts",
+    "dev:docker": "bun run prisma:generate && bun --watch scripts/start.ts docker",
     "typecheck": "bun run prisma:generate && tsc --noEmit",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",

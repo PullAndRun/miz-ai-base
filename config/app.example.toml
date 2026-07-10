@@ -20,6 +20,12 @@ reconnectMaxAttempts = 0
 commandPrefix = ""
 directory = ""
 
+[miz.network]
+proxyUrl = ""
+
+[miz.bilibili]
+cookie = ""
+
 [miz.ff14]
 priceAlertEnabled = true
 priceAlertCron = ""
@@ -47,8 +53,6 @@ apiUrl = ""
 
 [miz.video]
 enabled = true
-proxyUrl = ""
-bilibiliCookie = ""
 whitelistUserIds = []
 downloadDirectory = "/temp"
 napcatMediaDirectory = "/app/media"
@@ -65,7 +69,6 @@ userApiUrl = ""
 cardApiUrl = ""
 liveApiUrl = ""
 dynamicApiUrl = ""
-bilibiliCookie = ""
 
 [[miz.vtb.subscriptions]]
 groupId = ""

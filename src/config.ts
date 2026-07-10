@@ -4,6 +4,7 @@ const logLevelSchema = z.enum(["debug", "info", "warn", "error", "off"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
 const nonNegativeIntegerSchema = z.number().int().nonnegative();
 const targetIdSchema = z.union([z.string().trim().min(1), z.number().int().nonnegative()]);
+const runtimeModeSchema = z.enum(["normal", "docker"]);
 const ff14RegionKeySchema = z.enum(["猫", "猪", "狗", "鸟"]);
 
 const rawMizConfigSchema = z.object({
@@ -31,6 +32,16 @@ const rawMizConfigSchema = z.object({
     .object({
       commandPrefix: nonEmptyStringSchema.optional(),
       directory: nonEmptyStringSchema.optional(),
+    })
+    .optional(),
+  network: z
+    .object({
+      proxyUrl: nonEmptyStringSchema.optional(),
+    })
+    .optional(),
+  bilibili: z
+    .object({
+      cookie: z.string().optional(),
     })
     .optional(),
   ff14: z
@@ -71,8 +82,6 @@ const rawMizConfigSchema = z.object({
   video: z
     .object({
       enabled: z.boolean().optional(),
-      proxyUrl: nonEmptyStringSchema.optional(),
-      bilibiliCookie: z.string().optional(),
       whitelistUserIds: z.array(targetIdSchema).optional(),
       downloadDirectory: nonEmptyStringSchema.optional(),
       napcatMediaDirectory: nonEmptyStringSchema.optional(),
@@ -91,7 +100,6 @@ const rawMizConfigSchema = z.object({
       cardApiUrl: nonEmptyStringSchema.optional(),
       liveApiUrl: nonEmptyStringSchema.optional(),
       dynamicApiUrl: nonEmptyStringSchema.optional(),
-      bilibiliCookie: z.string().optional(),
       subscriptions: z
         .array(
           z.object({
@@ -105,6 +113,9 @@ const rawMizConfigSchema = z.object({
 });
 
 const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
+  runtime: {
+    mode: getRuntimeMode(),
+  },
   gateway: config.gateway,
   postgresql: config.postgresql,
   naplink: {
@@ -118,6 +129,12 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
   plugins: {
     commandPrefix: config.plugins?.commandPrefix ?? "miz",
     directory: config.plugins?.directory ?? "plugins",
+  },
+  network: {
+    proxyUrl: config.network?.proxyUrl ?? "",
+  },
+  bilibili: {
+    cookie: config.bilibili?.cookie?.trim() ?? "",
   },
   ff14: {
     priceAlertEnabled: config.ff14?.priceAlertEnabled ?? true,
@@ -142,8 +159,9 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
   },
   video: {
     enabled: config.video?.enabled ?? true,
-    proxyUrl: config.video?.proxyUrl ?? "",
-    bilibiliCookie: config.video?.bilibiliCookie?.trim() ?? "",
+    runtimeMode: getRuntimeMode(),
+    proxyUrl: config.network?.proxyUrl ?? "",
+    bilibiliCookie: config.bilibili?.cookie?.trim() ?? "",
     whitelistUserIds: config.video?.whitelistUserIds ?? [],
     downloadDirectory: config.video?.downloadDirectory ?? "/temp",
     napcatMediaDirectory: config.video?.napcatMediaDirectory ?? "/app/media",
@@ -160,7 +178,7 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     cardApiUrl: config.vtb?.cardApiUrl ?? "",
     liveApiUrl: config.vtb?.liveApiUrl ?? "",
     dynamicApiUrl: config.vtb?.dynamicApiUrl ?? "",
-    bilibiliCookie: config.vtb?.bilibiliCookie?.trim() || config.video?.bilibiliCookie?.trim() || "",
+    bilibiliCookie: config.bilibili?.cookie?.trim() ?? "",
     subscriptions: config.vtb?.subscriptions ?? [],
   },
 }));
@@ -170,6 +188,10 @@ const appConfigSchema = z.object({
 });
 
 export type LogLevel = z.infer<typeof logLevelSchema>;
+export type RuntimeMode = z.infer<typeof runtimeModeSchema>;
+export type RuntimeConfig = {
+  mode: RuntimeMode;
+};
 export type WallpaperConfig = {
   enabled: boolean;
   cron: string;
@@ -184,8 +206,17 @@ export type NewsConfig = {
   apiUrl: string;
 };
 
+export type NetworkConfig = {
+  proxyUrl: string;
+};
+
+export type BilibiliConfig = {
+  cookie: string;
+};
+
 export type VideoConfig = {
   enabled: boolean;
+  runtimeMode: RuntimeMode;
   proxyUrl: string;
   bilibiliCookie: string;
   whitelistUserIds: Array<string | number>;
@@ -216,13 +247,19 @@ export type VtbConfig = {
 // documenting the runtime contract, this prevents editor type servers from
 // losing transform output fields such as `wallpaper` during incremental checks.
 export type MizConfig = z.infer<typeof mizConfigSchema> & {
+  runtime: RuntimeConfig;
+  network: NetworkConfig;
+  bilibili: BilibiliConfig;
   wallpaper: WallpaperConfig;
   news: NewsConfig;
   video: VideoConfig;
   vtb: VtbConfig;
 };
 
+const getRuntimeMode = (): RuntimeMode => runtimeModeSchema.parse(process.env.MIZ_RUNTIME_MODE ?? "normal");
+
 const CONFIG_PATH = "config/app.toml";
+const DOCKER_CONFIG_PATH = "config/app.docker.toml";
 
 export const loadConfig = async (): Promise<MizConfig> => {
   const configFile = Bun.file(CONFIG_PATH);
@@ -230,5 +267,43 @@ export const loadConfig = async (): Promise<MizConfig> => {
     throw new Error(`Config file not found: ${CONFIG_PATH}`);
   }
 
-  return appConfigSchema.parse(Bun.TOML.parse(await configFile.text())).miz;
+  const normalConfig = Bun.TOML.parse(await configFile.text());
+  const source = getRuntimeMode() === "docker"
+    ? mergeConfig(normalConfig, await loadDockerConfig())
+    : normalConfig;
+  return appConfigSchema.parse(source).miz;
 };
+
+const loadDockerConfig = async () => {
+  const configFile = Bun.file(DOCKER_CONFIG_PATH);
+  if (!(await configFile.exists())) {
+    throw new Error(`Docker configuration file not found: ${DOCKER_CONFIG_PATH}`);
+  }
+
+  return Bun.TOML.parse(await configFile.text());
+};
+
+const mergeConfig = (base: unknown, override: unknown): Record<string, unknown> => {
+  const baseRecord = asRecord(base);
+  const overrideRecord = asRecord(override);
+  const merged: Record<string, unknown> = { ...baseRecord };
+
+  for (const [key, value] of Object.entries(overrideRecord)) {
+    merged[key] = isRecord(baseRecord[key]) && isRecord(value)
+      ? mergeConfig(baseRecord[key], value)
+      : value;
+  }
+
+  return merged;
+};
+
+const asRecord = (value: unknown): Record<string, unknown> => {
+  if (!isRecord(value)) {
+    throw new Error("Configuration root must be a table");
+  }
+
+  return value;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);

@@ -85,6 +85,11 @@ export const getVideoDuration = async (url: string, config: VideoConfig) => {
 };
 
 export const getNapcatVideoFile = async (videoPath: string, config: VideoConfig) => {
+  if (config.runtimeMode !== "docker") {
+    // In normal mode NapLink transfers bytes to NapCat directly.
+    return `base64://${(await readFile(path.resolve(videoPath))).toString("base64")}`;
+  }
+
   const mediaDirectory = await stat(config.napcatMediaDirectory)
     .then((entry) => (entry.isDirectory() ? config.napcatMediaDirectory : undefined))
     .catch(() => undefined);
@@ -94,8 +99,7 @@ export const getNapcatVideoFile = async (videoPath: string, config: VideoConfig)
     return pathToFileURL(napcatPath).href;
   }
 
-  // Without a shared media mount, the file only exists in this container.
-  // Encode it so NapLink transfers the video bytes to NapCat directly.
+  // Keep Docker deployments working if the shared mount was not configured.
   return `base64://${(await readFile(path.resolve(videoPath))).toString("base64")}`;
 };
 
@@ -232,7 +236,9 @@ const getFfmpegPath = (config: VideoConfig) => {
 };
 
 const getDownloadDirectory = (config: VideoConfig) =>
-  process.platform === "win32" && config.downloadDirectory === "/temp"
+  config.runtimeMode === "docker"
+    ? "/temp"
+    : process.platform === "win32" && config.downloadDirectory === "/temp"
     ? path.join(process.cwd(), "temp")
     : config.downloadDirectory;
 
