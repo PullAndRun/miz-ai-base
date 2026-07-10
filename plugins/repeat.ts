@@ -1,0 +1,77 @@
+import type { MizPlugin, PluginMessageContext } from "@/plugins";
+
+type RepeatState = {
+  signature: string;
+  count: number;
+};
+
+const repeatStates = new Map<string, RepeatState>();
+
+const repeatPlugin: MizPlugin = {
+  name: "repeat",
+  commands: ["复读"],
+  description: "同一群连续三次发送相同文本或图片时，机器人会复读该消息。",
+  async handle({ reply }) {
+    await reply("复读功能已启用：群内连续三次相同文本或图片会触发复读。");
+  },
+  async onMessage(context) {
+    await repeatIfNeeded(context);
+  },
+};
+
+export default repeatPlugin;
+
+const repeatIfNeeded = async ({ commandPrefix, message, reply }: PluginMessageContext) => {
+  if (message.groupId === undefined) {
+    return;
+  }
+
+  const groupKey = String(message.groupId);
+  const candidate = getRepeatCandidate(message.text, message.raw.message);
+  if (!candidate || message.text.trim().startsWith(commandPrefix)) {
+    repeatStates.delete(groupKey);
+    return;
+  }
+
+  const previous = repeatStates.get(groupKey);
+  const count = previous?.signature === candidate.signature ? previous.count + 1 : 1;
+  repeatStates.set(groupKey, { signature: candidate.signature, count });
+  if (count !== 3) {
+    return;
+  }
+
+  await reply(candidate.payload);
+};
+
+const getRepeatCandidate = (text: string, rawMessage: unknown) => {
+  const normalizedText = text.trim();
+  if (normalizedText) {
+    return {
+      signature: `text:${normalizedText}`,
+      payload: rawMessage ?? normalizedText,
+    };
+  }
+
+  if (!Array.isArray(rawMessage)) {
+    return undefined;
+  }
+
+  const images = rawMessage.filter(isImageSegment);
+  if (images.length === 0) {
+    return undefined;
+  }
+
+  return {
+    signature: `image:${JSON.stringify(images.map((image) => image.data))}`,
+    payload: rawMessage,
+  };
+};
+
+const isImageSegment = (value: unknown): value is { type: "image"; data: unknown } => {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const segment = value as Record<string, unknown>;
+  return segment.type === "image" && "data" in segment;
+};

@@ -34,11 +34,14 @@ export type PluginContext = {
   commandPrefix: string;
 };
 
+export type PluginMessageContext = Omit<PluginContext, "command">;
+
 export type MizPlugin = {
   name: string;
   commands: readonly string[];
   description?: string;
   handle(context: PluginContext): void | Promise<void>;
+  onMessage?(context: PluginMessageContext): void | Promise<void>;
 };
 
 export type PluginRuntime = {
@@ -62,6 +65,11 @@ const mizPluginSchema = z.object({
   handle: z.custom<MizPlugin["handle"]>((value) => typeof value === "function", {
     message: "handle must be a function",
   }),
+  onMessage: z
+    .custom<NonNullable<MizPlugin["onMessage"]>>((value) => typeof value === "function", {
+      message: "onMessage must be a function",
+    })
+    .optional(),
 });
 
 const nodeErrorSchema = z.looseObject({
@@ -84,16 +92,71 @@ export const createPluginRuntime = async (
   });
 
   return {
-    handleMessage: (message) =>
-      dispatchPluginCommand({
+    handleMessage: async (message) => {
+      await notifyPluginsOfMessage({
+        config,
+        gateway,
+        logger,
+        message,
+        pluginInfo,
+        plugins,
+      });
+      await dispatchPluginCommand({
         config,
         gateway,
         logger,
         message,
         pluginInfo,
         pluginsByCommand,
-      }),
+      });
+    },
   };
+};
+
+const notifyPluginsOfMessage = async ({
+  config,
+  gateway,
+  logger,
+  message,
+  pluginInfo,
+  plugins,
+}: {
+  config: MizConfig;
+  gateway: Gateway;
+  logger: Logger;
+  message: IncomingMessage;
+  pluginInfo: readonly PluginInfo[];
+  plugins: readonly MizPlugin[];
+}) => {
+  for (const plugin of plugins) {
+    if (!plugin.onMessage) {
+      continue;
+    }
+
+    try {
+      await plugin.onMessage({
+        config,
+        message,
+        gateway,
+        logger,
+        plugins: pluginInfo,
+        commandPrefix: config.plugins.commandPrefix,
+        reply: (replyMessage) => replyToMessage(gateway, message, replyMessage),
+        replyForward: (messages, options) =>
+          gateway.sendForwardMessage(
+            message,
+            messages,
+            {
+              title: options?.title,
+              source: options?.source,
+              summary: options?.summary,
+            },
+          ),
+      });
+    } catch (error) {
+      logger.error("plugin", `message hook failed: ${plugin.name}`, error);
+    }
+  }
 };
 
 const loadPlugins = async (directory: string, logger: Logger) => {

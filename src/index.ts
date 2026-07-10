@@ -29,7 +29,7 @@ const main = async () => {
   await gateway.connect();
   await gateway.reportServerInfo();
 
-  const tasks = startScheduledTasks(config, gateway, logger);
+  const tasks = await startScheduledTasks(config, gateway, logger);
   registerShutdownHandlers(gateway, tasks, logger);
 };
 

@@ -1,4 +1,3 @@
-import dayjs from "dayjs";
 import { z } from "zod";
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -8,7 +7,6 @@ const NEWS_LIMIT = 10;
 const financeNewsItemSchema = z.looseObject({
   loc: z.string().min(1).optional(),
   title: z.string().min(1).optional(),
-  publish_time: z.union([z.string(), z.number()]).optional(),
   third_url: z.string().min(1).optional(),
   content: z
     .looseObject({
@@ -29,7 +27,6 @@ export type News = {
   id: string;
   title: string;
   detail?: string;
-  publishedAt?: string;
 };
 
 type SentNewsCache = {
@@ -82,6 +79,12 @@ export const formatNewsMessages = (news: readonly News[]) => [
 
 export const formatNewsItems = (news: readonly News[]) => news.map(formatNews);
 
+export const formatScheduledNewsItems = (news: readonly News[]) =>
+  news.map((item, index) => [
+    ...(news.length > 1 ? [`#${index + 1}`] : []),
+    formatNews(item),
+  ].join("\n"));
+
 export const createNoNewsMessage = () => "财经新闻雷达刚刚巡检完毕，暂无新的市场快讯。";
 
 const fetchFinanceNews = async (apiUrl: string): Promise<News[]> => {
@@ -102,15 +105,25 @@ const fetchFinanceNews = async (apiUrl: string): Promise<News[]> => {
       return [];
     }
 
-    return [
-      {
-        id: `finance:${item.loc ?? item.third_url ?? title}`,
-        title,
-        detail: detail === title ? undefined : detail,
-        publishedAt: formatTimestamp(item.publish_time),
-      },
-    ];
+    const display = removeOverlappingText(title, detail);
+    return [{ id: `finance:${item.loc ?? item.third_url ?? title}`, ...display }];
   });
+};
+
+const removeOverlappingText = (title: string, detail: string | undefined) => {
+  if (!detail) {
+    return { title };
+  }
+
+  if (detail.includes(title)) {
+    return { title: detail };
+  }
+
+  if (title.includes(detail)) {
+    return { title };
+  }
+
+  return { title, detail };
 };
 
 const getSentNewsCache = (targetKey: string) => {
@@ -140,15 +153,6 @@ const rememberSentNews = (cache: SentNewsCache, news: readonly News[]) => {
 
 const formatNews = (news: News) =>
   [
-    `• 标题：${news.title}`,
-    `• 时间：${news.publishedAt ?? "未知"}`,
-    "• 内容：",
-    news.detail ?? "无",
+    `• ${news.title}`,
+    ...(news.detail ? [`• ${news.detail}`] : []),
   ].join("\n");
-
-const formatTimestamp = (value: string | number | undefined) => {
-  const timestamp = Number(value);
-  return Number.isFinite(timestamp) && timestamp > 0
-    ? dayjs.unix(timestamp).format("MM-DD HH:mm")
-    : undefined;
-};

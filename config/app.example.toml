@@ -44,3 +44,27 @@ enabled = true
 cron = "*/5 * * * *"
 groupIds = []
 apiUrl = ""
+
+[miz.video]
+enabled = true
+proxyUrl = ""
+bilibiliCookie = ""
+whitelistUserIds = []
+downloadDirectory = "/temp"
+napcatMediaDirectory = "/app/media"
+ytDlpLinuxPath = "tools/yt-dlp"
+ytDlpWindowsPath = "tools/yt-dlp.exe"
+updateCron = "0 0 * * *"
+
+[miz.vtb]
+enabled = true
+cron = "*/3 * * * *"
+userApiUrl = ""
+cardApiUrl = ""
+liveApiUrl = ""
+dynamicApiUrl = ""
+bilibiliCookie = ""
+
+[[miz.vtb.subscriptions]]
+groupId = ""
+streamers = [""]

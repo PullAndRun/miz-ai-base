@@ -4,8 +4,12 @@ logs/
 .npm-cache/
 .tmp-naplink/
 .tmp/
+src/generated/
 *.tgz
 config/app.toml
 doc/
 CODEX_PROMPTING_GUIDE.md
 bun.lock
+tools/
+temp/
+.agents/

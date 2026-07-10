@@ -68,6 +68,38 @@ const rawMizConfigSchema = z.object({
       apiUrl: nonEmptyStringSchema.optional(),
     })
     .optional(),
+  video: z
+    .object({
+      enabled: z.boolean().optional(),
+      proxyUrl: nonEmptyStringSchema.optional(),
+      bilibiliCookie: z.string().optional(),
+      whitelistUserIds: z.array(targetIdSchema).optional(),
+      downloadDirectory: nonEmptyStringSchema.optional(),
+      napcatMediaDirectory: nonEmptyStringSchema.optional(),
+      ytDlpLinuxPath: nonEmptyStringSchema.optional(),
+      ytDlpWindowsPath: nonEmptyStringSchema.optional(),
+      updateCron: nonEmptyStringSchema.optional(),
+    })
+    .optional(),
+  vtb: z
+    .object({
+      enabled: z.boolean().optional(),
+      cron: nonEmptyStringSchema.optional(),
+      userApiUrl: nonEmptyStringSchema.optional(),
+      cardApiUrl: nonEmptyStringSchema.optional(),
+      liveApiUrl: nonEmptyStringSchema.optional(),
+      dynamicApiUrl: nonEmptyStringSchema.optional(),
+      bilibiliCookie: z.string().optional(),
+      subscriptions: z
+        .array(
+          z.object({
+            groupId: targetIdSchema,
+            streamers: z.array(nonEmptyStringSchema).min(1),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
 });
 
 const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
@@ -106,6 +138,27 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     groupIds: config.news?.groupIds ?? [],
     apiUrl: config.news?.apiUrl ?? "",
   },
+  video: {
+    enabled: config.video?.enabled ?? true,
+    proxyUrl: config.video?.proxyUrl ?? "",
+    bilibiliCookie: config.video?.bilibiliCookie?.trim() ?? "",
+    whitelistUserIds: config.video?.whitelistUserIds ?? [],
+    downloadDirectory: config.video?.downloadDirectory ?? "/temp",
+    napcatMediaDirectory: config.video?.napcatMediaDirectory ?? "/app/media",
+    ytDlpLinuxPath: config.video?.ytDlpLinuxPath ?? "",
+    ytDlpWindowsPath: config.video?.ytDlpWindowsPath ?? "",
+    updateCron: config.video?.updateCron ?? "0 0 * * *",
+  },
+  vtb: {
+    enabled: config.vtb?.enabled ?? true,
+    cron: config.vtb?.cron ?? "*/3 * * * *",
+    userApiUrl: config.vtb?.userApiUrl ?? "",
+    cardApiUrl: config.vtb?.cardApiUrl ?? "",
+    liveApiUrl: config.vtb?.liveApiUrl ?? "",
+    dynamicApiUrl: config.vtb?.dynamicApiUrl ?? "",
+    bilibiliCookie: config.vtb?.bilibiliCookie?.trim() || config.video?.bilibiliCookie?.trim() || "",
+    subscriptions: config.vtb?.subscriptions ?? [],
+  },
 }));
 
 const appConfigSchema = z.object({
@@ -127,12 +180,40 @@ export type NewsConfig = {
   apiUrl: string;
 };
 
+export type VideoConfig = {
+  enabled: boolean;
+  proxyUrl: string;
+  bilibiliCookie: string;
+  whitelistUserIds: Array<string | number>;
+  downloadDirectory: string;
+  napcatMediaDirectory: string;
+  ytDlpLinuxPath: string;
+  ytDlpWindowsPath: string;
+  updateCron: string;
+};
+
+export type VtbConfig = {
+  enabled: boolean;
+  cron: string;
+  userApiUrl: string;
+  cardApiUrl: string;
+  liveApiUrl: string;
+  dynamicApiUrl: string;
+  bilibiliCookie: string;
+  subscriptions: Array<{
+    groupId: string | number;
+    streamers: string[];
+  }>;
+};
+
 // Keep normalized optional sections explicit for plugin consumers. Besides
 // documenting the runtime contract, this prevents editor type servers from
 // losing transform output fields such as `wallpaper` during incremental checks.
 export type MizConfig = z.infer<typeof mizConfigSchema> & {
   wallpaper: WallpaperConfig;
   news: NewsConfig;
+  video: VideoConfig;
+  vtb: VtbConfig;
 };
 
 const CONFIG_PATH = "config/app.toml";

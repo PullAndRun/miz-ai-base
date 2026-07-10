@@ -1,0 +1,36 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model VtbStreamer {
+  mid           BigInt    @id
+  name          String
+  liveRoom      BigInt?   @map("live_room")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@map("vtb_streamers")
+}
+
+model VtbLiveSession {
+  streamerMid    BigInt       @id @map("streamer_mid")
+  streamerName   String       @map("streamer_name")
+  liveRoom       BigInt?      @map("live_room")
+  startedAt      DateTime     @map("live_started_at")
+  startFans      Int?         @map("start_fans")
+  endedAt        DateTime?    @map("ended_at")
+  endFans        Int?         @map("end_fans")
+
+  @@map("vtb_live_sessions")
+}
+
+model VtbDynamicState {
+  streamerMid      BigInt    @id @map("streamer_mid")
+  lastPublishedAt  DateTime  @map("last_published_at")
+
+  @@map("vtb_dynamic_status")
+}

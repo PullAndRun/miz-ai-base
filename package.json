@@ -4,14 +4,22 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "bun run src/index.ts",
-    "dev": "bun --watch src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "start": "bun run prisma:migrate && bun run prisma:generate && bun run src/index.ts",
+    "dev": "bun run prisma:generate && bun --watch src/index.ts",
+    "typecheck": "bun run prisma:generate && tsc --noEmit",
+    "prisma:generate": "prisma generate",
+    "prisma:push": "prisma db push",
+    "prisma:migrate": "bun run scripts/prisma-migrate.ts"
   },
   "dependencies": {
     "@naplink/naplink": "1.1.0",
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
     "dayjs": "^1.11.21",
+    "fast-xml-parser": "^5.9.3",
     "node-cron": "^4.6.0",
+    "pg": "^8.22.0",
+    "prisma": "^7.8.0",
     "winston": "^3.19.0",
     "zod": "^4.4.3"
   },
