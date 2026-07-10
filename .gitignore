@@ -13,3 +13,4 @@ bun.lock
 tools/
 temp/
 .agents/
+github/

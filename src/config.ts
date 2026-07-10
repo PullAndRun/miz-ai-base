@@ -78,6 +78,8 @@ const rawMizConfigSchema = z.object({
       napcatMediaDirectory: nonEmptyStringSchema.optional(),
       ytDlpLinuxPath: nonEmptyStringSchema.optional(),
       ytDlpWindowsPath: nonEmptyStringSchema.optional(),
+      ffmpegLinuxPath: nonEmptyStringSchema.optional(),
+      ffmpegWindowsPath: nonEmptyStringSchema.optional(),
       updateCron: nonEmptyStringSchema.optional(),
     })
     .optional(),
@@ -147,6 +149,8 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     napcatMediaDirectory: config.video?.napcatMediaDirectory ?? "/app/media",
     ytDlpLinuxPath: config.video?.ytDlpLinuxPath ?? "",
     ytDlpWindowsPath: config.video?.ytDlpWindowsPath ?? "",
+    ffmpegLinuxPath: config.video?.ffmpegLinuxPath ?? "tools/ffmpeg",
+    ffmpegWindowsPath: config.video?.ffmpegWindowsPath ?? "tools/ffmpeg.exe",
     updateCron: config.video?.updateCron ?? "0 0 * * *",
   },
   vtb: {
@@ -189,6 +193,8 @@ export type VideoConfig = {
   napcatMediaDirectory: string;
   ytDlpLinuxPath: string;
   ytDlpWindowsPath: string;
+  ffmpegLinuxPath: string;
+  ffmpegWindowsPath: string;
   updateCron: string;
 };
 

@@ -7,6 +7,7 @@ import type { MizConfig, VtbConfig } from "@/config";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const DYNAMIC_RETRY_DELAY_MS = 10_000;
+const MAX_DYNAMIC_DESCRIPTION_LENGTH = 1_800;
 const textValueSchema = z.union([z.string(), z.number(), z.boolean()]);
 
 const userSchema = z.looseObject({
@@ -65,6 +66,7 @@ export type VtbLiveInfo = {
 export type VtbDynamic = {
   title: string;
   description: string;
+  containsDynamicUrl: boolean;
   publishedAt: Date;
   link: string;
   author: string;
@@ -176,13 +178,18 @@ export const getVtbDynamics = async (
   return {
     avatarUrl: channel.image.url,
     items: channel.item
-      .map((item) => ({
-        title: String(item.title),
-        description: cleanDynamicText(String(item.description)),
-        publishedAt: parseRssDate(item.pubDate),
-        link: item.link,
-        author: item.author,
-      }))
+      .map((item) => {
+        const description = cleanDynamicText(String(item.description));
+        const dynamicUrl = formatDynamicUrl(item.link);
+        return {
+          title: String(item.title),
+          description: truncateDynamicText(description),
+          containsDynamicUrl: description.includes(item.link) || description.includes(dynamicUrl),
+          publishedAt: parseRssDate(item.pubDate),
+          link: item.link,
+          author: item.author,
+        };
+      })
       .filter((item): item is VtbDynamic => item.publishedAt !== undefined)
       .sort((left, right) => right.publishedAt.getTime() - left.publishedAt.getTime()),
   };
@@ -306,7 +313,9 @@ export const formatOfflineMessage = (
 export const formatDynamicMessage = (dynamic: VtbDynamic) => {
   const dynamicUrl = formatDynamicUrl(dynamic.link);
   const hasDynamicUrlInDescription =
-    dynamic.description.includes(dynamic.link) || dynamic.description.includes(dynamicUrl);
+    dynamic.containsDynamicUrl ||
+    dynamic.description.includes(dynamic.link) ||
+    dynamic.description.includes(dynamicUrl);
 
   return [
     "╭─「 B站动态更新 」",
@@ -408,3 +417,8 @@ const cleanDynamicText = (value: string) =>
     .replace(/&gt;/gi, ">")
     .replace(/\s+/g, " ")
     .trim();
+
+const truncateDynamicText = (value: string) =>
+  value.length > MAX_DYNAMIC_DESCRIPTION_LENGTH
+    ? `${value.slice(0, MAX_DYNAMIC_DESCRIPTION_LENGTH - 1)}…`
+    : value;

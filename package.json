@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "bun run prisma:migrate && bun run prisma:generate && bun run src/index.ts",
+    "start": "bun run prisma:generate && bun run src/index.ts",
     "dev": "bun run prisma:generate && bun --watch src/index.ts",
     "typecheck": "bun run prisma:generate && tsc --noEmit",
     "prisma:generate": "prisma generate",

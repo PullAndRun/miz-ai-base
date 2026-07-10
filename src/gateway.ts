@@ -2,6 +2,7 @@ import { NapLink, type ConnectionState, type Logger as NapLinkLogger } from "@na
 import { z } from "zod";
 import type { MizConfig } from "@/config";
 import type { Logger } from "@/logger";
+import type { ForwardMessageContent } from "@/plugins";
 
 export type IncomingMessage = {
   text: string;
@@ -30,7 +31,7 @@ export type Gateway = {
   sendPrivateMessage(userId: number | string, message: unknown): Promise<unknown>;
   sendForwardMessage(
     target: IncomingMessage,
-    messages: readonly string[],
+    messages: readonly ForwardMessageContent[],
     options?: ForwardMessageOptions,
   ): Promise<unknown>;
   onMessage(handler: MessageHandler): () => void;
@@ -89,7 +90,7 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
 const sendForwardMessage = (
   client: NapLink,
   target: IncomingMessage,
-  messages: readonly string[],
+  messages: readonly ForwardMessageContent[],
   options: ForwardMessageOptions = {},
 ) => {
   const forwardMessages = messages.map((message) => createForwardNode(message, options));
@@ -117,19 +118,22 @@ const sendForwardMessage = (
   throw new Error("Cannot send forward message: target has no group_id or user_id");
 };
 
-const createForwardNode = (message: string, options: ForwardMessageOptions) => ({
+const createForwardNode = (message: ForwardMessageContent, options: ForwardMessageOptions) => ({
   type: "node",
   data: {
     name: options.senderName ?? "miz",
     uin: String(options.senderUin ?? 0),
-    content: [
-      {
-        type: "text",
-        data: {
-          text: message,
-        },
-      },
-    ],
+    content:
+      typeof message === "string"
+        ? [
+            {
+              type: "text",
+              data: {
+                text: message,
+              },
+            },
+          ]
+        : message,
   },
 });
 

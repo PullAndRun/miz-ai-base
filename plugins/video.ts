@@ -2,12 +2,13 @@ import type { MizPlugin } from "@/plugins";
 import {
   deleteDownloadedVideo,
   downloadVideo,
-  getNapcatVideoFileUrl,
+  getNapcatVideoFile,
   getVideoDuration,
   isBilibiliUrl,
   isVideoUrl,
   isWhitelistedVideoUser,
   MAX_VIDEO_DURATION_SECONDS,
+  prepareVideoForQq,
 } from "@/video";
 
 const videoPlugin: MizPlugin = {
@@ -49,16 +50,21 @@ const videoPlugin: MizPlugin = {
         return;
       }
 
-      const videoPath = await downloadVideo({ url, config: config.video });
+      const downloadedVideoPath = await downloadVideo({ url, config: config.video });
+      let videoPath = downloadedVideoPath;
       try {
+        videoPath = await prepareVideoForQq(downloadedVideoPath, config.video);
         await reply({
           type: "video",
           data: {
-            file: getNapcatVideoFileUrl(videoPath, config.video),
+            file: await getNapcatVideoFile(videoPath, config.video),
           },
         });
       } finally {
         await deleteDownloadedVideo(videoPath);
+        if (videoPath !== downloadedVideoPath) {
+          await deleteDownloadedVideo(downloadedVideoPath);
+        }
       }
       logger.info("plugin", "video sent", {
         userId: message.userId,

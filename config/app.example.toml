@@ -54,6 +54,8 @@ downloadDirectory = "/temp"
 napcatMediaDirectory = "/app/media"
 ytDlpLinuxPath = "tools/yt-dlp"
 ytDlpWindowsPath = "tools/yt-dlp.exe"
+ffmpegLinuxPath = "tools/ffmpeg"
+ffmpegWindowsPath = "tools/ffmpeg.exe"
 updateCron = "0 0 * * *"
 
 [miz.vtb]

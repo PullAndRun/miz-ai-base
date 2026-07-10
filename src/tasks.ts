@@ -190,11 +190,18 @@ const pollVtbSubscriptions = async (
         try {
           const feed = await dynamicFeed;
           const latestDynamic = feed.items[0];
+          if (!latestDynamic) {
+            logger.warn("plugin", "vtb dynamic poll skipped: feed contains no valid dated item", {
+              streamer: streamer.name,
+            });
+            continue;
+          }
           const lastPublishedAt = await repository.getLastDynamicTime(streamer.mid);
           const isUnseen = !lastPublishedAt || latestDynamic.publishedAt > lastPublishedAt;
           const isRecent = Date.now() - latestDynamic.publishedAt.getTime() < getVtbPollingIntervalMs(config.vtb.cron);
+          const isLivePromotion = latestDynamic.description.includes("https://live.bilibili.com");
 
-          if (isUnseen && isRecent) {
+          if (isUnseen && isRecent && !isLivePromotion) {
             const message = [
               { type: "text", data: { text: formatDynamicMessage(latestDynamic) } },
               ...(feed.avatarUrl ? [{ type: "image", data: { file: feed.avatarUrl } }] : []),
@@ -207,8 +214,13 @@ const pollVtbSubscriptions = async (
               dynamics: 1,
             });
           } else if (isUnseen) {
-            // Mark stale dynamics as seen so a restarted service never backfills old posts.
+            // Mark stale and live-promotion dynamics as seen so they are never retried.
             await repository.setLastDynamicTime(streamer.mid, latestDynamic.publishedAt);
+            if (isLivePromotion) {
+              logger.info("plugin", "vtb dynamic notification skipped: live promotion", {
+                streamer: streamer.name,
+              });
+            }
           }
         } catch (error) {
           logger.warn("plugin", "vtb dynamic poll failed; live status polling will continue", {
@@ -227,7 +239,7 @@ const pollVtbSubscriptions = async (
 
 const getVtbPollingIntervalMs = (cronExpression: string) => {
   const minuteInterval = /^\*\/(\d+) \* \* \* \*$/.exec(cronExpression)?.[1];
-  return (minuteInterval ? Number(minuteInterval) : 3) * 60_000;
+  return Math.max(1, minuteInterval ? Number(minuteInterval) : 3) * 60_000;
 };
 
 const startYtDlpUpdateTask = (config: MizConfig, logger: Logger): TaskRuntime => {

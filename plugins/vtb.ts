@@ -13,7 +13,7 @@ const vtbPlugin: MizPlugin = {
   name: "vtb",
   commands: ["vtb"],
   description: "查询 B 站主播直播或动态。用法：miz vtb live 主播名 / miz vtb dynamic 主播名",
-  async handle({ command, config, logger, reply, replyForward }) {
+  async handle({ command, config, logger, reply }) {
     const [type, ...nameParts] = command.args.trim().split(/\s+/);
     const streamerName = nameParts.join(" ").trim();
     if ((type !== "live" && type !== "dynamic") || !streamerName) {
@@ -61,11 +61,8 @@ const vtbPlugin: MizPlugin = {
       }
 
       const feed = await getVtbDynamics(streamer, config.vtb);
-      await replyForward(feed.items.map(formatDynamicMessage), {
-        title: `${streamer.name} 的最新动态`,
-        source: "miz vtb dynamic",
-        summary: `${feed.items.length} 条动态`,
-      });
+      const latestDynamic = feed.items[0];
+      await reply(formatDynamicMessage(latestDynamic));
     } catch (error) {
       logger.error("plugin", "vtb query failed", error);
       await reply("主播信息暂时无法获取，请稍后再试。");

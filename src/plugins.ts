@@ -12,6 +12,8 @@ export type PluginCommand = {
   raw: string;
 };
 
+export type ForwardMessageContent = string | readonly unknown[];
+
 export type PluginInfo = {
   name: string;
   commands: readonly string[];
@@ -23,7 +25,7 @@ export type PluginContext = {
   command: PluginCommand;
   message: IncomingMessage;
   reply(message: unknown): Promise<unknown>;
-  replyForward(messages: readonly string[], options?: {
+  replyForward(messages: readonly ForwardMessageContent[], options?: {
     title?: string;
     source?: string;
     summary?: string;
