@@ -2,7 +2,7 @@ import type { MizPlugin } from "@/plugins";
 
 const helpPlugin: MizPlugin = {
   name: "help",
-  commands: ["help"],
+  commands: ["help", "帮助"],
   description: "列出当前可用命令",
   async handle({ commandPrefix, plugins, replyForward }) {
     const lines = plugins.map((plugin) => {

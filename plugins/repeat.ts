@@ -9,11 +9,7 @@ const repeatStates = new Map<string, RepeatState>();
 
 const repeatPlugin: MizPlugin = {
   name: "repeat",
-  commands: ["复读"],
-  description: "同一群连续三次发送相同文本或图片时，机器人会复读该消息。",
-  async handle({ reply }) {
-    await reply("复读功能已启用：群内连续三次相同文本或图片会触发复读。");
-  },
+  commands: [],
   async onMessage(context) {
     await repeatIfNeeded(context);
   },

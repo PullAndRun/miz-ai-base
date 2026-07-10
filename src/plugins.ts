@@ -42,7 +42,7 @@ export type MizPlugin = {
   name: string;
   commands: readonly string[];
   description?: string;
-  handle(context: PluginContext): void | Promise<void>;
+  handle?(context: PluginContext): void | Promise<void>;
   onMessage?(context: PluginMessageContext): void | Promise<void>;
 };
 
@@ -62,16 +62,18 @@ type PluginModule = z.infer<typeof pluginModuleSchema>;
 
 const mizPluginSchema = z.object({
   name: nonEmptyStringSchema,
-  commands: z.array(nonEmptyStringSchema).min(1),
+  commands: z.array(nonEmptyStringSchema),
   description: z.string().optional(),
   handle: z.custom<MizPlugin["handle"]>((value) => typeof value === "function", {
     message: "handle must be a function",
-  }),
+  }).optional(),
   onMessage: z
     .custom<NonNullable<MizPlugin["onMessage"]>>((value) => typeof value === "function", {
       message: "onMessage must be a function",
     })
     .optional(),
+}).refine((plugin) => plugin.handle || plugin.onMessage, {
+  message: "plugin must provide a command handler or message hook",
 });
 
 const nodeErrorSchema = z.looseObject({
@@ -262,6 +264,7 @@ const createCommandIndex = (plugins: MizPlugin[], logger: Logger) => {
 
 const createPluginInfo = (plugins: MizPlugin[]): PluginInfo[] =>
   plugins
+    .filter((plugin) => plugin.commands.length > 0)
     .map((plugin) => ({
       name: plugin.name,
       commands: plugin.commands,
@@ -299,7 +302,7 @@ const dispatchPluginCommand = async ({
   }
 
   const plugin = pluginsByCommand.get(command.name);
-  if (!plugin) {
+  if (!plugin?.handle) {
     return;
   }
 
