@@ -25,6 +25,7 @@ export type Gateway = {
   connect(): Promise<void>;
   dispose(): void;
   reportServerInfo(): Promise<void>;
+  getGroupList(): Promise<unknown>;
   sendGroupMessage(groupId: number | string, message: unknown): Promise<unknown>;
   sendPrivateMessage(userId: number | string, message: unknown): Promise<unknown>;
   sendForwardMessage(
@@ -72,6 +73,7 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
     connect: () => client.connect(),
     dispose: () => client.dispose(),
     reportServerInfo: () => reportServerInfo(client, logger),
+    getGroupList: () => client.getGroupList(),
     sendGroupMessage: (groupId, message) => client.sendGroupMessage(groupId, message),
     sendPrivateMessage: (userId, message) => client.sendPrivateMessage(userId, message),
     sendForwardMessage: (target, messages, options) => sendForwardMessage(client, target, messages, options),

@@ -38,6 +38,8 @@ const rawMizConfigSchema = z.object({
       priceAlertEnabled: z.boolean().optional(),
       priceAlertCron: nonEmptyStringSchema.optional(),
       maxListingCount: z.number().int().positive().optional(),
+      itemSearchApiUrl: nonEmptyStringSchema.optional(),
+      marketApiUrl: nonEmptyStringSchema.optional(),
       priceAlerts: z
         .array(
           z.object({
@@ -48,6 +50,22 @@ const rawMizConfigSchema = z.object({
           }),
         )
         .optional(),
+    })
+    .optional(),
+  wallpaper: z
+    .object({
+      enabled: z.boolean().optional(),
+      cron: nonEmptyStringSchema.optional(),
+      apiUrl: nonEmptyStringSchema.optional(),
+      imageBaseUrl: nonEmptyStringSchema.optional(),
+    })
+    .optional(),
+  news: z
+    .object({
+      enabled: z.boolean().optional(),
+      cron: nonEmptyStringSchema.optional(),
+      groupIds: z.array(targetIdSchema).optional(),
+      apiUrl: nonEmptyStringSchema.optional(),
     })
     .optional(),
 });
@@ -71,7 +89,22 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     priceAlertEnabled: config.ff14?.priceAlertEnabled ?? true,
     priceAlertCron: config.ff14?.priceAlertCron ?? "0 * * * *",
     maxListingCount: config.ff14?.maxListingCount ?? 10,
+    itemSearchApiUrl: config.ff14?.itemSearchApiUrl ?? "",
+    marketApiUrl: config.ff14?.marketApiUrl ?? "",
     priceAlerts: config.ff14?.priceAlerts ?? [],
+  },
+  wallpaper: {
+    enabled: config.wallpaper?.enabled ?? true,
+    cron: config.wallpaper?.cron ?? "0 7 * * *",
+    apiUrl:
+      config.wallpaper?.apiUrl ?? "",
+    imageBaseUrl: config.wallpaper?.imageBaseUrl ?? "",
+  },
+  news: {
+    enabled: config.news?.enabled ?? true,
+    cron: config.news?.cron ?? "*/5 * * * *",
+    groupIds: config.news?.groupIds ?? [],
+    apiUrl: config.news?.apiUrl ?? "",
   },
 }));
 
@@ -80,7 +113,27 @@ const appConfigSchema = z.object({
 });
 
 export type LogLevel = z.infer<typeof logLevelSchema>;
-export type MizConfig = z.infer<typeof mizConfigSchema>;
+export type WallpaperConfig = {
+  enabled: boolean;
+  cron: string;
+  apiUrl: string;
+  imageBaseUrl: string;
+};
+
+export type NewsConfig = {
+  enabled: boolean;
+  cron: string;
+  groupIds: Array<string | number>;
+  apiUrl: string;
+};
+
+// Keep normalized optional sections explicit for plugin consumers. Besides
+// documenting the runtime contract, this prevents editor type servers from
+// losing transform output fields such as `wallpaper` during incremental checks.
+export type MizConfig = z.infer<typeof mizConfigSchema> & {
+  wallpaper: WallpaperConfig;
+  news: NewsConfig;
+};
 
 const CONFIG_PATH = "config/app.toml";
 

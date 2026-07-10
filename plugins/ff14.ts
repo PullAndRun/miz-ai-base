@@ -31,7 +31,11 @@ const ff14Plugin: MizPlugin = {
     });
 
     try {
-      const result = await queryFf14Market(request);
+      const result = await queryFf14Market({
+        ...request,
+        itemSearchApiUrl: config.ff14.itemSearchApiUrl,
+        marketApiUrl: config.ff14.marketApiUrl,
+      });
       if (!result) {
         await reply(`没有找到道具：${request.itemName}`);
         return;

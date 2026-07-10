@@ -8,6 +8,8 @@ import {
   getLowestMarketPrice,
   queryFf14Market,
 } from "@/ff14";
+import { createWallpaperMessage, getDailyWallpaper } from "@/wallpaper";
+import { deliverUnsentNews, formatNewsItems } from "@/news";
 
 export type TaskRuntime = {
   stop(): void;
@@ -19,12 +21,177 @@ export const startScheduledTasks = (
   logger: Logger,
 ): TaskRuntime => {
   const ff14Task = startFf14PriceAlertTask(config, gateway, logger);
+  const wallpaperTask = startWallpaperTask(config, gateway, logger);
+  const newsTask = startNewsTask(config, gateway, logger);
 
   return {
     stop: () => {
       ff14Task.stop();
+      wallpaperTask.stop();
+      newsTask.stop();
     },
   };
+};
+
+const startNewsTask = (config: MizConfig, gateway: Gateway, logger: Logger): TaskRuntime => {
+  if (!config.news.enabled) {
+    logger.info("plugin", "news task disabled: config switch is off");
+    return createNoopTask();
+  }
+
+  if (config.news.groupIds.length === 0) {
+    logger.info("plugin", "news task disabled: no configured groups");
+    return createNoopTask();
+  }
+
+  const cronExpression = config.news.cron;
+  if (!cron.validate(cronExpression)) {
+    logger.warn("plugin", "news task disabled: invalid cron expression", { cronExpression });
+    return createNoopTask();
+  }
+
+  let running = false;
+  const runTask = async () => {
+    if (running) {
+      logger.warn("plugin", "news task skipped: previous run is still active");
+      return;
+    }
+
+    running = true;
+    try {
+      await pushNewsToConfiguredGroups(config, gateway, logger);
+    } finally {
+      running = false;
+    }
+  };
+
+  const task = cron.schedule(cronExpression, () => {
+    void runTask().catch((error) => logger.error("plugin", "news task failed", error));
+  });
+
+  logger.info("plugin", "news task started", {
+    cronExpression,
+    groups: config.news.groupIds.length,
+  });
+
+  return { stop: () => task.stop() };
+};
+
+const pushNewsToConfiguredGroups = async (
+  config: MizConfig,
+  gateway: Gateway,
+  logger: Logger,
+) => {
+  const sentCounts = await Promise.all(
+    config.news.groupIds.map(async (groupId) => {
+      const news = await deliverUnsentNews(config.news.apiUrl, `group:${groupId}`, async (items) => {
+        await gateway.sendGroupMessage(groupId, formatNewsItems(items).join("\n\n"));
+      });
+      return news.length;
+    }),
+  );
+  const sentNewsCount = sentCounts.reduce((total, count) => total + count, 0);
+
+  if (sentNewsCount === 0) {
+    logger.info("plugin", "news task found no updates", { groups: config.news.groupIds.length });
+    return;
+  }
+
+  logger.info("plugin", "news task sent updates", {
+    groups: config.news.groupIds.length,
+    news: sentNewsCount,
+  });
+};
+
+const startWallpaperTask = (
+  config: MizConfig,
+  gateway: Gateway,
+  logger: Logger,
+): TaskRuntime => {
+  if (!config.wallpaper.enabled) {
+    logger.info("plugin", "wallpaper task disabled: config switch is off");
+    return createNoopTask();
+  }
+
+  const cronExpression = config.wallpaper.cron;
+  if (!cron.validate(cronExpression)) {
+    logger.warn("plugin", "wallpaper task disabled: invalid cron expression", {
+      cronExpression,
+    });
+    return createNoopTask();
+  }
+
+  let running = false;
+  const runTask = async () => {
+    if (running) {
+      logger.warn("plugin", "wallpaper task skipped: previous run is still active");
+      return;
+    }
+
+    running = true;
+    try {
+      await sendDailyWallpaper(config, gateway, logger);
+    } finally {
+      running = false;
+    }
+  };
+
+  const task = cron.schedule(cronExpression, () => {
+    void runTask().catch((error) => {
+      logger.error("plugin", "wallpaper task failed", error);
+    });
+  });
+
+  logger.info("plugin", "wallpaper task started", { cronExpression });
+
+  return {
+    stop: () => {
+      task.stop();
+    },
+  };
+};
+
+const sendDailyWallpaper = async (config: MizConfig, gateway: Gateway, logger: Logger) => {
+  const wallpaper = await getDailyWallpaper(
+    config.wallpaper.apiUrl,
+    config.wallpaper.imageBaseUrl,
+  );
+  const groupIds = getGroupIds(await gateway.getGroupList());
+
+  if (groupIds.length === 0) {
+    logger.warn("plugin", "wallpaper task skipped: no groups found");
+    return;
+  }
+
+  for (const groupId of groupIds) {
+    try {
+      await gateway.sendGroupMessage(groupId, createWallpaperMessage(wallpaper));
+      logger.info("plugin", "daily wallpaper sent", { groupId, wallpaperId: wallpaper.id });
+    } catch (error) {
+      logger.error("plugin", "daily wallpaper delivery failed", { groupId, error: normalizeError(error) });
+    }
+  }
+};
+
+const getGroupIds = (value: unknown): Array<number | string> => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      value.flatMap((group) => {
+        if (!group || typeof group !== "object") {
+          return [];
+        }
+
+        const groupId = (group as Record<string, unknown>).group_id;
+        return typeof groupId === "number" || (typeof groupId === "string" && groupId.trim())
+          ? [groupId]
+          : [];
+      }),
+    ),
+  );
 };
 
 const startFf14PriceAlertTask = (
@@ -94,6 +261,8 @@ const runFf14PriceAlerts = async (
       const result = await queryFf14Market({
         regionKey: alert.region,
         itemName: alert.itemName,
+        itemSearchApiUrl: config.ff14.itemSearchApiUrl,
+        marketApiUrl: config.ff14.marketApiUrl,
       });
 
       if (!result) {

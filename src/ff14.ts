@@ -55,6 +55,8 @@ export type Ff14RegionKey = keyof typeof FF14_REGION_NAMES;
 export type Ff14MarketQuery = {
   regionKey: Ff14RegionKey;
   itemName: string;
+  itemSearchApiUrl: string;
+  marketApiUrl: string;
 };
 
 export type Ff14MarketResult = {
@@ -74,14 +76,16 @@ export const isFf14RegionKey = (value: string | undefined): value is Ff14RegionK
 export const queryFf14Market = async ({
   regionKey,
   itemName,
+  itemSearchApiUrl,
+  marketApiUrl,
 }: Ff14MarketQuery): Promise<Ff14MarketResult | undefined> => {
-  const item = await searchItem(itemName);
+  const item = await searchItem(itemName, itemSearchApiUrl);
   if (!item) {
     return undefined;
   }
 
   const regionName = FF14_REGION_NAMES[regionKey];
-  const market = await fetchMarket(regionName, item.ID);
+  const market = await fetchMarket(marketApiUrl, regionName, item.ID);
 
   return {
     item,
@@ -132,8 +136,8 @@ export const formatFf14MarketMessages = ({
   ];
 };
 
-const searchItem = async (itemName: string) => {
-  const url = new URL("https://cafemaker.wakingsands.com/search");
+const searchItem = async (itemName: string, itemSearchApiUrl: string) => {
+  const url = new URL(itemSearchApiUrl);
   url.search = new URLSearchParams({
     indexes: "item",
     sort_order: "asc",
@@ -146,9 +150,9 @@ const searchItem = async (itemName: string) => {
   return data.Results[0];
 };
 
-const fetchMarket = (regionName: string, itemId: number) =>
+const fetchMarket = (marketApiUrl: string, regionName: string, itemId: number) =>
   fetchJson(
-    `https://universalis.app/api/v2/${encodeURIComponent(regionName)}/${itemId}`,
+    `${marketApiUrl.replace(/\/+$/, "")}/${encodeURIComponent(regionName)}/${itemId}`,
     marketResponseSchema,
   );
 

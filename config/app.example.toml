@@ -24,9 +24,23 @@ directory = ""
 priceAlertEnabled = true
 priceAlertCron = ""
 maxListingCount = 0
+itemSearchApiUrl = ""
+marketApiUrl = ""
 
 [[miz.ff14.priceAlerts]]
 groupId = ""
 region = ""
 itemName = ""
 minimumPrice = 0
+
+[miz.wallpaper]
+enabled = true
+cron = "0 7 * * *"
+apiUrl = ""
+imageBaseUrl = ""
+
+[miz.news]
+enabled = true
+cron = "*/5 * * * *"
+groupIds = []
+apiUrl = ""
