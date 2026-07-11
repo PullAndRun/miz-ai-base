@@ -39,6 +39,7 @@ export type Gateway = {
 
 const idSchema = z.union([z.string(), z.number()]);
 const FOLLOWED_GROUP_MEMBER_ID = "361390990";
+const GROUP_SEND_PERMISSION_CACHE_MS = 3_000;
 
 const textSegmentSchema = z
   .looseObject({
@@ -69,17 +70,24 @@ type NapCatEvent = z.infer<typeof napCatEventSchema>;
 export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
   const client = createNapLinkClient(config, logger);
   const messageHandlers = new Set<MessageHandler>();
+  const canSendGroupMessage = createGroupSendPermissionChecker(client, logger);
 
-  registerEvents(client, logger, messageHandlers);
+  registerEvents(client, logger, messageHandlers, canSendGroupMessage);
 
   return {
     connect: () => client.connect(),
     dispose: () => client.dispose(),
     reportServerInfo: () => reportServerInfo(client, logger),
     getGroupList: () => client.getGroupList(),
-    sendGroupMessage: (groupId, message) => client.sendGroupMessage(groupId, message),
+    sendGroupMessage: async (groupId, message) => {
+      if (!await canSendGroupMessage(groupId)) {
+        return undefined;
+      }
+      return client.sendGroupMessage(groupId, message);
+    },
     sendPrivateMessage: (userId, message) => client.sendPrivateMessage(userId, message),
-    sendForwardMessage: (target, messages, options) => sendForwardMessage(client, target, messages, options),
+    sendForwardMessage: (target, messages, options) =>
+      sendForwardMessage(client, target, messages, options, canSendGroupMessage),
     onMessage: (handler) => {
       messageHandlers.add(handler);
       return () => {
@@ -94,17 +102,18 @@ const sendForwardMessage = (
   target: IncomingMessage,
   messages: readonly ForwardMessageContent[],
   options: ForwardMessageOptions = {},
+  canSendGroupMessage: (groupId: number | string) => Promise<boolean>,
 ) => {
   const forwardMessages = messages.map((message) => createForwardNode(message, options));
 
   if (target.groupId !== undefined) {
-    return client.sendForwardMsg({
+    return canSendGroupMessage(target.groupId).then((allowed) => allowed && client.sendForwardMsg({
       group_id: target.groupId,
       messages: forwardMessages,
       source: options.source,
       summary: options.summary,
       prompt: options.title,
-    });
+    }));
   }
 
   if (target.userId !== undefined) {
@@ -184,6 +193,7 @@ const registerEvents = (
   client: NapLink,
   logger: Logger,
   messageHandlers: Set<MessageHandler>,
+  canSendGroupMessage: (groupId: number | string) => Promise<boolean>,
 ) => {
   client.on("state_change", (state: ConnectionState) => {
     logger.info("gateway", `state=${state}`);
@@ -213,7 +223,7 @@ const registerEvents = (
     logger.info("gateway", `event=${parsedEvent.success ? formatEventName(parsedEvent.data) : "unknown"}`);
     if (!parsedEvent.success || !isFollowedMemberLeavingGroup(parsedEvent.data)) {
       if (parsedEvent.success && isNewGroupMember(parsedEvent.data)) {
-        void sendNewMemberWelcome(client, parsedEvent.data, logger).catch(
+        void sendNewMemberWelcome(client, parsedEvent.data, logger, canSendGroupMessage).catch(
           (error) => logger.error("gateway", "failed to send new member welcome", {
             groupId: parsedEvent.data.group_id,
             userId: parsedEvent.data.user_id,
@@ -324,7 +334,12 @@ const isNewGroupMember = (event: NapCatEvent) =>
   event.user_id !== undefined &&
   String(event.user_id) !== String(event.self_id);
 
-const sendNewMemberWelcome = async (client: NapLink, event: NapCatEvent, logger: Logger) => {
+const sendNewMemberWelcome = async (
+  client: NapLink,
+  event: NapCatEvent,
+  logger: Logger,
+  canSendGroupMessage: (groupId: number | string) => Promise<boolean>,
+) => {
   const groupId = event.group_id!;
   const userId = event.user_id!;
   const [groupInfo, memberInfo] = await Promise.all([
@@ -334,6 +349,9 @@ const sendNewMemberWelcome = async (client: NapLink, event: NapCatEvent, logger:
   const groupName = getDisplayName(groupInfo, ["group_name", "groupName"]) ?? "本群";
   const memberName = getDisplayName(memberInfo, ["card", "nickname", "nick", "user_name"]) ?? `QQ 用户 ${userId}`;
 
+  if (!await canSendGroupMessage(groupId)) {
+    return;
+  }
   await client.sendGroupMessage(groupId, createWelcomeMessage(userId, memberName, groupName));
   logger.info("gateway", "new member welcomed", { groupId, userId, groupName, memberName });
 };
@@ -362,4 +380,89 @@ const getDisplayName = (value: unknown, keys: readonly string[]) => {
   }
 
   return getDisplayName(record.data, keys);
+};
+
+const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
+  const cache = new Map<string, { allowed: boolean; expiresAt: number }>();
+  let selfId: Promise<string | undefined> | undefined;
+
+  const getSelfId = () => {
+    if (!selfId) {
+      selfId = client.getLoginInfo()
+        .then((info) => getIdValue(info, ["user_id", "userId", "uin", "qq"]))
+        .catch((error) => {
+          selfId = undefined;
+          logger.warn("gateway", "unable to read bot account for group send permission check", error);
+          return undefined;
+        });
+    }
+    return selfId;
+  };
+
+  return async (groupId: number | string) => {
+    const key = String(groupId);
+    const cached = cache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.allowed;
+    }
+
+    try {
+      const botId = await getSelfId();
+      if (!botId) {
+        return true;
+      }
+
+      const [groupInfo, memberInfo] = await Promise.all([
+        client.getGroupInfo(groupId),
+        client.getGroupMemberInfo(groupId, botId),
+      ]);
+      const wholeBan = getBooleanValue(groupInfo, ["whole_ban", "wholeBan"]);
+      const mutedUntil = getNumberValue(memberInfo, ["shut_up_timestamp", "shutUpTimestamp"]);
+      const botMuted = mutedUntil !== undefined && mutedUntil > Math.floor(Date.now() / 1_000);
+      const allowed = !wholeBan && !botMuted;
+      cache.set(key, { allowed, expiresAt: Date.now() + GROUP_SEND_PERMISSION_CACHE_MS });
+      if (!allowed) {
+        logger.info("gateway", "group message skipped because sending is muted", {
+          groupId,
+          wholeBan: wholeBan === true,
+          botMuted,
+        });
+      }
+      return allowed;
+    } catch (error) {
+      // Do not suppress valid messages merely because the status query failed.
+      logger.warn("gateway", "group send permission check failed; sending normally", { groupId, error });
+      return true;
+    }
+  };
+};
+
+const getIdValue = (value: unknown, keys: readonly string[]) => {
+  const raw = getValue(value, keys);
+  return typeof raw === "string" || typeof raw === "number" ? String(raw) : undefined;
+};
+
+const getNumberValue = (value: unknown, keys: readonly string[]) => {
+  const raw = getValue(value, keys);
+  const number = typeof raw === "number" || typeof raw === "string" ? Number(raw) : Number.NaN;
+  return Number.isFinite(number) ? number : undefined;
+};
+
+const getBooleanValue = (value: unknown, keys: readonly string[]) => {
+  const raw = getValue(value, keys);
+  return typeof raw === "boolean" ? raw : raw === 1 || raw === "1" || raw === "true";
+};
+
+const getValue = (value: unknown, keys: readonly string[]): unknown => {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    if (key in record) {
+      return record[key];
+    }
+  }
+  return getValue(record.data, keys);
 };

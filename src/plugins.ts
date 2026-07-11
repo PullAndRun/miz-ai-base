@@ -298,6 +298,13 @@ const dispatchPluginCommand = async ({
       commandText,
       availableCommands: Array.from(pluginsByCommand.keys()),
     });
+    await replyToMessage(
+      gateway,
+      message,
+      commandText
+        ? `没有找到“${commandText.split(/\s+/, 1)[0]}”这个命令。\n可发送 ${config.plugins.commandPrefix} help 查看可用功能和用法。`
+        : `想查看机器人能做什么？发送 ${config.plugins.commandPrefix} help 即可。`,
+    );
     return;
   }
 
