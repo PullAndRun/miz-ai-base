@@ -392,14 +392,10 @@ const pollVtbSubscriptions = async (
     const dynamicTasks = startWithConcurrency(uniqueDynamicSubscriptions, 8, async (subscription) => {
       try {
         return await getVtbDynamics(subscription.streamer, config.vtb);
-      } catch (error) {
-          if (!isTimeoutError(error)) {
-            logger.warn("plugin", "vtb dynamic poll failed; live status polling will continue", {
-              streamer: subscription.streamer.name,
-              error: normalizeError(error),
-            });
-          }
-          return undefined;
+      } catch {
+        // Dynamic feeds are optional. Network failures, including HTTP 503,
+        // must not interrupt live polling or create noisy periodic warnings.
+        return undefined;
       }
     });
     const dynamicFeeds = new Map(
@@ -924,6 +920,3 @@ const normalizeError = (error: unknown) => {
 
   return error;
 };
-
-const isTimeoutError = (error: unknown) =>
-  error instanceof Error && (error.name === "TimeoutError" || /\b(?:timed?\s*out|timeout)\b/i.test(error.message));
