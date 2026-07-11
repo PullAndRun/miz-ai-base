@@ -130,5 +130,5 @@ const cleanText = (value: string | undefined) => value?.trim() || undefined;
 
 const formatDate = (value: string) => {
   const matchedDate = /^(\d{4})(\d{2})(\d{2})$/.exec(value);
-  return matchedDate ? `${matchedDate[1]} 年 ${matchedDate[2]} 月 ${matchedDate[3]} 日` : value;
+  return matchedDate ? `${matchedDate[1]}年${matchedDate[2]}月${matchedDate[3]}日` : value;
 };

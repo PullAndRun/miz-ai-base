@@ -250,7 +250,7 @@ const formatUploadTime = (value: number | undefined) => {
     return "未知";
   }
 
-  return dayjs(value).format("YYYY-MM-DD HH:mm:ss");
+  return dayjs(value).format("YYYY年MM月DD日 HH时mm分");
 };
 
 const formatReviewTime = (value: number | undefined) => {
@@ -258,5 +258,5 @@ const formatReviewTime = (value: number | undefined) => {
     return "未知";
   }
 
-  return dayjs.unix(value).format("YYYY-MM-DD HH:mm:ss");
+  return dayjs.unix(value).format("YYYY年MM月DD日 HH时mm分");
 };

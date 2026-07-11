@@ -108,7 +108,7 @@ const listReminders = async ({ config, message, reply }: ReminderContext) => {
     canManage ? `本群待处理提醒（${reminders.length} 条）：` : `你的待处理提醒（${reminders.length} 条）：`,
     ...reminders.map((reminder) => [
       `#${reminder.id}`,
-      dayjs(reminder.remindAt).format("MM-DD HH:mm"),
+      dayjs(reminder.remindAt).format("YYYY年MM月DD日 HH时mm分"),
       reminder.repeatIntervalMinutes ? `每 ${formatMinutes(reminder.repeatIntervalMinutes)}` : "一次",
       `@${reminder.targetId}`,
       reminder.content,

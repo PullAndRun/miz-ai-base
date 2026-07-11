@@ -461,10 +461,10 @@ const createVtbRepository = (prisma: PrismaClient) => {
     });
   };
 
-  const stopLiveSession = async (mid: string, fans?: number) => {
+  const stopLiveSession = async (mid: string, fans?: number, endedAt = new Date()) => {
     await prisma.vtbLiveSession.update({
       where: { streamerMid: toMid(mid) },
-      data: { endedAt: new Date(), endFans: fans },
+      data: { endedAt, endFans: fans },
     });
   };
 
@@ -733,7 +733,7 @@ export const formatLiveMessage = (live: VtbLiveInfo, fans?: number) => [
   "╭─「 B站开播提醒 」",
   `│ 主播 · ${live.name}`,
   `│ 标题 · ${live.title}`,
-  ...(live.liveStartedAt ? [`│ 开播 · ${dayjs(live.liveStartedAt).format("YYYY-MM-DD HH:mm:ss")}`] : []),
+  ...(live.liveStartedAt ? [`│ 开播 · ${dayjs(live.liveStartedAt).format("YYYY年MM月DD日 HH时mm分")}`] : []),
   ...(fans === undefined ? [] : [`│ 粉丝 · ${fans.toLocaleString("zh-CN")}`]),
   ...(live.roomId ? [`│ 直播间 · ${formatLiveRoomUrl(live.roomId)}`] : []),
   "╰────────────",
@@ -743,7 +743,7 @@ export const formatLiveQueryMessage = (live: VtbLiveInfo, fans?: number) => [
   "╭─「 B站直播信息 」",
   `│ 主播 · ${live.name}`,
   `│ 标题 · ${live.title}`,
-  ...(live.liveStartedAt ? [`│ 开播 · ${dayjs(live.liveStartedAt).format("YYYY-MM-DD HH:mm:ss")}`] : []),
+  ...(live.liveStartedAt ? [`│ 开播 · ${dayjs(live.liveStartedAt).format("YYYY年MM月DD日 HH时mm分")}`] : []),
   ...(fans === undefined ? [] : [`│ 粉丝 · ${fans.toLocaleString("zh-CN")}`]),
   ...(live.roomId ? [`│ 直播间 · ${formatLiveRoomUrl(live.roomId)}`] : []),
   `╰─ 当前状态 · ${live.isLive ? "直播中" : "未开播"}`,
@@ -752,18 +752,21 @@ export const formatLiveQueryMessage = (live: VtbLiveInfo, fans?: number) => [
 export const formatOfflineMessage = (
   name: string,
   startedAt: Date,
+  endedAt: Date,
   startFans?: number,
   endFans?: number,
   roomId?: string,
 ) => {
   const fanChange = startFans === undefined || endFans === undefined ? undefined : endFans - startFans;
+  const durationMinutes = Math.max(1, Math.floor((endedAt.getTime() - startedAt.getTime()) / 60_000));
   return [
     "╭─「 B站下播提醒 」",
-    `│ 主播 · ${name}`,
-    `│ 本次开播 · ${dayjs(startedAt).format("YYYY-MM-DD HH:mm:ss")}`,
-    ...(fanChange ? [`│ 粉丝变化 · ${fanChange > 0 ? "+" : ""}${fanChange.toLocaleString("zh-CN")}`] : []),
+    `│ ${name} 已下播，辛苦啦～`,
+    `│ 下播时间 · ${dayjs(endedAt).format("YYYY年MM月DD日 HH时mm分")}`,
+    `│ 直播时长 · ${durationMinutes.toLocaleString("zh-CN")} 分钟`,
+    ...(fanChange && fanChange > 0 ? [`│ 本场收获新粉丝 · +${fanChange.toLocaleString("zh-CN")}`] : []),
     ...(roomId ? [`│ 直播间 · ${formatLiveRoomUrl(roomId)}`] : []),
-    "╰─ 本场直播已结束",
+    "╰─ 下次直播见～",
   ].join("\n");
 };
 
@@ -777,7 +780,7 @@ export const formatDynamicMessage = (dynamic: VtbDynamic) => {
   return [
     "╭─「 B站动态更新 」",
     `│ 主播 · ${dynamic.author}`,
-    `│ 时间 · ${dayjs(dynamic.publishedAt).format("YYYY-MM-DD HH:mm:ss")}`,
+    `│ 时间 · ${dayjs(dynamic.publishedAt).format("YYYY年MM月DD日 HH时mm分")}`,
     `│ 标题 · ${dynamic.title}`,
     "├─ 内容",
     ...(dynamic.description ? dynamic.description.split("\n").map((line) => `│ ${line}`) : ["│ 暂无文字内容"]),

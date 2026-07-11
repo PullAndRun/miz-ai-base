@@ -1,4 +1,5 @@
 import cron from "node-cron";
+import dayjs from "dayjs";
 import { updateVtbSubscriptionNames, type MizConfig } from "@/config";
 import type { Gateway } from "@/gateway";
 import type { Logger } from "@/logger";
@@ -109,7 +110,7 @@ const startScheduleTask = async (config: MizConfig, gateway: Gateway, logger: Lo
             {
               type: "text",
               data: {
-                text: ` 群日程提醒：${event.content}\n开始时间：${event.eventAt.toLocaleString("zh-CN", { hour12: false })}`,
+                text: ` 群日程提醒：${event.content}\n开始时间：${dayjs(event.eventAt).format("YYYY年MM月DD日 HH时mm分")}`,
               },
             },
           ]);
@@ -478,10 +479,12 @@ const pollVtbSubscriptions = async (
           liveStartedAt: live.liveStartedAt,
         });
       } else if (!live.isLive && session) {
-        await repository.stopLiveSession(streamer.mid, fans);
+        const endedAt = new Date();
+        await repository.stopLiveSession(streamer.mid, fans, endedAt);
         const message = formatOfflineMessage(
           live.name,
           session.startedAt,
+          endedAt,
           session.startFans,
           fans,
           session.roomId,

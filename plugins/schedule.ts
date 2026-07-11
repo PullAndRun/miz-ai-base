@@ -34,7 +34,7 @@ const schedulePlugin: MizPlugin = {
             ? "本群暂时没有即将开始的日程。"
             : [
                 `本群接下来有 ${events.length} 项日程：`,
-                ...events.map((event) => `#${event.displayId} · ${dayjs(event.eventAt).format("YYYY-MM-DD HH:mm")} · ${event.content}`),
+                ...events.map((event) => `#${event.displayId} · ${dayjs(event.eventAt).format("YYYY年MM月DD日 HH时mm分")} · ${event.content}`),
               ].join("\n"),
         );
         return;
@@ -66,7 +66,7 @@ const schedulePlugin: MizPlugin = {
         creatorId: message.userId,
         eventAt: action.eventAt,
       });
-      await reply(`日程已添加：#${event.displayId}\n开始时间：${dayjs(action.eventAt).format("YYYY-MM-DD HH:mm")}\n活动内容：${action.content}`);
+      await reply(`日程已添加：#${event.displayId}\n开始时间：${dayjs(action.eventAt).format("YYYY年MM月DD日 HH时mm分")}\n活动内容：${action.content}`);
     } catch (error) {
       logger.error("plugin", "schedule command failed", error);
       await reply("日程没有保存成功，请稍后再试。");
