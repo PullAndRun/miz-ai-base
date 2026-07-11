@@ -49,10 +49,8 @@ export const downloadVideo = async ({
     "--no-playlist",
     "--no-progress",
     "--no-warnings",
-    "--paths",
-    downloadDirectory,
     "--output",
-    "%(title).180B [%(id)s].%(ext)s",
+    path.join(downloadDirectory, "%(title).180B [%(id)s].%(ext)s"),
     "--format",
     "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
     "--merge-output-format",
@@ -90,8 +88,8 @@ export const getNapcatVideoFile = async (videoPath: string, config: VideoConfig)
     return `base64://${(await readFile(path.resolve(videoPath))).toString("base64")}`;
   }
 
-  // Docker deployments share /temp with NapCat as /app/media. Only send the
-  // in-container file address: NapCat reads the bytes itself, never NapLink.
+  // Docker deployments map the project temp directory to NapCat's /app/media.
+  // Only send the in-container file address: NapCat reads the bytes itself.
   const napcatPath = path.posix.join(config.napcatMediaDirectory, path.basename(videoPath));
   return pathToFileURL(napcatPath).href;
 };
@@ -230,7 +228,7 @@ const getFfmpegPath = (config: VideoConfig) => {
 
 const getDownloadDirectory = (config: VideoConfig) =>
   config.runtimeMode === "docker"
-    ? "/temp"
+    ? path.join(process.cwd(), "temp")
     : process.platform === "win32" && config.downloadDirectory === "/temp"
     ? path.join(process.cwd(), "temp")
     : config.downloadDirectory;
@@ -249,7 +247,7 @@ const findDownloadedVideo = async (
   for (const candidate of outputCandidates) {
     const videoPath = path.resolve(candidate);
     const file = await stat(videoPath).catch(() => undefined);
-    if (file?.isFile() && isFinalVideoPath(videoPath)) {
+    if (file?.isFile() && isFinalVideoPath(videoPath) && isPathInsideDirectory(videoPath, downloadDirectory)) {
       return videoPath;
     }
   }
@@ -273,6 +271,11 @@ const findDownloadedVideo = async (
 
 const isFinalVideoPath = (value: string) =>
   value.toLowerCase().endsWith(".mp4") && !/\.f\d+\.mp4$/i.test(value);
+
+const isPathInsideDirectory = (filePath: string, directory: string) => {
+  const relativePath = path.relative(path.resolve(directory), path.resolve(filePath));
+  return relativePath !== "" && !relativePath.startsWith(`..${path.sep}`) && relativePath !== ".." && !path.isAbsolute(relativePath);
+};
 
 const formatProcessError = (stderr: string) => {
   const detail = stderr
