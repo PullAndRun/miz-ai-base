@@ -1,3 +1,4 @@
+name: bot-miz
 services:
   miz:
     image: oven/bun:latest
