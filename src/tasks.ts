@@ -1,5 +1,5 @@
 import cron from "node-cron";
-import type { MizConfig } from "@/config";
+import { updateVtbSubscriptionNames, type MizConfig } from "@/config";
 import type { Gateway } from "@/gateway";
 import type { Logger } from "@/logger";
 import {
@@ -9,7 +9,8 @@ import {
   queryFf14Market,
 } from "@/ff14";
 import { createWallpaperMessage, getDailyWallpaper } from "@/wallpaper";
-import { deliverUnsentNews, formatScheduledNewsItems } from "@/news";
+import { settleWithConcurrency, startWithConcurrency } from "@/concurrency";
+import { deliverUnsentNews, fetchFinanceNews, formatScheduledNewsItems } from "@/news";
 import { updateYtDlp } from "@/video";
 import {
   closeVtbRepository,
@@ -17,10 +18,11 @@ import {
   formatLiveMessage,
   formatOfflineMessage,
   getVtbRepository,
+  getVtbCardInfos,
   getVtbDynamics,
-  getVtbFanCount,
-  getVtbLiveInfo,
+  getVtbLiveInfos,
   resolveTrackedVtbStreamer,
+  syncVtbSubscriptionNames,
   type VtbDynamicFeed,
   type VtbLiveInfo,
   type VtbStreamer,
@@ -38,7 +40,10 @@ export const startScheduledTasks = async (
   const ff14Task = startFf14PriceAlertTask(config, gateway, logger);
   const wallpaperTask = startWallpaperTask(config, gateway, logger);
   const newsTask = startNewsTask(config, gateway, logger);
+  const reminderTask = await startReminderTask(config, gateway, logger);
+  const scheduleTask = await startScheduleTask(config, gateway, logger);
   const ytDlpUpdateTask = startYtDlpUpdateTask(config, logger);
+  const vtbNameSyncTask = startVtbNameSyncTask(config, logger);
   const vtbTask = await startVtbTask(config, gateway, logger);
 
   return {
@@ -46,10 +51,208 @@ export const startScheduledTasks = async (
       ff14Task.stop();
       wallpaperTask.stop();
       newsTask.stop();
+      await reminderTask.stop();
+      await scheduleTask.stop();
       ytDlpUpdateTask.stop();
+      await vtbNameSyncTask.stop();
       await vtbTask.stop();
     },
   };
+};
+
+const startScheduleTask = async (config: MizConfig, gateway: Gateway, logger: Logger): Promise<TaskRuntime> => {
+  if (!config.schedule.enabled) {
+    logger.info("plugin", "schedule task disabled: config switch is off");
+    return createNoopTask();
+  }
+
+  const cronExpression = config.schedule.cron;
+  if (!cron.validate(cronExpression)) {
+    logger.warn("plugin", "schedule task disabled: invalid cron expression", { cronExpression });
+    return createNoopTask();
+  }
+
+  let repository;
+  try {
+    repository = await getVtbRepository(config);
+    await repository.ensureScheduleStorage();
+  } catch (error) {
+    logger.error("plugin", "schedule task disabled: database initialization failed", error);
+    return createNoopTask();
+  }
+
+  let running = false;
+  const runTask = async () => {
+    if (running) {
+      logger.warn("plugin", "schedule task skipped: previous run is still active");
+      return;
+    }
+
+    running = true;
+    try {
+      const events = await repository.claimDueScheduleEvents(new Date(), config.schedule.batchSize);
+      for (const event of events) {
+        try {
+          await gateway.sendGroupMessage(event.groupId, [
+            { type: "at", data: { qq: event.creatorId } },
+            {
+              type: "text",
+              data: {
+                text: ` 群日程提醒：${event.content}\n开始时间：${event.eventAt.toLocaleString("zh-CN", { hour12: false })}`,
+              },
+            },
+          ]);
+          logger.info("plugin", "schedule reminder sent", { displayId: event.displayId, groupId: event.groupId });
+        } catch (error) {
+          try {
+            await repository.releaseScheduleEventClaim(event);
+          } catch (releaseError) {
+            logger.error("plugin", "schedule reminder claim could not be released", {
+              displayId: event.displayId,
+              groupId: event.groupId,
+              error: normalizeError(releaseError),
+            });
+          }
+          logger.error("plugin", "schedule reminder delivery failed after claiming", {
+            displayId: event.displayId,
+            groupId: event.groupId,
+            error: normalizeError(error),
+          });
+        }
+      }
+
+      await repository.cleanupFinishedScheduleEvents();
+    } finally {
+      running = false;
+    }
+  };
+
+  const task = cron.schedule(cronExpression, () => {
+    void runTask().catch((error) => logger.error("plugin", "schedule task failed", error));
+  });
+  logger.info("plugin", "schedule task started", { cronExpression, reminderMinutes: config.schedule.reminderMinutes });
+  return { stop: async () => task.stop() };
+};
+
+const startReminderTask = async (config: MizConfig, gateway: Gateway, logger: Logger): Promise<TaskRuntime> => {
+  if (!config.reminder.enabled) {
+    logger.info("plugin", "reminder task disabled: config switch is off");
+    return createNoopTask();
+  }
+
+  const cronExpression = config.reminder.cron;
+  if (!cron.validate(cronExpression)) {
+    logger.warn("plugin", "reminder task disabled: invalid cron expression", { cronExpression });
+    return createNoopTask();
+  }
+
+  let repository;
+  try {
+    repository = await getVtbRepository(config);
+    await repository.ensureReminderStorage();
+  } catch (error) {
+    logger.error("plugin", "reminder task disabled: database initialization failed", error);
+    return createNoopTask();
+  }
+
+  let running = false;
+  const runTask = async () => {
+    if (running) {
+      logger.warn("plugin", "reminder task skipped: previous run is still active");
+      return;
+    }
+
+    running = true;
+    try {
+      const reminders = await repository.claimDueReminders(new Date(), config.reminder.batchSize);
+      for (const reminder of reminders) {
+        try {
+          await gateway.sendGroupMessage(reminder.groupId, [
+            { type: "at", data: { qq: reminder.targetId } },
+            { type: "text", data: { text: ` 提醒：${reminder.content}` } },
+          ]);
+          logger.info("plugin", "reminder sent", { id: reminder.id, groupId: reminder.groupId });
+        } catch (error) {
+          try {
+            await repository.releaseReminderClaim(reminder);
+          } catch (releaseError) {
+            logger.error("plugin", "reminder claim could not be released", {
+              id: reminder.id,
+              groupId: reminder.groupId,
+              error: normalizeError(releaseError),
+            });
+          }
+          logger.error("plugin", "reminder delivery failed after claiming", {
+            id: reminder.id,
+            groupId: reminder.groupId,
+            error: normalizeError(error),
+          });
+        }
+      }
+    } finally {
+      running = false;
+    }
+  };
+
+  const task = cron.schedule(cronExpression, () => {
+    void runTask().catch((error) => logger.error("plugin", "reminder task failed", error));
+  });
+  logger.info("plugin", "reminder task started", { cronExpression });
+  return { stop: async () => task.stop() };
+};
+
+const startVtbNameSyncTask = (config: MizConfig, logger: Logger): TaskRuntime => {
+  if (!config.vtb.enabled || config.vtb.subscriptions.length === 0) {
+    return createNoopTask();
+  }
+
+  if (!hasVtbApiEndpoints(config.vtb)) {
+    logger.warn("plugin", "vtb name sync task disabled: required API URLs are missing");
+    return createNoopTask();
+  }
+
+  const cronExpression = config.vtb.nameSyncCron;
+  if (!cron.validate(cronExpression)) {
+    logger.warn("plugin", "vtb name sync task disabled: invalid cron expression", { cronExpression });
+    return createNoopTask();
+  }
+
+  let running = false;
+  const runTask = async () => {
+    if (running) {
+      logger.warn("plugin", "vtb name sync task skipped: previous run is still active");
+      return;
+    }
+
+    running = true;
+    try {
+      const { databaseSync, renamed, roomUpdated, failed } = await syncVtbSubscriptionNames(config);
+      if (databaseSync.removed.length > 0) {
+        logger.info("plugin", "vtb streamers removed because they are absent from subscription config", {
+          streamers: databaseSync.removed,
+        });
+      }
+      if (renamed.length > 0) {
+        await updateVtbSubscriptionNames(new Map(renamed.map((item) => [item.previousName, item.name])));
+        applyVtbSubscriptionRenames(config, renamed);
+        logger.info("plugin", "vtb subscription names updated", { renamed });
+      }
+      if (roomUpdated.length > 0) {
+        logger.info("plugin", "vtb live room IDs updated", { roomUpdated });
+      }
+      if (failed.length > 0) {
+        logger.warn("plugin", "vtb name sync skipped some streamers", { streamers: failed });
+      }
+    } finally {
+      running = false;
+    }
+  };
+
+  const task = cron.schedule(cronExpression, () => {
+    void runTask().catch((error) => logger.error("plugin", "vtb name sync task failed", error));
+  });
+  logger.info("plugin", "vtb name sync task started", { cronExpression });
+  return { stop: async () => task.stop() };
 };
 
 const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger): Promise<TaskRuntime> => {
@@ -86,7 +289,6 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
   let currentRun: Promise<void> | undefined;
   const runTask = async () => {
     if (running) {
-      logger.warn("plugin", "vtb task skipped: previous run is still active");
       return;
     }
 
@@ -138,33 +340,87 @@ const pollVtbSubscriptions = async (
       streamer: VtbStreamer;
       live: VtbLiveInfo;
       fans?: number;
-      dynamicFeed: Promise<VtbDynamicFeed>;
     }>
   >();
 
   try {
+    const resolvedSubscriptions: Array<{
+      streamerName: string;
+      groups: Set<string | number>;
+      streamer: VtbStreamer;
+    }> = [];
     for (const [streamerName, groups] of streamerGroups) {
       try {
         const streamer = await resolveTrackedVtbStreamer(streamerName, config.vtb, repository);
-      if (!streamer) {
-        logger.warn("plugin", "vtb streamer not found", { streamerName });
-        continue;
+        if (!streamer) {
+          logger.warn("plugin", "vtb streamer not found", { streamerName });
+          continue;
+        }
+        resolvedSubscriptions.push({ streamerName, groups, streamer });
+      } catch (error) {
+        logger.error("plugin", "vtb subscription resolution failed", { streamerName, error: normalizeError(error) });
       }
+    }
 
-      const groupIds = [...groups];
+    let cardInfos = new Map<string, { fans?: number }>();
+    try {
+      cardInfos = await getVtbCardInfos(
+        resolvedSubscriptions.map((subscription) => subscription.streamer.mid),
+        config.vtb,
+      );
+    } catch (error) {
+      logger.warn("plugin", "vtb batch card request failed; fan counts will be omitted", normalizeError(error));
+    }
+
+    let liveInfos: Map<string, VtbLiveInfo>;
+    try {
+      liveInfos = await getVtbLiveInfos(
+        resolvedSubscriptions.map((subscription) => subscription.streamer),
+        config.vtb,
+      );
+    } catch (error) {
+      logger.error("plugin", "vtb batch live request failed", normalizeError(error));
+      return;
+    }
+
+    // Start dynamic queries together instead of waiting for each streamer in
+    // sequence. This prevents retry delays from stretching a poll past the
+    // next scheduled run, while each streamer is still requested only once.
+    const uniqueDynamicSubscriptions = Array.from(
+      new Map(resolvedSubscriptions.map((subscription) => [subscription.streamer.mid, subscription])).values(),
+    );
+    const dynamicTasks = startWithConcurrency(uniqueDynamicSubscriptions, 8, async (subscription) => {
+      try {
+        return await getVtbDynamics(subscription.streamer, config.vtb);
+      } catch (error) {
+          if (!isTimeoutError(error)) {
+            logger.warn("plugin", "vtb dynamic poll failed; live status polling will continue", {
+              streamer: subscription.streamer.name,
+              error: normalizeError(error),
+            });
+          }
+          return undefined;
+      }
+    });
+    const dynamicFeeds = new Map(
+      uniqueDynamicSubscriptions.map((subscription, index) => [subscription.streamer.mid, dynamicTasks[index]]),
+    );
+
+    for (const { streamerName, groups, streamer } of resolvedSubscriptions) {
+      try {
+        const groupIds = [...groups];
         const cachedPush =
           pushCache.get(streamer.mid) ??
           Promise.all([
-            getVtbLiveInfo(streamer, config.vtb),
-            getVtbFanCount(streamer.mid, config.vtb).catch(() => undefined),
+            Promise.resolve(liveInfos.get(streamer.mid)!),
+            Promise.resolve(cardInfos.get(streamer.mid)?.fans),
           ]).then(([live, fans]) => ({
             streamer,
             live,
             fans,
-            dynamicFeed: getVtbDynamics(streamer, config.vtb, 5),
           }));
         pushCache.set(streamer.mid, cachedPush);
-        const { live, fans, dynamicFeed } = await cachedPush;
+        const { live, fans } = await cachedPush;
       const session = await repository.getLiveSession(streamer.mid);
       const isRecentLive =
         live.liveStartedAt !== undefined &&
@@ -175,8 +431,8 @@ const pollVtbSubscriptions = async (
           { type: "text", data: { text: formatLiveMessage(live, fans) } },
           ...(live.coverUrl ? [{ type: "image", data: { file: live.coverUrl } }] : []),
         ];
-        await Promise.all(groupIds.map((groupId) => gateway.sendGroupMessage(groupId, message)));
-        logger.info("plugin", "vtb live started notification sent", { streamer: live.name, groupIds });
+        const deliveredGroups = await sendVtbGroupMessage(groupIds, message, gateway, logger, "live start", live.name);
+        logger.info("plugin", "vtb live started notification sent", { streamer: live.name, groupIds: deliveredGroups });
       } else if (live.isLive && !session) {
         logger.info("plugin", "vtb live start notification skipped: live is older than polling interval", {
           streamer: live.name,
@@ -191,12 +447,14 @@ const pollVtbSubscriptions = async (
           fans,
           session.roomId,
         );
-        await Promise.all(groupIds.map((groupId) => gateway.sendGroupMessage(groupId, message)));
-        logger.info("plugin", "vtb live ended notification sent", { streamer: live.name, groupIds });
+        const deliveredGroups = await sendVtbGroupMessage(groupIds, message, gateway, logger, "live end", live.name);
+        logger.info("plugin", "vtb live ended notification sent", { streamer: live.name, groupIds: deliveredGroups });
       }
 
-        try {
-          const feed = await dynamicFeed;
+        const feed = await dynamicFeeds.get(streamer.mid);
+        if (!feed) {
+          continue;
+        }
           const latestDynamic = feed.items[0];
           if (!latestDynamic) {
             logger.warn("plugin", "vtb dynamic poll skipped: feed contains no valid dated item", {
@@ -214,11 +472,11 @@ const pollVtbSubscriptions = async (
               { type: "text", data: { text: formatDynamicMessage(latestDynamic) } },
               ...(feed.avatarUrl ? [{ type: "image", data: { file: feed.avatarUrl } }] : []),
             ];
-            await Promise.all(groupIds.map((groupId) => gateway.sendGroupMessage(groupId, message)));
+            const deliveredGroups = await sendVtbGroupMessage(groupIds, message, gateway, logger, "dynamic", streamer.name);
             await repository.setLastDynamicTime(streamer.mid, latestDynamic.publishedAt);
             logger.info("plugin", "vtb dynamic notification sent", {
               streamer: streamer.name,
-              groupIds,
+              groupIds: deliveredGroups,
               dynamics: 1,
             });
           } else if (isUnseen) {
@@ -230,12 +488,6 @@ const pollVtbSubscriptions = async (
               });
             }
           }
-        } catch (error) {
-          logger.warn("plugin", "vtb dynamic poll failed; live status polling will continue", {
-            streamer: streamer.name,
-            error: normalizeError(error),
-          });
-        }
       } catch (error) {
         logger.error("plugin", "vtb subscription poll failed", { streamerName, error: normalizeError(error) });
       }
@@ -245,9 +497,50 @@ const pollVtbSubscriptions = async (
   }
 };
 
+const sendVtbGroupMessage = async (
+  groupIds: readonly (string | number)[],
+  message: unknown,
+  gateway: Gateway,
+  logger: Logger,
+  kind: "live start" | "live end" | "dynamic",
+  streamer: string,
+) => {
+  const results = await settleWithConcurrency(
+    groupIds,
+    5,
+    (groupId) => gateway.sendGroupMessage(groupId, message),
+  );
+  const deliveredGroups: Array<string | number> = [];
+  for (const [index, result] of results.entries()) {
+    const groupId = groupIds[index];
+    if (result.status === "fulfilled") {
+      deliveredGroups.push(groupId);
+      continue;
+    }
+
+    logger.error("plugin", "vtb notification delivery failed", {
+      kind,
+      streamer,
+      groupId,
+      error: normalizeError(result.reason),
+    });
+  }
+  return deliveredGroups;
+};
+
 const getVtbPollingIntervalMs = (cronExpression: string) => {
   const minuteInterval = /^\*\/(\d+) \* \* \* \*$/.exec(cronExpression)?.[1];
   return Math.max(1, minuteInterval ? Number(minuteInterval) : 3) * 60_000;
+};
+
+const applyVtbSubscriptionRenames = (
+  config: MizConfig,
+  renames: readonly { previousName: string; name: string }[],
+) => {
+  const renameMap = new Map(renames.map((item) => [item.previousName, item.name]));
+  for (const subscription of config.vtb.subscriptions) {
+    subscription.streamers = subscription.streamers.map((name) => renameMap.get(name) ?? name);
+  }
 };
 
 const startYtDlpUpdateTask = (config: MizConfig, logger: Logger): TaskRuntime => {
@@ -342,23 +635,42 @@ const pushNewsToConfiguredGroups = async (
   gateway: Gateway,
   logger: Logger,
 ) => {
-  const sentCounts = await Promise.all(
-    config.news.groupIds.map(async (groupId) => {
-      const news = await deliverUnsentNews(config.news.apiUrl, `group:${groupId}`, async (items) => {
-        await gateway.sendGroupMessage(groupId, formatScheduledNewsItems(items).join("\n\n"));
-      });
-      return news.length;
-    }),
+  const latestNews = await fetchFinanceNews(config.news.apiUrl);
+  const groupIds = Array.from(
+    new Map(config.news.groupIds.map((groupId) => [String(groupId), groupId])).values(),
   );
+  const results = await settleWithConcurrency(groupIds, 5, async (groupId) => {
+    const news = await deliverUnsentNews(
+      config,
+      config.news.apiUrl,
+      `group:${groupId}`,
+      async (items) => {
+        await gateway.sendGroupMessage(groupId, formatScheduledNewsItems(items).join("\n\n"));
+      },
+      latestNews,
+    );
+    return news.length;
+  });
+  const sentCounts = results.map((result, index) => {
+    if (result.status === "fulfilled") {
+      return result.value;
+    }
+
+    logger.error("plugin", "news delivery failed", {
+      groupId: groupIds[index],
+      error: normalizeError(result.reason),
+    });
+    return 0;
+  });
   const sentNewsCount = sentCounts.reduce((total, count) => total + count, 0);
 
   if (sentNewsCount === 0) {
-    logger.info("plugin", "news task found no updates", { groups: config.news.groupIds.length });
+    logger.info("plugin", "news task found no updates", { groups: groupIds.length });
     return;
   }
 
   logger.info("plugin", "news task sent updates", {
-    groups: config.news.groupIds.length,
+    groups: groupIds.length,
     news: sentNewsCount,
   });
 };
@@ -428,12 +740,19 @@ const sendDailyWallpaper = async (config: MizConfig, gateway: Gateway, logger: L
     return;
   }
 
-  for (const groupId of groupIds) {
+  for (const [index, groupId] of groupIds.entries()) {
+    if (index > 0) {
+      await wait(2_000);
+    }
+
     try {
       await gateway.sendGroupMessage(groupId, createWallpaperMessage(wallpaper));
       logger.info("plugin", "daily wallpaper sent", { groupId, wallpaperId: wallpaper.id });
     } catch (error) {
-      logger.error("plugin", "daily wallpaper delivery failed", { groupId, error: normalizeError(error) });
+      logger.error("plugin", "daily wallpaper delivery failed", {
+        groupId,
+        error: normalizeError(error),
+      });
     }
   }
 };
@@ -589,6 +908,8 @@ const createNoopTask = (): TaskRuntime => ({
   stop: async () => {},
 });
 
+const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
 const hasVtbApiEndpoints = (config: MizConfig["vtb"]) =>
   Boolean(config.userApiUrl && config.cardApiUrl && config.liveApiUrl && config.dynamicApiUrl);
 
@@ -603,3 +924,6 @@ const normalizeError = (error: unknown) => {
 
   return error;
 };
+
+const isTimeoutError = (error: unknown) =>
+  error instanceof Error && (error.name === "TimeoutError" || /\b(?:timed?\s*out|timeout)\b/i.test(error.message));

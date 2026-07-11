@@ -81,7 +81,10 @@ const formatMetadata = (metadata: unknown) => {
 
 const redactSecrets = <T>(value: T): T => {
   if (typeof value === "string") {
-    return value.replace(/(access_token=)[^&\s]+/g, "$1[redacted]") as T;
+    return value.replace(
+      /((?:access_)?token|password|cookie|authorization|secret|api[_-]?key|signature)=([^&\s]+)/gi,
+      "$1=[redacted]",
+    ) as T;
   }
 
   if (Array.isArray(value)) {
@@ -92,7 +95,7 @@ const redactSecrets = <T>(value: T): T => {
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
         key,
-        /token|password/i.test(key) ? "[redacted]" : redactSecrets(item),
+        /token|password|cookie|authorization|secret|api[_-]?key/i.test(key) ? "[redacted]" : redactSecrets(item),
       ]),
     ) as T;
   }

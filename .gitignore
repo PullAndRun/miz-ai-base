@@ -7,6 +7,9 @@ logs/
 src/generated/
 *.tgz
 config/app.toml
+config/app.local.toml
+config/ff14.toml
+config/vtb.toml
 config/app.docker.toml
 doc/
 CODEX_PROMPTING_GUIDE.md

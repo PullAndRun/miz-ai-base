@@ -8,6 +8,11 @@ process.env.MIZ_RUNTIME_MODE = mode;
 if (mode === "docker") {
   await createDockerConfigIfMissing();
 }
+const { runPrismaMigrations } = await import("./prisma-migrate");
+const migrationExitCode = await runPrismaMigrations();
+if (migrationExitCode !== 0) {
+  throw new Error(`Database migration failed with exit code ${migrationExitCode}`);
+}
 await import("../src/index");
 
 export {};

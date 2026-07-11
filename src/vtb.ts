@@ -1,12 +1,12 @@
 import dayjs from "dayjs";
 import { XMLParser } from "fast-xml-parser";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "@/generated/prisma/client";
+import { PrismaClient, type Reminder, type ScheduleEvent } from "@/generated/prisma/client";
 import { z } from "zod";
 import type { MizConfig, VtbConfig } from "@/config";
+import { fetchWithRetry } from "@/http";
 
 const FETCH_TIMEOUT_MS = 15_000;
-const DYNAMIC_RETRY_DELAY_MS = 10_000;
 const MAX_DYNAMIC_DESCRIPTION_LENGTH = 1_800;
 const textValueSchema = z.union([z.string(), z.number(), z.boolean()]);
 
@@ -21,7 +21,12 @@ const userResponseSchema = z.looseObject({
 });
 const cardResponseSchema = z.looseObject({
   code: z.number(),
-  data: z.looseObject({ card: z.looseObject({ fans: z.union([z.string(), z.number()]).optional() }) }),
+  data: z.unknown().optional(),
+});
+const cardSchema = z.looseObject({
+  mid: z.union([z.string(), z.number()]),
+  fans: z.union([z.string(), z.number()]).optional(),
+  name: z.string().min(1).optional(),
 });
 const liveInfoSchema = z.looseObject({
   title: z.string().optional(),
@@ -33,7 +38,7 @@ const liveInfoSchema = z.looseObject({
 });
 const liveResponseSchema = z.looseObject({
   code: z.number(),
-  data: z.record(z.string(), liveInfoSchema).optional().default({}),
+  data: z.unknown().optional(),
 });
 const dynamicSchema = z.object({
   rss: z.object({
@@ -73,6 +78,9 @@ export type VtbDynamic = {
 };
 export type VtbDynamicFeed = { avatarUrl: string; items: VtbDynamic[] };
 export type LiveSession = { startedAt: Date; startFans?: number; roomId?: string };
+export type VtbCardInfo = { fans?: number; name?: string };
+type ReminderClaim = Reminder & { claimedAt: Date; nextRemindAt?: Date };
+type ScheduleEventClaim = ScheduleEvent & { claimedAt: Date };
 
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
@@ -115,7 +123,7 @@ export const resolveVtbStreamer = async (name: string, config: VtbConfig): Promi
     throw new Error(`Bilibili user API failed: code ${response.code}`);
   }
 
-  const user = response.data.result.find((item) => item.uname === name) ?? response.data.result[0];
+  const user = response.data.result.find((item) => item.uname === name);
   return user
     ? { name: user.uname, mid: String(user.mid), roomId: user.room_id === undefined ? undefined : String(user.room_id) }
     : undefined;
@@ -135,37 +143,203 @@ export const resolveTrackedVtbStreamer = async (
   return fetchedStreamer ? repository.upsertStreamer(fetchedStreamer) : undefined;
 };
 
-export const getVtbFanCount = async (mid: string, config: VtbConfig) => {
-  const response = cardResponseSchema.parse(
-    await fetchJson(
-      `${config.cardApiUrl}${encodeURIComponent(mid)}`,
-      config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined,
-    ),
+export const syncConfiguredVtbStreamers = async (config: MizConfig) => {
+  const names = Array.from(
+    new Set(config.vtb.subscriptions.flatMap((subscription) => subscription.streamers)),
   );
-  if (response.code !== 0) throw new Error(`Bilibili card API failed: code ${response.code}`);
-  const fans = Number(response.data.card.fans);
-  return Number.isFinite(fans) ? fans : undefined;
+  const added: string[] = [];
+  const skipped: string[] = [];
+  const failed: Array<{ name: string; reason: string }> = [];
+  const repository = await getVtbRepository(config);
+  const removed = await repository.deleteStreamersNotInNames(names);
+  let nextIndex = 0;
+  const workerCount = Math.min(4, names.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < names.length) {
+        const name = names[nextIndex];
+        nextIndex += 1;
+        try {
+          if (await repository.findStreamerByName(name)) {
+            continue;
+          }
+
+          const streamer = await resolveVtbStreamer(name, config.vtb);
+          if (!streamer) {
+            skipped.push(name);
+            continue;
+          }
+
+          await repository.upsertStreamer(streamer);
+          added.push(name);
+        } catch (error) {
+          failed.push({ name, reason: formatSyncFailure(error) });
+        }
+      }
+    }),
+  );
+
+  return { added, skipped, removed, failed };
+};
+
+export const disableUnavailableVtbSubscriptions = (
+  config: MizConfig,
+  availableGroupIds: ReadonlySet<string>,
+) => {
+  const disabled = config.vtb.subscriptions.filter(
+    (subscription) => !availableGroupIds.has(String(subscription.groupId)),
+  );
+  config.vtb.subscriptions = config.vtb.subscriptions.filter(
+    (subscription) => availableGroupIds.has(String(subscription.groupId)),
+  );
+  return disabled;
+};
+
+export const syncVtbSubscriptionNames = async (config: MizConfig) => {
+  const renamed: Array<{ previousName: string; name: string; mid: string }> = [];
+  const roomUpdated: Array<{ name: string; mid: string; roomId: string }> = [];
+  const failed: Array<{ name: string; reason: string }> = [];
+
+  const databaseSync = await syncConfiguredVtbStreamers(config);
+  const repository = await getVtbRepository(config);
+  const streamers = await repository.listStreamers();
+  if (streamers.length === 0) {
+    return { databaseSync, renamed, roomUpdated, failed };
+  }
+
+  let cardInfos: Map<string, VtbCardInfo>;
+  try {
+    cardInfos = await getVtbCardInfos(streamers.map((streamer) => streamer.mid), config.vtb);
+  } catch (error) {
+    return {
+      databaseSync,
+      renamed,
+      roomUpdated,
+      failed: streamers.map((streamer) => ({ name: streamer.name, reason: formatSyncFailure(error) })),
+    };
+  }
+
+  const matchedStreamers: Array<{ streamer: VtbStreamer; card: VtbCardInfo & { name: string } }> = [];
+  for (const streamer of streamers) {
+    const card = cardInfos.get(streamer.mid);
+    if (!card?.name) {
+      failed.push({ name: streamer.name, reason: `名片接口未返回 MID ${streamer.mid} 的昵称` });
+      continue;
+    }
+
+    if (card.name !== streamer.name) {
+      renamed.push({ previousName: streamer.name, name: card.name, mid: streamer.mid });
+    }
+
+    matchedStreamers.push({ streamer, card: { ...card, name: card.name } });
+  }
+
+  // Persist nickname changes before querying room IDs. A room API failure must
+  // not leave the database and vtb.toml out of sync after the caller writes
+  // the confirmed card nickname back to configuration.
+  for (const { streamer, card } of matchedStreamers) {
+    if (card.name !== streamer.name) {
+      await repository.upsertStreamer({ ...streamer, name: card.name });
+    }
+  }
+
+  let liveInfos: Map<string, VtbLiveInfo>;
+  try {
+    liveInfos = await getVtbLiveInfos(
+      matchedStreamers.map((item) => item.streamer),
+      config.vtb,
+    );
+  } catch (error) {
+    const reason = formatSyncFailure(error);
+    failed.push(...matchedStreamers.map(({ streamer }) => ({ name: streamer.name, reason })));
+    return { databaseSync, renamed, roomUpdated, failed };
+  }
+
+  for (const { streamer, card } of matchedStreamers) {
+    const live = liveInfos.get(streamer.mid)!;
+    if (card.name !== streamer.name || (live.roomId && live.roomId !== streamer.roomId)) {
+      await repository.upsertStreamer({
+        ...streamer,
+        name: card.name,
+        roomId: live.roomId,
+      });
+    }
+    if (live.roomId && live.roomId !== streamer.roomId) {
+      roomUpdated.push({ name: card.name, mid: streamer.mid, roomId: live.roomId });
+    }
+  }
+
+  return { databaseSync, renamed, roomUpdated, failed };
+};
+
+export const getVtbFanCount = async (mid: string, config: VtbConfig) => {
+  return (await getVtbCardInfo(mid, config)).fans;
+};
+
+export const getVtbCardInfo = async (mid: string, config: VtbConfig): Promise<VtbCardInfo> => {
+  return (await getVtbCardInfos([mid], config)).get(mid) ?? {};
+};
+
+export const getVtbCardInfos = async (mids: readonly string[], config: VtbConfig) => {
+  const uniqueMids = Array.from(new Set(mids));
+  const cards = new Map<string, VtbCardInfo>();
+  for (const batch of chunk(uniqueMids, 50)) {
+    const response = cardResponseSchema.parse(
+      await fetchJson(
+        createCardApiUrl(config.cardApiUrl, batch),
+        config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined,
+      ),
+    );
+    if (response.code !== 0) {
+      throw new Error(
+        response.code === -101
+          ? "Bilibili card API rejected the configured cookie: code -101"
+          : `Bilibili card API failed: code ${response.code}`,
+      );
+    }
+
+    for (const rawCard of extractCardRecords(response.data)) {
+      const parsedCard = cardSchema.safeParse(rawCard);
+      if (!parsedCard.success) {
+        continue;
+      }
+
+      const fans = Number(parsedCard.data.fans);
+      cards.set(String(parsedCard.data.mid), {
+        fans: Number.isFinite(fans) ? fans : undefined,
+        name: parsedCard.data.name?.trim() || undefined,
+      });
+    }
+  }
+
+  return cards;
 };
 
 export const getVtbLiveInfo = async (streamer: VtbStreamer, config: VtbConfig): Promise<VtbLiveInfo> => {
-  const response = liveResponseSchema.parse(
-    await fetchJson(config.liveApiUrl, config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ uids: [streamer.mid] }),
-    }),
-  );
-  if (response.code !== 0) throw new Error(`Bilibili live API failed: code ${response.code}`);
+  return (await getVtbLiveInfos([streamer], config)).get(streamer.mid)!;
+};
 
-  const live = response.data[streamer.mid];
-  return {
-    title: live?.title?.trim() || "暂无直播标题",
-    roomId: live?.room_id === undefined ? streamer.roomId : String(live.room_id),
-    liveStartedAt: parseDate(live?.live_time),
-    isLive: live?.live_status === 1,
-    name: live?.uname?.trim() || streamer.name,
-    coverUrl: live?.cover_from_user?.trim() || undefined,
-  };
+export const getVtbLiveInfos = async (streamers: readonly VtbStreamer[], config: VtbConfig) => {
+  const results = new Map<string, VtbLiveInfo>();
+  const uniqueStreamers = Array.from(
+    new Map(streamers.map((streamer) => [streamer.mid, streamer])).values(),
+  );
+  for (const batch of chunk(uniqueStreamers, 50)) {
+    const response = liveResponseSchema.parse(
+      await fetchJson(config.liveApiUrl, config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ uids: batch.map((streamer) => streamer.mid) }),
+      }),
+    );
+    if (response.code !== 0) throw new Error(`Bilibili live API failed: code ${response.code}`);
+
+    for (const streamer of batch) {
+      results.set(streamer.mid, toVtbLiveInfo(streamer, findLiveInfo(response.data, streamer.mid)));
+    }
+  }
+
+  return results;
 };
 
 export const getVtbDynamics = async (
@@ -205,6 +379,54 @@ export class VtbRepository {
   async findStreamerByName(name: string): Promise<VtbStreamer | undefined> {
     const streamer = await this.prisma.vtbStreamer.findFirst({ where: { name } });
     return streamer ? fromStoredStreamer(streamer) : undefined;
+  }
+
+  async listStreamers(): Promise<VtbStreamer[]> {
+    const streamers = await this.prisma.vtbStreamer.findMany({ orderBy: { updatedAt: "asc" } });
+    return streamers.map(fromStoredStreamer);
+  }
+
+  async deleteStreamersNotInNames(names: readonly string[]) {
+    const staleStreamers = await this.prisma.vtbStreamer.findMany({
+      where: names.length > 0 ? { name: { notIn: [...names] } } : {},
+      select: { mid: true, name: true },
+    });
+    if (staleStreamers.length === 0) {
+      return [];
+    }
+
+    const mids = staleStreamers.map((streamer) => streamer.mid);
+    await this.prisma.$transaction([
+      this.prisma.vtbLiveSession.deleteMany({ where: { streamerMid: { in: mids } } }),
+      this.prisma.vtbDynamicState.deleteMany({ where: { streamerMid: { in: mids } } }),
+      this.prisma.vtbStreamer.deleteMany({ where: { mid: { in: mids } } }),
+    ]);
+    return staleStreamers.map((streamer) => streamer.name);
+  }
+
+  async deleteStreamerByName(name: string) {
+    const streamer = await this.prisma.vtbStreamer.findFirst({
+      where: { name },
+      select: { mid: true },
+    });
+    if (!streamer) {
+      return false;
+    }
+
+    await this.deleteStreamersByMids([streamer.mid]);
+    return true;
+  }
+
+  private async deleteStreamersByMids(mids: readonly bigint[]) {
+    if (mids.length === 0) {
+      return;
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.vtbLiveSession.deleteMany({ where: { streamerMid: { in: [...mids] } } }),
+      this.prisma.vtbDynamicState.deleteMany({ where: { streamerMid: { in: [...mids] } } }),
+      this.prisma.vtbStreamer.deleteMany({ where: { mid: { in: [...mids] } } }),
+    ]);
   }
 
   async upsertStreamer(streamer: VtbStreamer): Promise<VtbStreamer> {
@@ -267,10 +489,268 @@ export class VtbRepository {
     });
   }
 
+  async getDeliveredNewsIds(targetKey: string, maximumCount: number) {
+    const deliveries = await this.prisma.newsDelivery.findMany({
+      where: { targetKey },
+      orderBy: { deliveredAt: "desc" },
+      take: maximumCount,
+      select: { newsId: true },
+    });
+    return deliveries.map((delivery) => delivery.newsId);
+  }
+
+  async recordNewsDeliveries(targetKey: string, newsIds: readonly string[], maximumCount: number) {
+    if (newsIds.length === 0) {
+      return;
+    }
+
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.newsDelivery.createMany({
+        data: newsIds.map((newsId) => ({ targetKey, newsId })),
+        skipDuplicates: true,
+      });
+      const retained = await transaction.newsDelivery.findMany({
+        where: { targetKey },
+        orderBy: { deliveredAt: "desc" },
+        take: maximumCount,
+        select: { newsId: true },
+      });
+      await transaction.newsDelivery.deleteMany({
+        where: {
+          targetKey,
+          newsId: { notIn: retained.map((delivery) => delivery.newsId) },
+        },
+      });
+    });
+  }
+
+  async ensureReminderStorage() {
+    await this.prisma.reminder.findFirst({ select: { id: true } });
+  }
+
+  async createReminder({
+    groupId,
+    creatorId,
+    targetId,
+    content,
+    remindAt,
+    repeatIntervalMinutes,
+  }: {
+    groupId: string | number;
+    creatorId: string | number;
+    targetId: string | number;
+    content: string;
+    remindAt: Date;
+    repeatIntervalMinutes?: number;
+  }) {
+    return this.prisma.reminder.create({
+      data: {
+        groupId: String(groupId),
+        creatorId: String(creatorId),
+        targetId: String(targetId),
+        content,
+        remindAt,
+        repeatIntervalMinutes: repeatIntervalMinutes ?? null,
+      },
+    });
+  }
+
+  async claimDueReminders(now: Date, maximumCount: number) {
+    const candidates = await this.prisma.reminder.findMany({
+      where: { sentAt: null, remindAt: { lte: now } },
+      orderBy: { remindAt: "asc" },
+      take: maximumCount,
+    });
+    const claimed: ReminderClaim[] = [];
+
+    for (const reminder of candidates) {
+      const nextRemindAt = reminder.repeatIntervalMinutes
+        ? getNextReminderTime(reminder.remindAt, reminder.repeatIntervalMinutes, now)
+        : undefined;
+      const result = await this.prisma.reminder.updateMany({
+        where: { id: reminder.id, sentAt: null, remindAt: reminder.remindAt },
+        data: reminder.repeatIntervalMinutes
+          ? { remindAt: nextRemindAt, lastSentAt: now }
+          : { sentAt: now, lastSentAt: now },
+      });
+      if (result.count === 1) {
+        claimed.push({ ...reminder, claimedAt: now, nextRemindAt });
+      }
+    }
+
+    return claimed;
+  }
+
+  async releaseReminderClaim(reminder: ReminderClaim) {
+    if (reminder.repeatIntervalMinutes) {
+      return this.prisma.reminder.updateMany({
+        where: {
+          id: reminder.id,
+          sentAt: null,
+          remindAt: reminder.nextRemindAt,
+          lastSentAt: reminder.claimedAt,
+        },
+        data: { remindAt: reminder.remindAt, lastSentAt: null },
+      });
+    }
+
+    return this.prisma.reminder.updateMany({
+      where: { id: reminder.id, sentAt: reminder.claimedAt },
+      data: { sentAt: null, lastSentAt: null },
+    });
+  }
+
+  async listPendingReminders(groupId: string | number, creatorId?: string | number) {
+    return this.prisma.reminder.findMany({
+      where: {
+        groupId: String(groupId),
+        sentAt: null,
+        ...(creatorId === undefined ? {} : { creatorId: String(creatorId) }),
+      },
+      orderBy: { remindAt: "asc" },
+    });
+  }
+
+  async findPendingReminder(id: number, groupId: string | number) {
+    return this.prisma.reminder.findFirst({
+      where: { id, groupId: String(groupId), sentAt: null },
+    });
+  }
+
+  async cancelPendingReminder(id: number, groupId: string | number) {
+    return this.prisma.reminder.deleteMany({
+      where: { id, groupId: String(groupId), sentAt: null },
+    });
+  }
+
+  async editPendingReminder({
+    id,
+    groupId,
+    targetId,
+    content,
+    remindAt,
+    repeatIntervalMinutes,
+  }: {
+    id: number;
+    groupId: string | number;
+    targetId: string | number;
+    content: string;
+    remindAt: Date;
+    repeatIntervalMinutes?: number;
+  }) {
+    return this.prisma.reminder.updateMany({
+      where: { id, groupId: String(groupId), sentAt: null },
+      data: {
+        targetId: String(targetId),
+        content,
+        remindAt,
+        repeatIntervalMinutes: repeatIntervalMinutes ?? null,
+      },
+    });
+  }
+
+  async ensureScheduleStorage() {
+    await this.prisma.scheduleEvent.findFirst({ select: { id: true } });
+  }
+
+  async createScheduleEvent({
+    groupId,
+    creatorId,
+    content,
+    eventAt,
+    remindAt,
+  }: {
+    groupId: string | number;
+    creatorId: string | number;
+    content: string;
+    eventAt: Date;
+    remindAt: Date;
+  }) {
+    return this.prisma.$transaction(async (transaction) => {
+      // Schedule IDs are user-facing and independent for each group.
+      await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${String(groupId)}))`;
+      await transaction.scheduleEvent.deleteMany({
+        where: { groupId: String(groupId), eventAt: { lte: new Date() }, remindedAt: { not: null } },
+      });
+      const previous = await transaction.scheduleEvent.findFirst({
+        where: { groupId: String(groupId) },
+        orderBy: { displayId: "desc" },
+        select: { displayId: true },
+      });
+
+      return transaction.scheduleEvent.create({
+        data: {
+          groupId: String(groupId),
+          displayId: (previous?.displayId ?? 0) + 1,
+          creatorId: String(creatorId),
+          content,
+          eventAt,
+          remindAt,
+        },
+      });
+    });
+  }
+
+  async listUpcomingScheduleEvents(groupId: string | number) {
+    return this.prisma.scheduleEvent.findMany({
+      where: { groupId: String(groupId), eventAt: { gte: new Date() } },
+      orderBy: { eventAt: "asc" },
+    });
+  }
+
+  async cancelUpcomingScheduleEvent(displayId: number, groupId: string | number) {
+    return this.prisma.scheduleEvent.deleteMany({
+      where: { displayId, groupId: String(groupId), eventAt: { gt: new Date() }, remindedAt: null },
+    });
+  }
+
+  async claimDueScheduleEvents(now: Date, maximumCount: number) {
+    const candidates = await this.prisma.scheduleEvent.findMany({
+      where: { remindedAt: null, remindAt: { lte: now } },
+      orderBy: { remindAt: "asc" },
+      take: maximumCount,
+    });
+    const claimed: ScheduleEventClaim[] = [];
+
+    for (const event of candidates) {
+      const result = await this.prisma.scheduleEvent.updateMany({
+        where: { id: event.id, remindedAt: null },
+        data: { remindedAt: now },
+      });
+      if (result.count === 1) {
+        claimed.push({ ...event, claimedAt: now });
+      }
+    }
+
+    return claimed;
+  }
+
+  async releaseScheduleEventClaim(event: ScheduleEventClaim) {
+    return this.prisma.scheduleEvent.updateMany({
+      where: { id: event.id, remindedAt: event.claimedAt },
+      data: { remindedAt: null },
+    });
+  }
+
+  async cleanupFinishedScheduleEvents(now = new Date()) {
+    return this.prisma.scheduleEvent.deleteMany({
+      where: { eventAt: { lte: now }, remindedAt: { not: null } },
+    });
+  }
+
   close() {
     return this.prisma.$disconnect();
   }
 }
+
+const getNextReminderTime = (current: Date, intervalMinutes: number, now: Date) => {
+  const intervalMs = intervalMinutes * 60_000;
+  const elapsedIntervals = Math.floor((now.getTime() - current.getTime()) / intervalMs) + 1;
+  return new Date(current.getTime() + Math.max(1, elapsedIntervals) * intervalMs);
+};
+
+const formatSyncFailure = (error: unknown) =>
+  error instanceof Error ? error.message.replace(/\s+/g, " ").trim().slice(0, 200) : "未知错误";
 
 export const formatLiveMessage = (live: VtbLiveInfo, fans?: number) => [
   "╭─「 B站开播提醒 」",
@@ -337,16 +817,25 @@ export const formatDynamicUrl = (link: string) => {
 };
 
 const createVtbRepository = async (config: MizConfig) => {
-  const prisma = new PrismaClient({ adapter: new PrismaPg(createDatabaseUrl(config)) });
+  const prisma = new PrismaClient({ adapter: new PrismaPg(getDatabaseUrl(config)) });
   const repository = new VtbRepository(prisma);
   await repository.initialize();
   return repository;
 };
 
-const createDatabaseUrl = (config: MizConfig) => {
+export const getDatabaseUrl = (config: MizConfig) => {
   const host = new URL(config.postgresql.url);
-  const port = host.port ? `:${host.port}` : "";
-  return `postgresql://${encodeURIComponent(config.postgresql.username)}:${encodeURIComponent(config.postgresql.password)}@${host.hostname}${port}/${encodeURIComponent(config.postgresql.database)}`;
+  return [
+    "postgresql://",
+    encodeURIComponent(config.postgresql.username),
+    ":",
+    encodeURIComponent(config.postgresql.password),
+    "@",
+    host.host,
+    "/",
+    encodeURIComponent(config.postgresql.database),
+    host.search,
+  ].join("");
 };
 
 const fromStoredStreamer = (streamer: { name: string; mid: bigint; liveRoom: bigint | null }): VtbStreamer => ({
@@ -359,7 +848,7 @@ const toMid = (mid: string) => BigInt(mid);
 const toOptionalMid = (value: string | undefined) => (value === undefined ? null : BigInt(value));
 
 const fetchJson = async (url: string, headers?: Record<string, string>, init?: RequestInit) => {
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     ...init,
     headers: {
       "user-agent": "Mozilla/5.0",
@@ -367,35 +856,90 @@ const fetchJson = async (url: string, headers?: Record<string, string>, init?: R
       ...(headers ?? {}),
       ...(init?.headers ?? {}),
     },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    timeoutMs: FETCH_TIMEOUT_MS,
   });
-  if (!response.ok) throw new Error(`Vtb API request failed: HTTP ${response.status}`);
   return response.json();
 };
 
 const fetchText = async (url: string) => {
-  const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-  if (!response.ok) throw new Error(`Vtb dynamic API request failed: HTTP ${response.status}`);
+  const response = await fetchWithRetry(url, { timeoutMs: FETCH_TIMEOUT_MS });
   return response.text();
 };
 
-const fetchDynamicText = async (url: string, retryCount: number) => {
-  let lastError: unknown;
-  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
-    try {
-      return await fetchText(url);
-    } catch (error) {
-      lastError = error;
-      if (attempt === retryCount) {
-        break;
-      }
+const fetchDynamicText = async (url: string, _retryCount: number) => fetchText(url);
 
-      await new Promise<void>((resolve) => setTimeout(resolve, DYNAMIC_RETRY_DELAY_MS));
+const createCardApiUrl = (apiUrl: string, mids: readonly string[]) => {
+  const url = new URL(apiUrl);
+  if (!url.searchParams.has("uids")) {
+    throw new Error("Bilibili card API URL must include the uids query parameter");
+  }
+  url.searchParams.set("uids", mids.join(","));
+  return url.href;
+};
+
+const chunk = <T>(items: readonly T[], size: number) => {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+};
+
+const extractCardRecords = (value: unknown): unknown[] => {
+  if (Array.isArray(value)) {
+    return value.flatMap(extractCardRecords);
+  }
+
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  if ("mid" in value) {
+    return [value];
+  }
+
+  return Object.entries(value).flatMap(([key, child]) => {
+    if (isRecord(child) && !("mid" in child) && /^\d+$/.test(key)) {
+      return [{ ...child, mid: key }];
+    }
+    return extractCardRecords(child);
+  });
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const findLiveInfo = (value: unknown, mid: string) => {
+  if (isRecord(value)) {
+    const parsed = liveInfoSchema.safeParse(value[mid]);
+    return parsed.success ? parsed.data : undefined;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (!isRecord(item)) {
+        continue;
+      }
+      const itemMid = item.uid ?? item.mid;
+      if (String(itemMid) !== mid) {
+        continue;
+      }
+      const parsed = liveInfoSchema.safeParse(item);
+      return parsed.success ? parsed.data : undefined;
     }
   }
 
-  throw lastError;
+  return undefined;
 };
+
+const toVtbLiveInfo = (streamer: VtbStreamer, live: z.infer<typeof liveInfoSchema> | undefined): VtbLiveInfo => ({
+  title: live?.title?.trim() || "暂无直播标题",
+  roomId: live?.room_id === undefined ? streamer.roomId : String(live.room_id),
+  liveStartedAt: parseDate(live?.live_time),
+  isLive: live?.live_status === 1,
+  name: live?.uname?.trim() || streamer.name,
+  coverUrl: live?.cover_from_user?.trim() || undefined,
+});
 
 const parseDate = (value: string | number | undefined) => {
   if (!value || value === "0000-00-00 00:00:00") return undefined;

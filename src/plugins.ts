@@ -30,7 +30,7 @@ export type PluginContext = {
     source?: string;
     summary?: string;
   }): Promise<unknown>;
-  gateway: Pick<Gateway, "sendGroupMessage" | "sendPrivateMessage" | "sendForwardMessage">;
+  gateway: Pick<Gateway, "getGroupList" | "sendGroupMessage" | "sendPrivateMessage" | "sendForwardMessage">;
   logger: Logger;
   plugins: readonly PluginInfo[];
   commandPrefix: string;

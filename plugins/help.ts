@@ -3,18 +3,21 @@ import type { MizPlugin } from "@/plugins";
 const helpPlugin: MizPlugin = {
   name: "help",
   commands: ["help", "帮助"],
-  description: "列出当前可用命令",
+  description: "查看机器人可用功能与命令",
   async handle({ commandPrefix, plugins, replyForward }) {
-    const lines = plugins.map((plugin) => {
+    const availablePlugins = plugins.filter((plugin) => plugin.commands.length > 0);
+    const lines = availablePlugins.map((plugin) => {
       const commands = plugin.commands.map((command) => `${commandPrefix} ${command}`).join("\n");
       const description = formatDescription(plugin.description ?? "暂无介绍");
-      return `功能: ${plugin.name}\n介绍: ${description}\n命令:\n${commands}`;
+      return `【${plugin.name}】\n${description}\n可用命令：\n${commands}`;
     });
 
-    await replyForward(lines.length > 0 ? lines : ["暂无可用命令"], {
+    const repeatHelp = "复读为内置功能：群内连续 3 条相同的文本或图片（不含 miz 命令）时，机器人会复读一次。";
+
+    await replyForward(lines.length > 0 ? [...lines, repeatHelp] : ["暂时没有可用命令。"], {
       title: `${commandPrefix} help`,
       source: commandPrefix,
-      summary: `共 ${lines.length} 个命令`,
+      summary: `共 ${lines.length} 个功能，展开查看完整命令与用法`,
     });
   },
 };

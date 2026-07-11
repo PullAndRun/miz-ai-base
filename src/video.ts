@@ -90,17 +90,10 @@ export const getNapcatVideoFile = async (videoPath: string, config: VideoConfig)
     return `base64://${(await readFile(path.resolve(videoPath))).toString("base64")}`;
   }
 
-  const mediaDirectory = await stat(config.napcatMediaDirectory)
-    .then((entry) => (entry.isDirectory() ? config.napcatMediaDirectory : undefined))
-    .catch(() => undefined);
-
-  if (mediaDirectory) {
-    const napcatPath = path.posix.join(mediaDirectory, path.basename(videoPath));
-    return pathToFileURL(napcatPath).href;
-  }
-
-  // Keep Docker deployments working if the shared mount was not configured.
-  return `base64://${(await readFile(path.resolve(videoPath))).toString("base64")}`;
+  // Docker deployments share /temp with NapCat as /app/media. Only send the
+  // in-container file address: NapCat reads the bytes itself, never NapLink.
+  const napcatPath = path.posix.join(config.napcatMediaDirectory, path.basename(videoPath));
+  return pathToFileURL(napcatPath).href;
 };
 
 // QQ's video player is not consistently compatible with the HEVC and AV1 streams

@@ -43,7 +43,7 @@ const luckyActivities = combine(activityStyles, activityThemes);
 const divinationPlugin: MizPlugin = {
   name: "divination",
   commands: ["占卜", "fortune"],
-  description: "抽取随机运势，支持指定占卜主题。用法：miz 占卜 [主题]",
+  description: "抽取一条随机运势，也可指定想问的主题。\n用法：miz 占卜 [主题]",
   async handle({ command, reply }) {
     const topic = command.args.trim();
     const fortune = pickRandom(fortunes);

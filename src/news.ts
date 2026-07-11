@@ -1,7 +1,11 @@
 import { z } from "zod";
+import type { MizConfig } from "@/config";
+import { fetchWithRetry } from "@/http";
+import { getVtbRepository } from "@/vtb";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_SAVED_NEWS = 100;
+const MAX_SENT_NEWS_TARGET_CACHES = 500;
 const NEWS_LIMIT = 10;
 
 const financeNewsItemSchema = z.looseObject({
@@ -10,17 +14,17 @@ const financeNewsItemSchema = z.looseObject({
   third_url: z.string().min(1).optional(),
   content: z
     .looseObject({
-      items: z.array(z.looseObject({ data: z.string().min(1).optional() })).optional(),
+      // Baidu has returned this as both an array of blocks and an object
+      // keyed by provider name. Keep it untyped here and normalize below.
+      items: z.unknown().optional(),
     })
     .optional(),
 });
 
 const financeNewsResponseSchema = z.looseObject({
-  Result: z.looseObject({
-    content: z.looseObject({
-      list: z.array(financeNewsItemSchema).optional(),
-    }),
-  }),
+  Result: z.unknown().optional(),
+  result: z.unknown().optional(),
+  data: z.unknown().optional(),
 });
 
 export type News = {
@@ -35,34 +39,41 @@ type SentNewsCache = {
 };
 
 const sentNewsByTarget = new Map<string, SentNewsCache>();
-let deliveryQueue = Promise.resolve();
+const deliveryQueues = new Map<string, Promise<void>>();
 
 /** Serializes delivery so a story is recorded only after a successful send. */
 export const deliverUnsentNews = async (
+  config: MizConfig,
   apiUrl: string,
   targetKey: string,
   deliver: (news: readonly News[]) => Promise<void>,
+  availableNews?: readonly News[],
 ): Promise<readonly News[]> => {
   let releaseQueue: (() => void) | undefined;
   const currentDelivery = new Promise<void>((resolve) => {
     releaseQueue = resolve;
   });
-  const previousDelivery = deliveryQueue;
-  deliveryQueue = currentDelivery;
+  const previousDelivery = deliveryQueues.get(targetKey) ?? Promise.resolve();
+  deliveryQueues.set(targetKey, currentDelivery);
 
   await previousDelivery;
   try {
-    const sentNews = getSentNewsCache(targetKey);
-    const freshNews = (await fetchFinanceNews(apiUrl)).filter((news) => !sentNews.idSet.has(news.id));
+    const sentNews = await getSentNewsCache(config, targetKey);
+    const freshNews = (availableNews ?? await fetchFinanceNews(apiUrl))
+      .filter((news) => !sentNews.idSet.has(news.id));
     if (freshNews.length === 0) {
       return [];
     }
 
     await deliver(freshNews);
     rememberSentNews(sentNews, freshNews);
+    await persistDeliveredNews(config, targetKey, freshNews);
     return freshNews;
   } finally {
     releaseQueue?.();
+    if (deliveryQueues.get(targetKey) === currentDelivery) {
+      deliveryQueues.delete(targetKey);
+    }
   }
 };
 
@@ -85,30 +96,101 @@ export const formatScheduledNewsItems = (news: readonly News[]) =>
     formatNews(item),
   ].join("\n"));
 
-export const createNoNewsMessage = () => "财经新闻雷达刚刚巡检完毕，暂无新的市场快讯。";
+export const createNoNewsMessage = () => "暂时没有新的财经快讯。晚些时候再来看看吧。";
 
-const fetchFinanceNews = async (apiUrl: string): Promise<News[]> => {
-  const response = await fetch(apiUrl, {
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+export const fetchFinanceNews = async (apiUrl: string): Promise<News[]> => {
+  const response = await fetchWithRetry(apiUrl, {
+    timeoutMs: FETCH_TIMEOUT_MS,
   });
-  if (!response.ok) {
-    throw new Error(`News API request failed: HTTP ${response.status}`);
-  }
 
   const payload = financeNewsResponseSchema.parse(await response.json());
-  const items = payload.Result.content.list ?? [];
+  const items = findNewsItems(payload);
+  const seenIds = new Set<string>();
+  const news: News[] = [];
 
-  return items.slice(0, NEWS_LIMIT).flatMap((item) => {
-    const detail = item.content?.items?.map((content) => content.data).find(Boolean);
-    const title = item.title ?? detail;
-    if (!title) {
-      return [];
+  for (const rawItem of items) {
+    const item = financeNewsItemSchema.safeParse(rawItem);
+    if (!item.success) {
+      continue;
+    }
+
+    const detail = extractNewsDetail(item.data.content?.items);
+    const title = item.data.title ?? detail;
+    if (!title || title.trimStart().startsWith("简讯")) {
+      continue;
     }
 
     const display = removeOverlappingText(title, detail);
-    return [{ id: `finance:${item.loc ?? item.third_url ?? title}`, ...display }];
-  });
+    const id = `finance:${item.data.loc ?? item.data.third_url ?? display.title}`;
+    if (seenIds.has(id)) {
+      continue;
+    }
+
+    seenIds.add(id);
+    news.push({ id, ...display });
+    if (news.length === NEWS_LIMIT) {
+      break;
+    }
+  }
+
+  return news;
 };
+
+const findNewsItems = (value: unknown, depth = 0): unknown[] => {
+  if (depth > 5) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (isRecord(value)) {
+    for (const key of ["list", "items"]) {
+      const items = findNewsItems(value[key], depth + 1);
+      if (items.length > 0) {
+        return items;
+      }
+    }
+
+    for (const key of ["Result", "result", "content", "data"]) {
+      const items = findNewsItems(value[key], depth + 1);
+      if (items.length > 0) {
+        return items;
+      }
+    }
+
+    for (const child of Object.values(value)) {
+      const items = findNewsItems(child, depth + 1);
+      if (items.length > 0) {
+        return items;
+      }
+    }
+  }
+
+  return [];
+};
+
+const extractNewsDetail = (value: unknown): string | undefined => {
+  if (typeof value === "string") {
+    return value.trim() || undefined;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(extractNewsDetail).find(Boolean);
+  }
+
+  if (isRecord(value)) {
+    // Prefer the conventional `data` field, then fall back to the first
+    // non-empty text value for provider-specific response shapes.
+    return extractNewsDetail(value.data) ?? Object.values(value).map(extractNewsDetail).find(Boolean);
+  }
+
+  return undefined;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const removeOverlappingText = (title: string, detail: string | undefined) => {
   if (!detail) {
@@ -126,15 +208,37 @@ const removeOverlappingText = (title: string, detail: string | undefined) => {
   return { title, detail };
 };
 
-const getSentNewsCache = (targetKey: string) => {
+const getSentNewsCache = async (config: MizConfig, targetKey: string) => {
   const existingCache = sentNewsByTarget.get(targetKey);
   if (existingCache) {
+    touchSentNewsCache(targetKey, existingCache);
     return existingCache;
   }
 
   const cache: SentNewsCache = { ids: [], idSet: new Set<string>() };
-  sentNewsByTarget.set(targetKey, cache);
+  try {
+    const ids = await getVtbRepository(config).then((repository) =>
+      repository.getDeliveredNewsIds(targetKey, MAX_SAVED_NEWS),
+    );
+    cache.ids.push(...ids.slice(0, MAX_SAVED_NEWS));
+    cache.idSet = new Set(cache.ids);
+  } catch {
+    // News remains usable if the optional persistence table has not been migrated yet.
+  }
+  touchSentNewsCache(targetKey, cache);
   return cache;
+};
+
+const touchSentNewsCache = (targetKey: string, cache: SentNewsCache) => {
+  sentNewsByTarget.delete(targetKey);
+  sentNewsByTarget.set(targetKey, cache);
+  while (sentNewsByTarget.size > MAX_SENT_NEWS_TARGET_CACHES) {
+    const oldestTarget = sentNewsByTarget.keys().next().value;
+    if (oldestTarget === undefined) {
+      return;
+    }
+    sentNewsByTarget.delete(oldestTarget);
+  }
 };
 
 const rememberSentNews = (cache: SentNewsCache, news: readonly News[]) => {
@@ -148,6 +252,19 @@ const rememberSentNews = (cache: SentNewsCache, news: readonly News[]) => {
     if (oldestId) {
       cache.idSet.delete(oldestId);
     }
+  }
+};
+
+const persistDeliveredNews = async (config: MizConfig, targetKey: string, news: readonly News[]) => {
+  try {
+    const repository = await getVtbRepository(config);
+    await repository.recordNewsDeliveries(
+      targetKey,
+      news.map((item) => item.id),
+      MAX_SAVED_NEWS,
+    );
+  } catch {
+    // The in-memory cache has already been updated, so a persistence issue must not resend news immediately.
   }
 };
 

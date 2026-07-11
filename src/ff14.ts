@@ -1,5 +1,6 @@
 import dayjs from "dayjs";
 import { z } from "zod";
+import { fetchWithRetry } from "@/http";
 
 const itemSearchResultSchema = z.looseObject({
   ID: z.number().int().positive(),
@@ -67,8 +68,6 @@ export type Ff14MarketResult = {
 
 const DEFAULT_MAX_LISTING_COUNT = 10;
 const FETCH_TIMEOUT_MS = 15_000;
-const FETCH_RETRY_COUNT = 3;
-const FETCH_RETRY_DELAY_MS = 500;
 
 export const isFf14RegionKey = (value: string | undefined): value is Ff14RegionKey =>
   value !== undefined && value in FF14_REGION_NAMES;
@@ -156,62 +155,15 @@ const fetchMarket = (marketApiUrl: string, regionName: string, itemId: number) =
     marketResponseSchema,
   );
 
-const fetchJson = async <T>(url: string | URL, schema: z.ZodType<T>): Promise<T> => {
-  let lastError: unknown;
-
-  for (let attempt = 0; attempt <= FETCH_RETRY_COUNT; attempt += 1) {
-    try {
-      return await fetchJsonOnce(url, schema);
-    } catch (error) {
-      lastError = error;
-      if (attempt === FETCH_RETRY_COUNT || !isRetryableFetchError(error)) {
-        throw error;
-      }
-
-      await delay(FETCH_RETRY_DELAY_MS * 2 ** attempt);
-    }
-  }
-
-  throw lastError;
-};
-
 const fetchJsonOnce = async <T>(url: string | URL, schema: z.ZodType<T>): Promise<T> => {
-  const response = await fetch(url, {
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  const response = await fetchWithRetry(url, {
+    timeoutMs: FETCH_TIMEOUT_MS,
   });
-  if (!response.ok) {
-    throw new HttpStatusError(response.status, response.statusText);
-  }
 
   return schema.parse(await response.json());
 };
 
-class HttpStatusError extends Error {
-  constructor(
-    readonly status: number,
-    statusText: string,
-  ) {
-    super(`HTTP ${status}: ${statusText}`);
-    this.name = "HttpStatusError";
-  }
-}
-
-const isRetryableFetchError = (error: unknown) => {
-  if (error instanceof z.ZodError) {
-    return false;
-  }
-
-  if (error instanceof HttpStatusError) {
-    return error.status === 429 || error.status >= 500;
-  }
-
-  return error instanceof Error;
-};
-
-const delay = (ms: number) =>
-  new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
+const fetchJson = fetchJsonOnce;
 
 const selectDisplayListings = (listings: Listing[], maxListingCount: number): GroupedListing[] => [
   ...sortListingsByPrice(listings.filter((listing) => listing.hq === true)).map((listing) => ({

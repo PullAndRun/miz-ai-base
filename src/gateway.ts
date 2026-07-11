@@ -38,6 +38,7 @@ export type Gateway = {
 };
 
 const idSchema = z.union([z.string(), z.number()]);
+const FOLLOWED_GROUP_MEMBER_ID = "361390990";
 
 const textSegmentSchema = z
   .looseObject({
@@ -60,6 +61,7 @@ const napCatEventSchema = z
     raw_message: z.string().optional(),
     group_id: idSchema.optional(),
     user_id: idSchema.optional(),
+    self_id: idSchema.optional(),
   });
 
 type NapCatEvent = z.infer<typeof napCatEventSchema>;
@@ -207,7 +209,32 @@ const registerEvents = (
   });
 
   client.on("notice", (event) => {
-    logger.info("gateway", `event=${formatEventNameOrUnknown(event)}`);
+    const parsedEvent = napCatEventSchema.safeParse(event);
+    logger.info("gateway", `event=${parsedEvent.success ? formatEventName(parsedEvent.data) : "unknown"}`);
+    if (!parsedEvent.success || !isFollowedMemberLeavingGroup(parsedEvent.data)) {
+      if (parsedEvent.success && isNewGroupMember(parsedEvent.data)) {
+        void sendNewMemberWelcome(client, parsedEvent.data, logger).catch(
+          (error) => logger.error("gateway", "failed to send new member welcome", {
+            groupId: parsedEvent.data.group_id,
+            userId: parsedEvent.data.user_id,
+            error,
+          }),
+        );
+      }
+      return;
+    }
+
+    void client.setGroupLeave(parsedEvent.data.group_id!).then(
+      () => logger.info("gateway", "left group after followed member left", {
+        groupId: parsedEvent.data.group_id,
+        userId: parsedEvent.data.user_id,
+      }),
+      (error) => logger.error("gateway", "failed to leave group after followed member left", {
+        groupId: parsedEvent.data.group_id,
+        userId: parsedEvent.data.user_id,
+        error,
+      }),
+    );
   });
 
   client.on("request", (event) => {
@@ -284,3 +311,55 @@ const formatEventName = (event: NapCatEvent) =>
   ]
     .filter(Boolean)
     .join(".");
+
+const isFollowedMemberLeavingGroup = (event: NapCatEvent) =>
+  event.notice_type === "group_decrease" &&
+  event.group_id !== undefined &&
+  event.user_id !== undefined &&
+  String(event.user_id) === FOLLOWED_GROUP_MEMBER_ID;
+
+const isNewGroupMember = (event: NapCatEvent) =>
+  event.notice_type === "group_increase" &&
+  event.group_id !== undefined &&
+  event.user_id !== undefined &&
+  String(event.user_id) !== String(event.self_id);
+
+const sendNewMemberWelcome = async (client: NapLink, event: NapCatEvent, logger: Logger) => {
+  const groupId = event.group_id!;
+  const userId = event.user_id!;
+  const [groupInfo, memberInfo] = await Promise.all([
+    client.getGroupInfo(groupId).catch(() => undefined),
+    client.getGroupMemberInfo(groupId, userId).catch(() => undefined),
+  ]);
+  const groupName = getDisplayName(groupInfo, ["group_name", "groupName"]) ?? "本群";
+  const memberName = getDisplayName(memberInfo, ["card", "nickname", "nick", "user_name"]) ?? `QQ 用户 ${userId}`;
+
+  await client.sendGroupMessage(groupId, createWelcomeMessage(userId, memberName, groupName));
+  logger.info("gateway", "new member welcomed", { groupId, userId, groupName, memberName });
+};
+
+const createWelcomeMessage = (userId: string | number, memberName: string, groupName: string) => [
+  { type: "at", data: { qq: userId } },
+  {
+    type: "text",
+    data: {
+      text: ` 欢迎 ${memberName} 加入「${groupName}」！\n很高兴在这里遇见你。先看看群公告和置顶消息，之后就自在聊天吧。`,
+    },
+  },
+];
+
+const getDisplayName = (value: unknown, keys: readonly string[]) => {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    const name = record[key];
+    if (typeof name === "string" && name.trim()) {
+      return name.trim();
+    }
+  }
+
+  return getDisplayName(record.data, keys);
+};

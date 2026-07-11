@@ -14,7 +14,7 @@ Linux/Docker 使用无扩展名的工具文件；Windows 使用 `.exe` 文件。
 
 ## 配置
 
-复制 `config/app.example.toml` 为 `config/app.toml`，然后填写网关、数据库、接口地址和订阅信息。`config/app.toml` 不应提交到 Git。
+复制 `config/example/app.toml` 为 `config/app.toml`，然后填写网关、数据库和接口地址。需要 FF14 价格提醒或 VTB 订阅时，分别复制 `config/example/ff14.toml` 与 `config/example/vtb.toml`。这些本地配置文件均不应提交到 Git。
 
 常用配置段：
 
@@ -85,6 +85,9 @@ Docker 模式会读取普通配置 `config/app.toml`，再将 `config/app.docker
 | `miz news` | 查询财经新闻，使用合并转发。 |
 | `miz wallpaper` | 获取并发送每日壁纸。 |
 | `miz video <URL>` | 下载并发送小于 10 分钟的视频。普通用户仅支持 B 站链接，白名单用户可使用其他站点。 |
+| `miz schedule add YYYY-MM-DD HH:mm 内容` | 创建群日程；仅群主、管理员或日程管理白名单可用。 |
+| `miz schedule list` | 查看本群即将开始的日程。 |
+| `miz schedule cancel <编号>` | 取消群日程；仅群主、管理员或日程管理白名单可用。 |
 | `miz vtb live <主播名>` | 查询主播直播信息。 |
 | `miz vtb dynamic <主播名>` | 查询主播最新动态。 |
 | `miz ff14 <区域> <物品名>` | 查询 FF14 市场信息。 |
@@ -99,6 +102,7 @@ Docker 模式会读取普通配置 `config/app.toml`，再将 `config/app.docker
 - VTB：默认每 3 分钟检查订阅主播的直播与动态。
 - FF14：按配置的 Cron 表达式检查价格提醒。
 - yt-dlp：默认每天检查更新。
+- 群日程：默认每分钟检查，到活动前 30 分钟自动提醒一次；可在 `[miz.schedule]` 调整。
 
 相同任务不会并发执行；前一次尚未结束时，下一次会跳过并记录日志。
 

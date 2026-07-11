@@ -6,7 +6,7 @@
   "scripts": {
     "start": "bun run prisma:generate && bun run scripts/start.ts normal",
     "start:docker": "bun run prisma:generate && bun run scripts/start.ts docker",
-    "dev": "bun run prisma:generate && bun --watch src/index.ts",
+    "dev": "bun run prisma:generate && bun --watch scripts/start.ts normal",
     "dev:docker": "bun run prisma:generate && bun --watch scripts/start.ts docker",
     "typecheck": "bun run prisma:generate && tsc --noEmit",
     "prisma:generate": "prisma generate",
@@ -19,14 +19,18 @@
     "@prisma/client": "^7.8.0",
     "dayjs": "^1.11.21",
     "fast-xml-parser": "^5.9.3",
+    "jimp": "^1.6.1",
     "node-cron": "^4.6.0",
     "pg": "^8.22.0",
     "prisma": "^7.8.0",
+    "qrcode": "^1.5.4",
+    "qrcode-reader": "^1.0.4",
     "winston": "^3.19.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",
+    "@types/qrcode": "^1.5.6",
     "typescript": "^7.0.2"
   }
 }

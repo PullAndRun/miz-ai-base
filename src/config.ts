@@ -79,6 +79,28 @@ const rawMizConfigSchema = z.object({
       apiUrl: nonEmptyStringSchema.optional(),
     })
     .optional(),
+  reminder: z
+    .object({
+      enabled: z.boolean().optional(),
+      cron: nonEmptyStringSchema.optional(),
+      batchSize: z.number().int().positive().max(100).optional(),
+      manageWhitelistUserIds: z.array(targetIdSchema).optional(),
+    })
+    .optional(),
+  schedule: z
+    .object({
+      enabled: z.boolean().optional(),
+      cron: nonEmptyStringSchema.optional(),
+      reminderMinutes: z.number().int().positive().max(10_080).optional(),
+      batchSize: z.number().int().positive().max(100).optional(),
+      manageWhitelistUserIds: z.array(targetIdSchema).optional(),
+    })
+    .optional(),
+  broadcast: z
+    .object({
+      whitelistUserIds: z.array(targetIdSchema).optional(),
+    })
+    .optional(),
   video: z
     .object({
       enabled: z.boolean().optional(),
@@ -100,6 +122,9 @@ const rawMizConfigSchema = z.object({
       cardApiUrl: nonEmptyStringSchema.optional(),
       liveApiUrl: nonEmptyStringSchema.optional(),
       dynamicApiUrl: nonEmptyStringSchema.optional(),
+      nameSyncCron: nonEmptyStringSchema.optional(),
+      syncWhitelistUserIds: z.array(targetIdSchema).optional(),
+      subscriptionWhitelistUserIds: z.array(targetIdSchema).optional(),
       subscriptions: z
         .array(
           z.object({
@@ -157,6 +182,22 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     groupIds: config.news?.groupIds ?? [],
     apiUrl: config.news?.apiUrl ?? "",
   },
+  reminder: {
+    enabled: config.reminder?.enabled ?? true,
+    cron: config.reminder?.cron ?? "* * * * *",
+    batchSize: config.reminder?.batchSize ?? 20,
+    manageWhitelistUserIds: config.reminder?.manageWhitelistUserIds ?? [],
+  },
+  schedule: {
+    enabled: config.schedule?.enabled ?? true,
+    cron: config.schedule?.cron ?? "* * * * *",
+    reminderMinutes: config.schedule?.reminderMinutes ?? 30,
+    batchSize: config.schedule?.batchSize ?? 20,
+    manageWhitelistUserIds: config.schedule?.manageWhitelistUserIds ?? [],
+  },
+  broadcast: {
+    whitelistUserIds: config.broadcast?.whitelistUserIds ?? [],
+  },
   video: {
     enabled: config.video?.enabled ?? true,
     runtimeMode: getRuntimeMode(),
@@ -178,6 +219,9 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     cardApiUrl: config.vtb?.cardApiUrl ?? "",
     liveApiUrl: config.vtb?.liveApiUrl ?? "",
     dynamicApiUrl: config.vtb?.dynamicApiUrl ?? "",
+    nameSyncCron: config.vtb?.nameSyncCron ?? "0 0 * * 0",
+    syncWhitelistUserIds: config.vtb?.syncWhitelistUserIds ?? [],
+    subscriptionWhitelistUserIds: config.vtb?.subscriptionWhitelistUserIds ?? [],
     bilibiliCookie: config.bilibili?.cookie?.trim() ?? "",
     subscriptions: config.vtb?.subscriptions ?? [],
   },
@@ -204,6 +248,25 @@ export type NewsConfig = {
   cron: string;
   groupIds: Array<string | number>;
   apiUrl: string;
+};
+
+export type ReminderConfig = {
+  enabled: boolean;
+  cron: string;
+  batchSize: number;
+  manageWhitelistUserIds: Array<string | number>;
+};
+
+export type ScheduleConfig = {
+  enabled: boolean;
+  cron: string;
+  reminderMinutes: number;
+  batchSize: number;
+  manageWhitelistUserIds: Array<string | number>;
+};
+
+export type BroadcastConfig = {
+  whitelistUserIds: Array<string | number>;
 };
 
 export type NetworkConfig = {
@@ -236,6 +299,9 @@ export type VtbConfig = {
   cardApiUrl: string;
   liveApiUrl: string;
   dynamicApiUrl: string;
+  nameSyncCron: string;
+  syncWhitelistUserIds: Array<string | number>;
+  subscriptionWhitelistUserIds: Array<string | number>;
   bilibiliCookie: string;
   subscriptions: Array<{
     groupId: string | number;
@@ -252,6 +318,9 @@ export type MizConfig = z.infer<typeof mizConfigSchema> & {
   bilibili: BilibiliConfig;
   wallpaper: WallpaperConfig;
   news: NewsConfig;
+  reminder: ReminderConfig;
+  schedule: ScheduleConfig;
+  broadcast: BroadcastConfig;
   video: VideoConfig;
   vtb: VtbConfig;
 };
@@ -259,7 +328,11 @@ export type MizConfig = z.infer<typeof mizConfigSchema> & {
 const getRuntimeMode = (): RuntimeMode => runtimeModeSchema.parse(process.env.MIZ_RUNTIME_MODE ?? "normal");
 
 const CONFIG_PATH = "config/app.toml";
+const LOCAL_CONFIG_PATH = "config/app.local.toml";
 const DOCKER_CONFIG_PATH = "config/app.docker.toml";
+const FF14_CONFIG_PATH = "config/ff14.toml";
+const VTB_CONFIG_PATH = "config/vtb.toml";
+let vtbSubscriptionUpdateQueue = Promise.resolve();
 
 export const loadConfig = async (): Promise<MizConfig> => {
   const configFile = Bun.file(CONFIG_PATH);
@@ -267,11 +340,156 @@ export const loadConfig = async (): Promise<MizConfig> => {
     throw new Error(`Config file not found: ${CONFIG_PATH}`);
   }
 
-  const normalConfig = Bun.TOML.parse(await configFile.text());
+  const normalConfig = mergeConfig(
+    mergeConfig(
+      mergeConfig(
+        Bun.TOML.parse(await configFile.text()),
+        await loadOptionalConfig(FF14_CONFIG_PATH),
+      ),
+      await loadOptionalConfig(VTB_CONFIG_PATH),
+    ),
+    await loadOptionalConfig(LOCAL_CONFIG_PATH),
+  );
   const source = getRuntimeMode() === "docker"
     ? mergeConfig(normalConfig, await loadDockerConfig())
     : normalConfig;
   return appConfigSchema.parse(source).miz;
+};
+
+export const updateVtbSubscriptionNames = (renames: ReadonlyMap<string, string>) => {
+  return queueVtbSubscriptionUpdate(() => writeVtbSubscriptionNames(renames));
+};
+
+export const addVtbSubscription = (groupId: string | number, streamerName: string) =>
+  queueVtbSubscriptionUpdate(async () => {
+    const source = await readVtbSubscriptionConfig();
+    const subscription = findVtbSubscriptionBlock(source, groupId);
+    if (!subscription) {
+      const separator = getSubscriptionBlockSeparator(source);
+      await Bun.write(
+        VTB_CONFIG_PATH,
+        `${source}${separator}[[miz.vtb.subscriptions]]\ngroupId = ${JSON.stringify(groupId)}\nstreamers = ${JSON.stringify([streamerName])}\n`,
+      );
+      return { changed: true, streamers: [streamerName] };
+    }
+
+    if (subscription.streamers.includes(streamerName)) {
+      return { changed: false, streamers: subscription.streamers };
+    }
+
+    const streamers = [...subscription.streamers, streamerName];
+    await Bun.write(VTB_CONFIG_PATH, replaceSubscriptionBlock(source, subscription, streamers));
+    return { changed: true, streamers };
+  });
+
+export const removeVtbSubscription = (groupId: string | number, streamerName: string) =>
+  queueVtbSubscriptionUpdate(async () => {
+    const source = await readVtbSubscriptionConfig();
+    const subscription = findVtbSubscriptionBlock(source, groupId);
+    if (!subscription || !subscription.streamers.includes(streamerName)) {
+      return { changed: false, streamers: subscription?.streamers ?? [] };
+    }
+
+    const streamers = subscription.streamers.filter((name) => name !== streamerName);
+    const updated = streamers.length > 0
+      ? replaceSubscriptionBlock(source, subscription, streamers)
+      : `${source.slice(0, subscription.start)}${source.slice(subscription.end)}`;
+    await Bun.write(VTB_CONFIG_PATH, updated);
+    return { changed: true, streamers };
+  });
+
+const writeVtbSubscriptionNames = async (renames: ReadonlyMap<string, string>) => {
+  if (renames.size === 0) {
+    return false;
+  }
+
+  const source = await readVtbSubscriptionConfig();
+  let changed = false;
+  const updated = source.replace(/^streamers[ \t]*=[ \t]*(\[[^\r\n]*\])[ \t]*$/gm, (line, value: string) => {
+    const parsed = Bun.TOML.parse(`streamers = ${value}`) as { streamers?: unknown };
+    if (!Array.isArray(parsed.streamers) || !parsed.streamers.every((name) => typeof name === "string")) {
+      return line;
+    }
+
+    const names = parsed.streamers as string[];
+    const nextNames = names.map((name) => renames.get(name) ?? name);
+    if (nextNames.every((name, index) => name === names[index])) {
+      return line;
+    }
+
+    changed = true;
+    return `streamers = ${JSON.stringify(nextNames)}`;
+  });
+
+  if (changed) {
+    await Bun.write(VTB_CONFIG_PATH, updated);
+  }
+
+  return changed;
+};
+
+const queueVtbSubscriptionUpdate = <T>(operation: () => Promise<T>) => {
+  const update = vtbSubscriptionUpdateQueue.then(operation);
+  vtbSubscriptionUpdateQueue = update.then(
+    () => undefined,
+    () => undefined,
+  );
+  return update;
+};
+
+type VtbSubscriptionBlock = {
+  start: number;
+  end: number;
+  text: string;
+  streamers: string[];
+};
+
+const findVtbSubscriptionBlock = (source: string, groupId: string | number): VtbSubscriptionBlock | undefined => {
+  const marker = "[[miz.vtb.subscriptions]]";
+  let start = source.indexOf(marker);
+  while (start >= 0) {
+    const nextStart = source.indexOf(marker, start + marker.length);
+    const end = nextStart >= 0 ? nextStart : source.length;
+    const text = source.slice(start, end);
+    const parsedGroupId = parseTomlAssignment(text, "groupId");
+    if (String(parsedGroupId) === String(groupId)) {
+      const streamers = parseTomlAssignment(text, "streamers");
+      if (!Array.isArray(streamers) || !streamers.every((name) => typeof name === "string")) {
+        throw new Error(`Invalid streamers for VTB subscription group ${groupId}`);
+      }
+      return { start, end, text, streamers };
+    }
+    start = nextStart;
+  }
+
+  return undefined;
+};
+
+const parseTomlAssignment = (source: string, key: string) => {
+  const matched = new RegExp(`^${key}[ \\t]*=[ \\t]*(.+)$`, "m").exec(source)?.[1];
+  return matched === undefined
+    ? undefined
+    : (Bun.TOML.parse(`${key} = ${matched}`) as Record<string, unknown>)[key];
+};
+
+const replaceSubscriptionBlock = (
+  source: string,
+  subscription: VtbSubscriptionBlock,
+  streamers: readonly string[],
+) => {
+  const updatedBlock = subscription.text.replace(
+    /^streamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m,
+    `streamers = ${JSON.stringify(streamers)}`,
+  );
+  return `${source.slice(0, subscription.start)}${updatedBlock}${source.slice(subscription.end)}`;
+};
+
+const getSubscriptionBlockSeparator = (source: string) => {
+  if (!source) {
+    return "";
+  }
+
+  return source.endsWith("\n\n") ? "" : source.endsWith("\n") ? "\n" : "\n\n";
 };
 
 const loadDockerConfig = async () => {
@@ -281,6 +499,16 @@ const loadDockerConfig = async () => {
   }
 
   return Bun.TOML.parse(await configFile.text());
+};
+
+const loadOptionalConfig = async (path: string) => {
+  const configFile = Bun.file(path);
+  return (await configFile.exists()) ? Bun.TOML.parse(await configFile.text()) : {};
+};
+
+const readVtbSubscriptionConfig = async () => {
+  const configFile = Bun.file(VTB_CONFIG_PATH);
+  return (await configFile.exists()) ? configFile.text() : "";
 };
 
 const mergeConfig = (base: unknown, override: unknown): Record<string, unknown> => {

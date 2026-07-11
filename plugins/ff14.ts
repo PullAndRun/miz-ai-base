@@ -37,7 +37,7 @@ const ff14Plugin: MizPlugin = {
         marketApiUrl: config.ff14.marketApiUrl,
       });
       if (!result) {
-        await reply(`没有找到道具：${request.itemName}`);
+        await reply(`没有找到“${request.itemName}”。请检查道具名称和分区后再试。`);
         return;
       }
 
@@ -54,7 +54,7 @@ const ff14Plugin: MizPlugin = {
       );
     } catch (error) {
       logger.error("plugin", "ff14 price query failed", error);
-      await reply("FF14 价格查询失败，请稍后再试。");
+      await reply("FF14 市场价格暂时无法查询，请稍后再试。");
     }
   },
 };

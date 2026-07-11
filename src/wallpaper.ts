@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { fetchWithRetry } from "@/http";
 
 const FETCH_TIMEOUT_MS = 20_000;
 
@@ -102,10 +103,7 @@ const refreshDailyWallpaper = async (apiUrl: string, imageBaseUrl: string): Prom
 };
 
 const fetchWallpaperMetadata = async (apiUrl: string) => {
-  const response = await fetch(apiUrl, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-  if (!response.ok) {
-    throw new Error(`Wallpaper API request failed: HTTP ${response.status}`);
-  }
+  const response = await fetchWithRetry(apiUrl, { timeoutMs: FETCH_TIMEOUT_MS });
 
   const payload = bingWallpaperSchema.parse(await response.json());
   if (payload.images?.[0]) {
@@ -120,10 +118,7 @@ const fetchWallpaperMetadata = async (apiUrl: string) => {
 };
 
 const fetchImageAsBase64 = async (url: string) => {
-  const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-  if (!response.ok) {
-    throw new Error(`Wallpaper image download failed: HTTP ${response.status}`);
-  }
+  const response = await fetchWithRetry(url, { timeoutMs: FETCH_TIMEOUT_MS });
 
   return Buffer.from(await response.arrayBuffer()).toString("base64");
 };

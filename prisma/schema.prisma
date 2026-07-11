@@ -34,3 +34,46 @@ model VtbDynamicState {
 
   @@map("vtb_dynamic_status")
 }
+
+model NewsDelivery {
+  targetKey    String   @map("target_key")
+  newsId       String   @map("news_id")
+  deliveredAt  DateTime @default(now()) @map("delivered_at")
+
+  @@id([targetKey, newsId])
+  @@index([targetKey, deliveredAt])
+  @@map("news_deliveries")
+}
+
+model Reminder {
+  id          Int      @id @default(autoincrement())
+  groupId     String   @map("group_id")
+  creatorId   String   @map("creator_id")
+  targetId    String   @map("target_id")
+  content     String
+  remindAt    DateTime @map("remind_at")
+  sentAt      DateTime? @map("sent_at")
+  lastSentAt  DateTime? @map("last_sent_at")
+  repeatIntervalMinutes Int? @map("repeat_interval_minutes")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([sentAt, remindAt])
+  @@map("reminders")
+}
+
+model ScheduleEvent {
+  id          Int       @id @default(autoincrement())
+  groupId     String    @map("group_id")
+  displayId   Int       @map("display_id")
+  creatorId   String    @map("creator_id")
+  content     String
+  eventAt     DateTime  @map("event_at")
+  remindAt    DateTime  @map("remind_at")
+  remindedAt  DateTime? @map("reminded_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@unique([groupId, displayId])
+  @@index([remindedAt, remindAt])
+  @@index([groupId, eventAt])
+  @@map("schedule_events")
+}

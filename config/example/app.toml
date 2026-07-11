@@ -33,12 +33,6 @@ maxListingCount = 0
 itemSearchApiUrl = ""
 marketApiUrl = ""
 
-[[miz.ff14.priceAlerts]]
-groupId = ""
-region = ""
-itemName = ""
-minimumPrice = 0
-
 [miz.wallpaper]
 enabled = true
 cron = "0 7 * * *"
@@ -50,6 +44,22 @@ enabled = true
 cron = "*/5 * * * *"
 groupIds = []
 apiUrl = ""
+
+[miz.reminder]
+enabled = true
+cron = "* * * * *"
+batchSize = 20
+manageWhitelistUserIds = []
+
+[miz.schedule]
+enabled = true
+cron = "* * * * *"
+reminderMinutes = 30
+batchSize = 20
+manageWhitelistUserIds = []
+
+[miz.broadcast]
+whitelistUserIds = []
 
 [miz.video]
 enabled = true
@@ -69,7 +79,6 @@ userApiUrl = ""
 cardApiUrl = ""
 liveApiUrl = ""
 dynamicApiUrl = ""
-
-[[miz.vtb.subscriptions]]
-groupId = ""
-streamers = [""]
+nameSyncCron = "0 0 * * 0"
+syncWhitelistUserIds = []
+subscriptionWhitelistUserIds = []

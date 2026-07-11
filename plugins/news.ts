@@ -4,15 +4,15 @@ import { createNoNewsMessage, deliverUnsentNews, formatNewsMessages } from "@/ne
 const newsPlugin: MizPlugin = {
   name: "news",
   commands: ["news", "新闻"],
-  description: "推送未发送过的百度财经新闻。用法：miz news",
+  description: "查看尚未推送过的财经快讯。\n用法：miz news",
   async handle({ command, config, logger, message, reply, replyForward }) {
     if (command.args) {
-      await reply("用法：miz news");
+      await reply("请这样使用：miz news\n不需要附加关键词。");
       return;
     }
 
     try {
-      const news = await deliverUnsentNews(config.news.apiUrl, getTargetKey(message), async (items) => {
+      const news = await deliverUnsentNews(config, config.news.apiUrl, getTargetKey(message), async (items) => {
         await replyForward(formatNewsMessages(items), {
           title: "新闻速递",
           source: "miz news",
@@ -25,7 +25,7 @@ const newsPlugin: MizPlugin = {
       }
     } catch (error) {
       logger.error("plugin", "news request failed", error);
-      await reply("新闻暂时无法获取，请稍后再试。");
+      await reply("财经快讯暂时无法获取，请稍后再试。");
     }
   },
 };
