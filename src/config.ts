@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { rename, rm } from "node:fs/promises";
 
 const logLevelSchema = z.enum(["debug", "info", "warn", "error", "off"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
@@ -303,9 +304,9 @@ export type VtbConfig = {
   syncWhitelistUserIds: Array<string | number>;
   subscriptionWhitelistUserIds: Array<string | number>;
   bilibiliCookie: string;
-  subscriptions: Array<{
-    groupId: string | number;
-    streamers: string[];
+  subscriptions: ReadonlyArray<{
+    readonly groupId: string | number;
+    readonly streamers: readonly string[];
   }>;
 };
 
@@ -366,8 +367,7 @@ export const addVtbSubscription = (groupId: string | number, streamerName: strin
     const subscription = findVtbSubscriptionBlock(source, groupId);
     if (!subscription) {
       const separator = getSubscriptionBlockSeparator(source);
-      await Bun.write(
-        VTB_CONFIG_PATH,
+      await writeVtbSubscriptionConfig(
         `${source}${separator}[[miz.vtb.subscriptions]]\ngroupId = ${JSON.stringify(groupId)}\nstreamers = ${JSON.stringify([streamerName])}\n`,
       );
       return { changed: true, streamers: [streamerName] };
@@ -378,7 +378,7 @@ export const addVtbSubscription = (groupId: string | number, streamerName: strin
     }
 
     const streamers = [...subscription.streamers, streamerName];
-    await Bun.write(VTB_CONFIG_PATH, replaceSubscriptionBlock(source, subscription, streamers));
+    await writeVtbSubscriptionConfig(replaceSubscriptionBlock(source, subscription, streamers));
     return { changed: true, streamers };
   });
 
@@ -394,7 +394,7 @@ export const removeVtbSubscription = (groupId: string | number, streamerName: st
     const updated = streamers.length > 0
       ? replaceSubscriptionBlock(source, subscription, streamers)
       : `${source.slice(0, subscription.start)}${source.slice(subscription.end)}`;
-    await Bun.write(VTB_CONFIG_PATH, updated);
+    await writeVtbSubscriptionConfig(updated);
     return { changed: true, streamers };
   });
 
@@ -422,7 +422,7 @@ const writeVtbSubscriptionNames = async (renames: ReadonlyMap<string, string>) =
   });
 
   if (changed) {
-    await Bun.write(VTB_CONFIG_PATH, updated);
+    await writeVtbSubscriptionConfig(updated);
   }
 
   return changed;
@@ -509,6 +509,17 @@ const loadOptionalConfig = async (path: string) => {
 const readVtbSubscriptionConfig = async () => {
   const configFile = Bun.file(VTB_CONFIG_PATH);
   return (await configFile.exists()) ? configFile.text() : "";
+};
+
+const writeVtbSubscriptionConfig = async (source: string) => {
+  const temporaryPath = `${VTB_CONFIG_PATH}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await Bun.write(temporaryPath, source);
+    await rename(temporaryPath, VTB_CONFIG_PATH);
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
 };
 
 const mergeConfig = (base: unknown, override: unknown): Record<string, unknown> => {

@@ -10,6 +10,7 @@ import {
 } from "@/ff14";
 import { createWallpaperMessage, getDailyWallpaper } from "@/wallpaper";
 import { settleWithConcurrency, startWithConcurrency } from "@/concurrency";
+import { getGroupIds } from "@/group-ids";
 import { deliverUnsentNews, fetchFinanceNews, formatScheduledNewsItems } from "@/news";
 import { updateYtDlp } from "@/video";
 import {
@@ -37,27 +38,36 @@ export const startScheduledTasks = async (
   gateway: Gateway,
   logger: Logger,
 ): Promise<TaskRuntime> => {
-  const ff14Task = startFf14PriceAlertTask(config, gateway, logger);
-  const wallpaperTask = startWallpaperTask(config, gateway, logger);
-  const newsTask = startNewsTask(config, gateway, logger);
-  const reminderTask = await startReminderTask(config, gateway, logger);
-  const scheduleTask = await startScheduleTask(config, gateway, logger);
-  const ytDlpUpdateTask = startYtDlpUpdateTask(config, logger);
-  const vtbNameSyncTask = startVtbNameSyncTask(config, logger);
-  const vtbTask = await startVtbTask(config, gateway, logger);
+  const startedTasks: TaskRuntime[] = [];
+  try {
+    startedTasks.push(startFf14PriceAlertTask(config, gateway, logger));
+    startedTasks.push(startWallpaperTask(config, gateway, logger));
+    startedTasks.push(startNewsTask(config, gateway, logger));
+    startedTasks.push(await startReminderTask(config, gateway, logger));
+    startedTasks.push(await startScheduleTask(config, gateway, logger));
+    startedTasks.push(startYtDlpUpdateTask(config, logger));
+    startedTasks.push(startVtbNameSyncTask(config, logger));
+    startedTasks.push(await startVtbTask(config, gateway, logger));
+    return { stop: () => stopTasks(startedTasks) };
+  } catch (error) {
+    await stopTasks(startedTasks);
+    throw error;
+  }
+};
 
-  return {
-    stop: async () => {
-      ff14Task.stop();
-      wallpaperTask.stop();
-      newsTask.stop();
-      await reminderTask.stop();
-      await scheduleTask.stop();
-      ytDlpUpdateTask.stop();
-      await vtbNameSyncTask.stop();
-      await vtbTask.stop();
-    },
-  };
+const stopTasks = async (tasks: readonly TaskRuntime[]) => {
+  let failure: unknown;
+  for (const task of tasks) {
+    try {
+      await task.stop();
+    } catch (error) {
+      failure ??= error;
+    }
+  }
+
+  if (failure) {
+    throw failure;
+  }
 };
 
 const startScheduleTask = async (config: MizConfig, gateway: Gateway, logger: Logger): Promise<TaskRuntime> => {
@@ -82,6 +92,7 @@ const startScheduleTask = async (config: MizConfig, gateway: Gateway, logger: Lo
   }
 
   let running = false;
+  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
     if (running) {
       logger.warn("plugin", "schedule task skipped: previous run is still active");
@@ -128,10 +139,20 @@ const startScheduleTask = async (config: MizConfig, gateway: Gateway, logger: Lo
   };
 
   const task = cron.schedule(cronExpression, () => {
-    void runTask().catch((error) => logger.error("plugin", "schedule task failed", error));
+    const wasRunning = running;
+    const run = runTask();
+    if (!wasRunning) {
+      currentRun = run;
+    }
+    void run.catch((error) => logger.error("plugin", "schedule task failed", error));
   });
   logger.info("plugin", "schedule task started", { cronExpression, reminderMinutes: config.schedule.reminderMinutes });
-  return { stop: async () => task.stop() };
+  return {
+    stop: async () => {
+      task.stop();
+      await currentRun?.catch((error) => logger.warn("plugin", "schedule task ended with an error during shutdown", error));
+    },
+  };
 };
 
 const startReminderTask = async (config: MizConfig, gateway: Gateway, logger: Logger): Promise<TaskRuntime> => {
@@ -156,6 +177,7 @@ const startReminderTask = async (config: MizConfig, gateway: Gateway, logger: Lo
   }
 
   let running = false;
+  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
     if (running) {
       logger.warn("plugin", "reminder task skipped: previous run is still active");
@@ -195,10 +217,20 @@ const startReminderTask = async (config: MizConfig, gateway: Gateway, logger: Lo
   };
 
   const task = cron.schedule(cronExpression, () => {
-    void runTask().catch((error) => logger.error("plugin", "reminder task failed", error));
+    const wasRunning = running;
+    const run = runTask();
+    if (!wasRunning) {
+      currentRun = run;
+    }
+    void run.catch((error) => logger.error("plugin", "reminder task failed", error));
   });
   logger.info("plugin", "reminder task started", { cronExpression });
-  return { stop: async () => task.stop() };
+  return {
+    stop: async () => {
+      task.stop();
+      await currentRun?.catch((error) => logger.warn("plugin", "reminder task ended with an error during shutdown", error));
+    },
+  };
 };
 
 const startVtbNameSyncTask = (config: MizConfig, logger: Logger): TaskRuntime => {
@@ -218,6 +250,7 @@ const startVtbNameSyncTask = (config: MizConfig, logger: Logger): TaskRuntime =>
   }
 
   let running = false;
+  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
     if (running) {
       logger.warn("plugin", "vtb name sync task skipped: previous run is still active");
@@ -234,7 +267,7 @@ const startVtbNameSyncTask = (config: MizConfig, logger: Logger): TaskRuntime =>
       }
       if (renamed.length > 0) {
         await updateVtbSubscriptionNames(new Map(renamed.map((item) => [item.previousName, item.name])));
-        applyVtbSubscriptionRenames(config, renamed);
+        // Config persistence triggers a reload; the active snapshot stays immutable.
         logger.info("plugin", "vtb subscription names updated", { renamed });
       }
       if (roomUpdated.length > 0) {
@@ -249,10 +282,20 @@ const startVtbNameSyncTask = (config: MizConfig, logger: Logger): TaskRuntime =>
   };
 
   const task = cron.schedule(cronExpression, () => {
-    void runTask().catch((error) => logger.error("plugin", "vtb name sync task failed", error));
+    const wasRunning = running;
+    const run = runTask();
+    if (!wasRunning) {
+      currentRun = run;
+    }
+    void run.catch((error) => logger.error("plugin", "vtb name sync task failed", error));
   });
   logger.info("plugin", "vtb name sync task started", { cronExpression });
-  return { stop: async () => task.stop() };
+  return {
+    stop: async () => {
+      task.stop();
+      await currentRun?.catch((error) => logger.warn("plugin", "vtb name sync task ended with an error during shutdown", error));
+    },
+  };
 };
 
 const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger): Promise<TaskRuntime> => {
@@ -529,16 +572,6 @@ const getVtbPollingIntervalMs = (cronExpression: string) => {
   return Math.max(1, minuteInterval ? Number(minuteInterval) : 3) * 60_000;
 };
 
-const applyVtbSubscriptionRenames = (
-  config: MizConfig,
-  renames: readonly { previousName: string; name: string }[],
-) => {
-  const renameMap = new Map(renames.map((item) => [item.previousName, item.name]));
-  for (const subscription of config.vtb.subscriptions) {
-    subscription.streamers = subscription.streamers.map((name) => renameMap.get(name) ?? name);
-  }
-};
-
 const startYtDlpUpdateTask = (config: MizConfig, logger: Logger): TaskRuntime => {
   if (!config.video.enabled) {
     logger.info("plugin", "yt-dlp update task disabled: video plugin is off");
@@ -751,27 +784,6 @@ const sendDailyWallpaper = async (config: MizConfig, gateway: Gateway, logger: L
       });
     }
   }
-};
-
-const getGroupIds = (value: unknown): Array<number | string> => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return Array.from(
-    new Set(
-      value.flatMap((group) => {
-        if (!group || typeof group !== "object") {
-          return [];
-        }
-
-        const groupId = (group as Record<string, unknown>).group_id;
-        return typeof groupId === "number" || (typeof groupId === "string" && groupId.trim())
-          ? [groupId]
-          : [];
-      }),
-    ),
-  );
 };
 
 const startFf14PriceAlertTask = (

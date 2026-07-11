@@ -5,6 +5,7 @@ import { PrismaClient, type Reminder, type ScheduleEvent } from "@/generated/pri
 import { z } from "zod";
 import type { MizConfig, VtbConfig } from "@/config";
 import { fetchWithRetry } from "@/http";
+import { partitionVtbSubscriptionsByGroup } from "@/vtb-subscriptions";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_DYNAMIC_DESCRIPTION_LENGTH = 1_800;
@@ -93,7 +94,7 @@ let repositoryPromise: Promise<VtbRepository> | undefined;
 
 export const getVtbRepository = async (config: MizConfig) => {
   if (!repositoryPromise) {
-    repositoryPromise = createVtbRepository(config);
+    repositoryPromise = createConfiguredVtbRepository(config);
   }
 
   try {
@@ -182,18 +183,10 @@ export const syncConfiguredVtbStreamers = async (config: MizConfig) => {
   return { added, skipped, removed, failed };
 };
 
-export const disableUnavailableVtbSubscriptions = (
-  config: MizConfig,
+export const partitionAvailableVtbSubscriptions = (
+  subscriptions: MizConfig["vtb"]["subscriptions"],
   availableGroupIds: ReadonlySet<string>,
-) => {
-  const disabled = config.vtb.subscriptions.filter(
-    (subscription) => !availableGroupIds.has(String(subscription.groupId)),
-  );
-  config.vtb.subscriptions = config.vtb.subscriptions.filter(
-    (subscription) => availableGroupIds.has(String(subscription.groupId)),
-  );
-  return disabled;
-};
+) => partitionVtbSubscriptionsByGroup(subscriptions, availableGroupIds);
 
 export const syncVtbSubscriptionNames = async (config: MizConfig) => {
   const renamed: Array<{ previousName: string; name: string; mid: string }> = [];
@@ -369,25 +362,26 @@ export const getVtbDynamics = async (
   };
 };
 
-export class VtbRepository {
-  constructor(private readonly prisma: PrismaClient) {}
+export type VtbRepository = ReturnType<typeof createVtbRepository>;
 
-  async initialize() {
-    await this.prisma.vtbLiveSession.deleteMany({ where: { endedAt: null } });
-  }
+/** The persistence adapter is a closure over Prisma, not an object with mutable instance state. */
+const createVtbRepository = (prisma: PrismaClient) => {
+  const initialize = async () => {
+    await prisma.vtbLiveSession.deleteMany({ where: { endedAt: null } });
+  };
 
-  async findStreamerByName(name: string): Promise<VtbStreamer | undefined> {
-    const streamer = await this.prisma.vtbStreamer.findFirst({ where: { name } });
+  const findStreamerByName = async (name: string): Promise<VtbStreamer | undefined> => {
+    const streamer = await prisma.vtbStreamer.findFirst({ where: { name } });
     return streamer ? fromStoredStreamer(streamer) : undefined;
-  }
+  };
 
-  async listStreamers(): Promise<VtbStreamer[]> {
-    const streamers = await this.prisma.vtbStreamer.findMany({ orderBy: { updatedAt: "asc" } });
+  const listStreamers = async (): Promise<VtbStreamer[]> => {
+    const streamers = await prisma.vtbStreamer.findMany({ orderBy: { updatedAt: "asc" } });
     return streamers.map(fromStoredStreamer);
-  }
+  };
 
-  async deleteStreamersNotInNames(names: readonly string[]) {
-    const staleStreamers = await this.prisma.vtbStreamer.findMany({
+  const deleteStreamersNotInNames = async (names: readonly string[]) => {
+    const staleStreamers = await prisma.vtbStreamer.findMany({
       where: names.length > 0 ? { name: { notIn: [...names] } } : {},
       select: { mid: true, name: true },
     });
@@ -396,16 +390,25 @@ export class VtbRepository {
     }
 
     const mids = staleStreamers.map((streamer) => streamer.mid);
-    await this.prisma.$transaction([
-      this.prisma.vtbLiveSession.deleteMany({ where: { streamerMid: { in: mids } } }),
-      this.prisma.vtbDynamicState.deleteMany({ where: { streamerMid: { in: mids } } }),
-      this.prisma.vtbStreamer.deleteMany({ where: { mid: { in: mids } } }),
+    await prisma.$transaction([
+      prisma.vtbLiveSession.deleteMany({ where: { streamerMid: { in: mids } } }),
+      prisma.vtbDynamicState.deleteMany({ where: { streamerMid: { in: mids } } }),
+      prisma.vtbStreamer.deleteMany({ where: { mid: { in: mids } } }),
     ]);
     return staleStreamers.map((streamer) => streamer.name);
-  }
+  };
 
-  async deleteStreamerByName(name: string) {
-    const streamer = await this.prisma.vtbStreamer.findFirst({
+  const deleteStreamersByMids = async (mids: readonly bigint[]) => {
+    if (mids.length === 0) return;
+    await prisma.$transaction([
+      prisma.vtbLiveSession.deleteMany({ where: { streamerMid: { in: [...mids] } } }),
+      prisma.vtbDynamicState.deleteMany({ where: { streamerMid: { in: [...mids] } } }),
+      prisma.vtbStreamer.deleteMany({ where: { mid: { in: [...mids] } } }),
+    ]);
+  };
+
+  const deleteStreamerByName = async (name: string) => {
+    const streamer = await prisma.vtbStreamer.findFirst({
       where: { name },
       select: { mid: true },
     });
@@ -413,33 +416,21 @@ export class VtbRepository {
       return false;
     }
 
-    await this.deleteStreamersByMids([streamer.mid]);
+    await deleteStreamersByMids([streamer.mid]);
     return true;
-  }
+  };
 
-  private async deleteStreamersByMids(mids: readonly bigint[]) {
-    if (mids.length === 0) {
-      return;
-    }
-
-    await this.prisma.$transaction([
-      this.prisma.vtbLiveSession.deleteMany({ where: { streamerMid: { in: [...mids] } } }),
-      this.prisma.vtbDynamicState.deleteMany({ where: { streamerMid: { in: [...mids] } } }),
-      this.prisma.vtbStreamer.deleteMany({ where: { mid: { in: [...mids] } } }),
-    ]);
-  }
-
-  async upsertStreamer(streamer: VtbStreamer): Promise<VtbStreamer> {
-    const storedStreamer = await this.prisma.vtbStreamer.upsert({
+  const upsertStreamer = async (streamer: VtbStreamer): Promise<VtbStreamer> => {
+    const storedStreamer = await prisma.vtbStreamer.upsert({
       where: { mid: toMid(streamer.mid) },
       create: { mid: toMid(streamer.mid), name: streamer.name, liveRoom: toOptionalMid(streamer.roomId) },
       update: { name: streamer.name, liveRoom: toOptionalMid(streamer.roomId) },
     });
     return fromStoredStreamer(storedStreamer);
-  }
+  };
 
-  async getLiveSession(mid: string): Promise<LiveSession | undefined> {
-    const session = await this.prisma.vtbLiveSession.findUnique({ where: { streamerMid: toMid(mid) } });
+  const getLiveSession = async (mid: string): Promise<LiveSession | undefined> => {
+    const session = await prisma.vtbLiveSession.findUnique({ where: { streamerMid: toMid(mid) } });
     return session && !session.endedAt
       ? {
           startedAt: session.startedAt,
@@ -447,10 +438,10 @@ export class VtbRepository {
           roomId: session.liveRoom?.toString(),
         }
       : undefined;
-  }
+  };
 
-  async startLiveSession(streamer: VtbStreamer, live: VtbLiveInfo, fans?: number) {
-    await this.prisma.vtbLiveSession.upsert({
+  const startLiveSession = async (streamer: VtbStreamer, live: VtbLiveInfo, fans?: number) => {
+    await prisma.vtbLiveSession.upsert({
       where: { streamerMid: toMid(streamer.mid) },
       create: {
         streamerMid: toMid(streamer.mid),
@@ -468,43 +459,42 @@ export class VtbRepository {
         endFans: null,
       },
     });
-  }
+  };
 
-  async stopLiveSession(mid: string, fans?: number) {
-    await this.prisma.vtbLiveSession.update({
+  const stopLiveSession = async (mid: string, fans?: number) => {
+    await prisma.vtbLiveSession.update({
       where: { streamerMid: toMid(mid) },
       data: { endedAt: new Date(), endFans: fans },
     });
-  }
+  };
 
-  async getLastDynamicTime(mid: string) {
-    return (await this.prisma.vtbDynamicState.findUnique({ where: { streamerMid: toMid(mid) } }))?.lastPublishedAt;
-  }
+  const getLastDynamicTime = async (mid: string) =>
+    (await prisma.vtbDynamicState.findUnique({ where: { streamerMid: toMid(mid) } }))?.lastPublishedAt;
 
-  async setLastDynamicTime(mid: string, publishedAt: Date) {
-    await this.prisma.vtbDynamicState.upsert({
+  const setLastDynamicTime = async (mid: string, publishedAt: Date) => {
+    await prisma.vtbDynamicState.upsert({
       where: { streamerMid: toMid(mid) },
       create: { streamerMid: toMid(mid), lastPublishedAt: publishedAt },
       update: { lastPublishedAt: publishedAt },
     });
-  }
+  };
 
-  async getDeliveredNewsIds(targetKey: string, maximumCount: number) {
-    const deliveries = await this.prisma.newsDelivery.findMany({
+  const getDeliveredNewsIds = async (targetKey: string, maximumCount: number) => {
+    const deliveries = await prisma.newsDelivery.findMany({
       where: { targetKey },
       orderBy: { deliveredAt: "desc" },
       take: maximumCount,
       select: { newsId: true },
     });
     return deliveries.map((delivery) => delivery.newsId);
-  }
+  };
 
-  async recordNewsDeliveries(targetKey: string, newsIds: readonly string[], maximumCount: number) {
+  const recordNewsDeliveries = async (targetKey: string, newsIds: readonly string[], maximumCount: number) => {
     if (newsIds.length === 0) {
       return;
     }
 
-    await this.prisma.$transaction(async (transaction) => {
+    await prisma.$transaction(async (transaction) => {
       await transaction.newsDelivery.createMany({
         data: newsIds.map((newsId) => ({ targetKey, newsId })),
         skipDuplicates: true,
@@ -522,13 +512,11 @@ export class VtbRepository {
         },
       });
     });
-  }
+  };
 
-  async ensureReminderStorage() {
-    await this.prisma.reminder.findFirst({ select: { id: true } });
-  }
+  const ensureReminderStorage = async () => prisma.reminder.findFirst({ select: { id: true } });
 
-  async createReminder({
+  const createReminder = async ({
     groupId,
     creatorId,
     targetId,
@@ -536,14 +524,9 @@ export class VtbRepository {
     remindAt,
     repeatIntervalMinutes,
   }: {
-    groupId: string | number;
-    creatorId: string | number;
-    targetId: string | number;
-    content: string;
-    remindAt: Date;
-    repeatIntervalMinutes?: number;
-  }) {
-    return this.prisma.reminder.create({
+    groupId: string | number; creatorId: string | number; targetId: string | number; content: string; remindAt: Date; repeatIntervalMinutes?: number;
+  }) => {
+    return prisma.reminder.create({
       data: {
         groupId: String(groupId),
         creatorId: String(creatorId),
@@ -553,10 +536,10 @@ export class VtbRepository {
         repeatIntervalMinutes: repeatIntervalMinutes ?? null,
       },
     });
-  }
+  };
 
-  async claimDueReminders(now: Date, maximumCount: number) {
-    const candidates = await this.prisma.reminder.findMany({
+  const claimDueReminders = async (now: Date, maximumCount: number) => {
+    const candidates = await prisma.reminder.findMany({
       where: { sentAt: null, remindAt: { lte: now } },
       orderBy: { remindAt: "asc" },
       take: maximumCount,
@@ -567,7 +550,7 @@ export class VtbRepository {
       const nextRemindAt = reminder.repeatIntervalMinutes
         ? getNextReminderTime(reminder.remindAt, reminder.repeatIntervalMinutes, now)
         : undefined;
-      const result = await this.prisma.reminder.updateMany({
+      const result = await prisma.reminder.updateMany({
         where: { id: reminder.id, sentAt: null, remindAt: reminder.remindAt },
         data: reminder.repeatIntervalMinutes
           ? { remindAt: nextRemindAt, lastSentAt: now }
@@ -579,11 +562,11 @@ export class VtbRepository {
     }
 
     return claimed;
-  }
+  };
 
-  async releaseReminderClaim(reminder: ReminderClaim) {
+  const releaseReminderClaim = async (reminder: ReminderClaim) => {
     if (reminder.repeatIntervalMinutes) {
-      return this.prisma.reminder.updateMany({
+      return prisma.reminder.updateMany({
         where: {
           id: reminder.id,
           sentAt: null,
@@ -594,14 +577,14 @@ export class VtbRepository {
       });
     }
 
-    return this.prisma.reminder.updateMany({
+    return prisma.reminder.updateMany({
       where: { id: reminder.id, sentAt: reminder.claimedAt },
       data: { sentAt: null, lastSentAt: null },
     });
-  }
+  };
 
-  async listPendingReminders(groupId: string | number, creatorId?: string | number) {
-    return this.prisma.reminder.findMany({
+  const listPendingReminders = async (groupId: string | number, creatorId?: string | number) => {
+    return prisma.reminder.findMany({
       where: {
         groupId: String(groupId),
         sentAt: null,
@@ -609,21 +592,21 @@ export class VtbRepository {
       },
       orderBy: { remindAt: "asc" },
     });
-  }
+  };
 
-  async findPendingReminder(id: number, groupId: string | number) {
-    return this.prisma.reminder.findFirst({
+  const findPendingReminder = async (id: number, groupId: string | number) => {
+    return prisma.reminder.findFirst({
       where: { id, groupId: String(groupId), sentAt: null },
     });
-  }
+  };
 
-  async cancelPendingReminder(id: number, groupId: string | number) {
-    return this.prisma.reminder.deleteMany({
+  const cancelPendingReminder = async (id: number, groupId: string | number) => {
+    return prisma.reminder.deleteMany({
       where: { id, groupId: String(groupId), sentAt: null },
     });
-  }
+  };
 
-  async editPendingReminder({
+  const editPendingReminder = async ({
     id,
     groupId,
     targetId,
@@ -631,14 +614,9 @@ export class VtbRepository {
     remindAt,
     repeatIntervalMinutes,
   }: {
-    id: number;
-    groupId: string | number;
-    targetId: string | number;
-    content: string;
-    remindAt: Date;
-    repeatIntervalMinutes?: number;
-  }) {
-    return this.prisma.reminder.updateMany({
+    id: number; groupId: string | number; targetId: string | number; content: string; remindAt: Date; repeatIntervalMinutes?: number;
+  }) => {
+    return prisma.reminder.updateMany({
       where: { id, groupId: String(groupId), sentAt: null },
       data: {
         targetId: String(targetId),
@@ -647,26 +625,18 @@ export class VtbRepository {
         repeatIntervalMinutes: repeatIntervalMinutes ?? null,
       },
     });
-  }
+  };
 
-  async ensureScheduleStorage() {
-    await this.prisma.scheduleEvent.findFirst({ select: { id: true } });
-  }
+  const ensureScheduleStorage = async () => prisma.scheduleEvent.findFirst({ select: { id: true } });
 
-  async createScheduleEvent({
+  const createScheduleEvent = async ({
     groupId,
     creatorId,
     content,
     eventAt,
     remindAt,
-  }: {
-    groupId: string | number;
-    creatorId: string | number;
-    content: string;
-    eventAt: Date;
-    remindAt: Date;
-  }) {
-    return this.prisma.$transaction(async (transaction) => {
+  }: { groupId: string | number; creatorId: string | number; content: string; eventAt: Date; remindAt: Date }) => {
+    return prisma.$transaction(async (transaction) => {
       // Schedule IDs are user-facing and independent for each group.
       await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${String(groupId)}))`;
       await transaction.scheduleEvent.deleteMany({
@@ -689,23 +659,23 @@ export class VtbRepository {
         },
       });
     });
-  }
+  };
 
-  async listUpcomingScheduleEvents(groupId: string | number) {
-    return this.prisma.scheduleEvent.findMany({
+  const listUpcomingScheduleEvents = async (groupId: string | number) => {
+    return prisma.scheduleEvent.findMany({
       where: { groupId: String(groupId), eventAt: { gte: new Date() } },
       orderBy: { eventAt: "asc" },
     });
-  }
+  };
 
-  async cancelUpcomingScheduleEvent(displayId: number, groupId: string | number) {
-    return this.prisma.scheduleEvent.deleteMany({
+  const cancelUpcomingScheduleEvent = async (displayId: number, groupId: string | number) => {
+    return prisma.scheduleEvent.deleteMany({
       where: { displayId, groupId: String(groupId), eventAt: { gt: new Date() }, remindedAt: null },
     });
-  }
+  };
 
-  async claimDueScheduleEvents(now: Date, maximumCount: number) {
-    const candidates = await this.prisma.scheduleEvent.findMany({
+  const claimDueScheduleEvents = async (now: Date, maximumCount: number) => {
+    const candidates = await prisma.scheduleEvent.findMany({
       where: { remindedAt: null, remindAt: { lte: now } },
       orderBy: { remindAt: "asc" },
       take: maximumCount,
@@ -713,7 +683,7 @@ export class VtbRepository {
     const claimed: ScheduleEventClaim[] = [];
 
     for (const event of candidates) {
-      const result = await this.prisma.scheduleEvent.updateMany({
+      const result = await prisma.scheduleEvent.updateMany({
         where: { id: event.id, remindedAt: null },
         data: { remindedAt: now },
       });
@@ -723,25 +693,32 @@ export class VtbRepository {
     }
 
     return claimed;
-  }
+  };
 
-  async releaseScheduleEventClaim(event: ScheduleEventClaim) {
-    return this.prisma.scheduleEvent.updateMany({
+  const releaseScheduleEventClaim = async (event: ScheduleEventClaim) => {
+    return prisma.scheduleEvent.updateMany({
       where: { id: event.id, remindedAt: event.claimedAt },
       data: { remindedAt: null },
     });
-  }
+  };
 
-  async cleanupFinishedScheduleEvents(now = new Date()) {
-    return this.prisma.scheduleEvent.deleteMany({
+  const cleanupFinishedScheduleEvents = async (now = new Date()) => {
+    return prisma.scheduleEvent.deleteMany({
       where: { eventAt: { lte: now }, remindedAt: { not: null } },
     });
-  }
+  };
 
-  close() {
-    return this.prisma.$disconnect();
-  }
-}
+  const close = () => prisma.$disconnect();
+
+  return {
+    initialize, findStreamerByName, listStreamers, deleteStreamersNotInNames, deleteStreamerByName,
+    upsertStreamer, getLiveSession, startLiveSession, stopLiveSession, getLastDynamicTime, setLastDynamicTime,
+    getDeliveredNewsIds, recordNewsDeliveries, ensureReminderStorage, createReminder, claimDueReminders,
+    releaseReminderClaim, listPendingReminders, findPendingReminder, cancelPendingReminder, editPendingReminder,
+    ensureScheduleStorage, createScheduleEvent, listUpcomingScheduleEvents, cancelUpcomingScheduleEvent,
+    claimDueScheduleEvents, releaseScheduleEventClaim, cleanupFinishedScheduleEvents, close,
+  };
+};
 
 const getNextReminderTime = (current: Date, intervalMinutes: number, now: Date) => {
   const intervalMs = intervalMinutes * 60_000;
@@ -816,9 +793,9 @@ export const formatDynamicUrl = (link: string) => {
   return dynamicId ? `https://www.bilibili.com/opus/${dynamicId}` : link;
 };
 
-const createVtbRepository = async (config: MizConfig) => {
+const createConfiguredVtbRepository = async (config: MizConfig) => {
   const prisma = new PrismaClient({ adapter: new PrismaPg(getDatabaseUrl(config)) });
-  const repository = new VtbRepository(prisma);
+  const repository = createVtbRepository(prisma);
   await repository.initialize();
   return repository;
 };

@@ -2,16 +2,22 @@ import { watch } from "node:fs";
 import { loadConfig } from "@/config";
 import { ensureProjectDirectories } from "@/directories";
 import { createGateway, type Gateway } from "@/gateway";
+import { getGroupIds } from "@/group-ids";
 import { createLogger, type Logger } from "@/logger";
 import { createPluginRuntime } from "@/plugins";
-import { startScheduledTasks, type TaskRuntime } from "@/tasks";
-import { disableUnavailableVtbSubscriptions, syncConfiguredVtbStreamers } from "@/vtb";
+import { startScheduledTasks } from "@/tasks";
+import { partitionAvailableVtbSubscriptions, syncConfiguredVtbStreamers } from "@/vtb";
 
 const CONFIG_RELOAD_DELAY_MS = 500;
 
+type AppRuntime = {
+  config: Awaited<ReturnType<typeof loadConfig>>;
+  stop(): Promise<void>;
+};
+
 const registerShutdownHandlers = (
   gateway: Gateway,
-  getTasks: () => TaskRuntime,
+  getRuntime: () => AppRuntime,
   stopConfigWatcher: () => void,
   logger: Logger,
 ) => {
@@ -25,7 +31,7 @@ const registerShutdownHandlers = (
     logger.info("miz", `received ${signal}, shutting down`);
     try {
       stopConfigWatcher();
-      await getTasks().stop();
+      await getRuntime().stop();
     } catch (error) {
       logger.error("miz", "scheduled tasks failed to stop cleanly", error);
     } finally {
@@ -40,43 +46,57 @@ const registerShutdownHandlers = (
 
 const main = async () => {
   const createdDirectories = await ensureProjectDirectories();
-  const config = await loadConfig();
-  const logger = createLogger(config.naplink.logLevel);
+  const loadedConfig = await loadConfig();
+  const logger = createLogger(loadedConfig.naplink.logLevel);
   if (createdDirectories.length > 0) {
     logger.info("miz", "created missing project directories", { directories: createdDirectories });
   }
-  const gateway = createGateway(config, logger);
-  const plugins = await createPluginRuntime(config, gateway, logger);
+  const gateway = createGateway(loadedConfig, logger);
 
-  gateway.onMessage(plugins.handleMessage);
-
-  logger.info("miz", `connecting to ${config.gateway.url}`);
+  logger.info("miz", `connecting to ${loadedConfig.gateway.url}`);
 
   await gateway.connect();
   await gateway.reportServerInfo();
-  await prepareVtbSubscriptions(config, gateway, logger);
-  await syncConfiguredVtbStreamersOnStartup(config, logger);
-
-  let tasks = await startScheduledTasks(config, gateway, logger);
-  const stopConfigWatcher = watchConfig(config, logger, async (nextConfig) => {
-    const previousConfig = structuredClone(config);
-    await tasks.stop();
+  let runtime = await createAppRuntime(loadedConfig, gateway, logger);
+  const stopConfigWatcher = watchConfig(logger, async (nextConfig) => {
+    const previousRuntime = runtime;
+    await previousRuntime.stop();
     try {
-      replaceConfig(config, nextConfig);
-      await prepareVtbSubscriptions(config, gateway, logger);
-      await syncConfiguredVtbStreamersOnStartup(config, logger);
-      tasks = await startScheduledTasks(config, gateway, logger);
+      runtime = await createAppRuntime(nextConfig, gateway, logger);
     } catch (error) {
-      replaceConfig(config, previousConfig);
-      tasks = await startScheduledTasks(config, gateway, logger);
+      runtime = await createAppRuntime(previousRuntime.config, gateway, logger);
       throw error;
     }
   });
-  registerShutdownHandlers(gateway, () => tasks, stopConfigWatcher, logger);
+  registerShutdownHandlers(gateway, () => runtime, stopConfigWatcher, logger);
+};
+
+const createAppRuntime = async (
+  loadedConfig: Awaited<ReturnType<typeof loadConfig>>,
+  gateway: Gateway,
+  logger: Logger,
+): Promise<AppRuntime> => {
+  const config = await prepareVtbSubscriptions(loadedConfig, gateway, logger);
+  await syncConfiguredVtbStreamersOnStartup(config, logger);
+  const plugins = await createPluginRuntime(config, gateway, logger);
+  const detachPluginHandler = gateway.onMessage(plugins.handleMessage);
+
+  try {
+    const tasks = await startScheduledTasks(config, gateway, logger);
+    return {
+      config,
+      stop: async () => {
+        detachPluginHandler();
+        await tasks.stop();
+      },
+    };
+  } catch (error) {
+    detachPluginHandler();
+    throw error;
+  }
 };
 
 const watchConfig = (
-  config: Awaited<ReturnType<typeof loadConfig>>,
   logger: Logger,
   onReloaded: (config: Awaited<ReturnType<typeof loadConfig>>) => Promise<void>,
 ) => {
@@ -130,39 +150,35 @@ const watchConfig = (
   };
 };
 
-const replaceConfig = <T extends object>(target: T, source: T) => {
-  for (const key of Object.keys(target)) {
-    delete (target as Record<string, unknown>)[key];
-  }
-  Object.assign(target, source);
-};
-
 const prepareVtbSubscriptions = async (
   config: Awaited<ReturnType<typeof loadConfig>>,
   gateway: Gateway,
   logger: Logger,
-) => {
+) : Promise<Awaited<ReturnType<typeof loadConfig>>> => {
   if (!config.vtb.enabled) {
-    return;
+    return config;
   }
 
   try {
-    const groupIds = getGroupIds(await gateway.getGroupList());
-    if (groupIds) {
-      const disabled = disableUnavailableVtbSubscriptions(config, groupIds);
-      for (const subscription of disabled) {
-        logger.warn("plugin", "vtb subscription temporarily disabled: bot is not in the group", {
-          groupId: subscription.groupId,
-          streamers: subscription.streamers,
-        });
-      }
-    } else {
+    const groupList = await gateway.getGroupList();
+    if (!Array.isArray(groupList)) {
       logger.warn("plugin", "vtb subscription availability check skipped: invalid group list response");
+      return config;
     }
+
+    const groupIds = new Set(getGroupIds(groupList).map(String));
+    const { enabled, disabled } = partitionAvailableVtbSubscriptions(config.vtb.subscriptions, groupIds);
+    for (const subscription of disabled) {
+      logger.warn("plugin", "vtb subscription temporarily disabled: bot is not in the group", {
+        groupId: subscription.groupId,
+        streamers: subscription.streamers,
+      });
+    }
+    return { ...config, vtb: { ...config.vtb, subscriptions: enabled } };
   } catch (error) {
     logger.warn("plugin", "vtb subscription availability check failed; keeping all subscriptions enabled", error);
   }
-
+  return config;
 };
 
 const syncConfiguredVtbStreamersOnStartup = async (
@@ -189,25 +205,6 @@ const syncConfiguredVtbStreamersOnStartup = async (
   } catch (error) {
     logger.warn("plugin", "vtb streamer startup synchronization failed; polling will continue", error);
   }
-};
-
-const getGroupIds = (value: unknown) => {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-
-  return new Set(
-    value.flatMap((group) => {
-      if (!group || typeof group !== "object") {
-        return [];
-      }
-
-      const groupId = (group as Record<string, unknown>).group_id;
-      return typeof groupId === "number" || (typeof groupId === "string" && groupId.trim())
-        ? [String(groupId)]
-        : [];
-    }),
-  );
 };
 
 const logger = createLogger();

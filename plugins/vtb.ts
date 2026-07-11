@@ -15,6 +15,7 @@ import {
   removeVtbSubscription,
   updateVtbSubscriptionNames,
 } from "@/config";
+import { changeVtbSubscriptions, findVtbSubscription } from "@/vtb-subscriptions";
 
 const vtbPlugin: MizPlugin = {
   name: "vtb",
@@ -65,9 +66,7 @@ const vtbPlugin: MizPlugin = {
         }
 
         if (type === "list") {
-          const subscription = config.vtb.subscriptions.find(
-            (item) => String(item.groupId) === String(message.groupId),
-          );
+          const subscription = findVtbSubscription(config.vtb.subscriptions, message.groupId);
           await reply(
             subscription?.streamers.length
               ? `本群已订阅 ${subscription.streamers.length} 位主播：\n${subscription.streamers.join("\n")}`
@@ -84,7 +83,12 @@ const vtbPlugin: MizPlugin = {
           return;
         }
 
-        applySubscriptionChange(config.vtb.subscriptions, message.groupId, streamerName, type);
+        const nextSubscriptions = changeVtbSubscriptions(
+          config.vtb.subscriptions,
+          message.groupId,
+          streamerName,
+          type,
+        );
         let databaseSynchronized = true;
         if (type === "subscribe") {
           try {
@@ -109,7 +113,7 @@ const vtbPlugin: MizPlugin = {
               streamerName,
             });
           }
-        } else if (!config.vtb.subscriptions.some((subscription) => subscription.streamers.includes(streamerName))) {
+        } else if (!nextSubscriptions.some((subscription) => subscription.streamers.includes(streamerName))) {
           const repository = await getVtbRepository(config);
           const removed = await repository.deleteStreamerByName(streamerName);
           if (removed) {
@@ -141,7 +145,8 @@ const vtbPlugin: MizPlugin = {
         const { databaseSync, renamed, roomUpdated, failed } = await syncVtbSubscriptionNames(fullConfig);
         if (renamed.length > 0) {
           await updateVtbSubscriptionNames(new Map(renamed.map((item) => [item.previousName, item.name])));
-          applySubscriptionRenames(config.vtb.subscriptions, renamed);
+          // The config watcher reloads the persisted change. Do not mutate the
+          // current runtime snapshot while a command is executing.
         }
         logger.info("plugin", "vtb subscription names checked by command", {
           renamed,
@@ -239,39 +244,3 @@ const isSubscriptionWhitelisted = (
   userId: string | number | undefined,
   whitelistUserIds: readonly (string | number)[],
 ) => userId !== undefined && whitelistUserIds.some((id) => String(id) === String(userId));
-
-const applySubscriptionChange = (
-  subscriptions: Array<{ groupId: string | number; streamers: string[] }>,
-  groupId: string | number,
-  streamerName: string,
-  action: "subscribe" | "unsubscribe",
-) => {
-  const subscription = subscriptions.find((item) => String(item.groupId) === String(groupId));
-  if (action === "subscribe") {
-    if (subscription) {
-      subscription.streamers.push(streamerName);
-    } else {
-      subscriptions.push({ groupId, streamers: [streamerName] });
-    }
-    return;
-  }
-
-  if (!subscription) {
-    return;
-  }
-  subscription.streamers = subscription.streamers.filter((name) => name !== streamerName);
-  if (subscription.streamers.length === 0) {
-    const index = subscriptions.indexOf(subscription);
-    subscriptions.splice(index, 1);
-  }
-};
-
-const applySubscriptionRenames = (
-  subscriptions: Array<{ groupId: string | number; streamers: string[] }>,
-  renames: readonly { previousName: string; name: string }[],
-) => {
-  const renameMap = new Map(renames.map((item) => [item.previousName, item.name]));
-  for (const subscription of subscriptions) {
-    subscription.streamers = subscription.streamers.map((name) => renameMap.get(name) ?? name);
-  }
-};

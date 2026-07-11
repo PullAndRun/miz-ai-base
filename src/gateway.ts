@@ -366,10 +366,15 @@ const createWelcomeMessage = (userId: string | number, memberName: string, group
   },
 ];
 
-const getDisplayName = (value: unknown, keys: readonly string[]) => {
+const getDisplayName = (value: unknown, keys: readonly string[], seen = new Set<object>()): string | undefined => {
   if (!value || typeof value !== "object") {
     return undefined;
   }
+
+  if (seen.has(value)) {
+    return undefined;
+  }
+  seen.add(value);
 
   const record = value as Record<string, unknown>;
   for (const key of keys) {
@@ -379,7 +384,7 @@ const getDisplayName = (value: unknown, keys: readonly string[]) => {
     }
   }
 
-  return getDisplayName(record.data, keys);
+  return getDisplayName(record.data, keys, seen);
 };
 
 const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
@@ -446,10 +451,15 @@ const getBooleanValue = (value: unknown, keys: readonly string[]) => {
   return typeof raw === "boolean" ? raw : raw === 1 || raw === "1" || raw === "true";
 };
 
-const getValue = (value: unknown, keys: readonly string[]): unknown => {
+const getValue = (value: unknown, keys: readonly string[], seen = new Set<object>()): unknown => {
   if (!value || typeof value !== "object") {
     return undefined;
   }
+
+  if (seen.has(value)) {
+    return undefined;
+  }
+  seen.add(value);
 
   const record = value as Record<string, unknown>;
   for (const key of keys) {
@@ -457,5 +467,5 @@ const getValue = (value: unknown, keys: readonly string[]): unknown => {
       return record[key];
     }
   }
-  return getValue(record.data, keys);
+  return getValue(record.data, keys, seen);
 };

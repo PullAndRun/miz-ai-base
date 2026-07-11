@@ -79,23 +79,35 @@ const formatMetadata = (metadata: unknown) => {
   }
 };
 
-const redactSecrets = <T>(value: T): T => {
+const redactSecrets = <T>(value: T): T => redactValue(value, new WeakSet<object>());
+
+const redactValue = <T>(value: T, seen: WeakSet<object>): T => {
   if (typeof value === "string") {
     return value.replace(
-      /((?:access_)?token|password|cookie|authorization|secret|api[_-]?key|signature)=([^&\s]+)/gi,
-      "$1=[redacted]",
+      /((?:access_)?token|password|cookie|authorization|secret|api[_-]?key|signature)(\s*[:=]\s*)(?:Bearer\s+)?([^&,;\s]+)/gi,
+      "$1$2[redacted]",
     ) as T;
   }
 
   if (Array.isArray(value)) {
-    return value.map((item) => redactSecrets(item)) as T;
+    if (seen.has(value)) {
+      return "[circular]" as T;
+    }
+    seen.add(value);
+    return value.map((item) => redactValue(item, seen)) as T;
   }
 
   if (value && typeof value === "object") {
+    if (seen.has(value)) {
+      return "[circular]" as T;
+    }
+    seen.add(value);
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
         key,
-        /token|password|cookie|authorization|secret|api[_-]?key/i.test(key) ? "[redacted]" : redactSecrets(item),
+        /token|password|cookie|authorization|secret|api[_-]?key|signature/i.test(key)
+          ? "[redacted]"
+          : redactValue(item, seen),
       ]),
     ) as T;
   }

@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { MizConfig } from "@/config";
 import type { Gateway, IncomingMessage } from "@/gateway";
 import type { Logger } from "@/logger";
+import { findPluginCommand, parseCommandText } from "@/plugin-command";
 
 export type PluginCommand = {
   name: string;
@@ -292,7 +293,7 @@ const dispatchPluginCommand = async ({
     return;
   }
 
-  const command = findPluginCommand(commandText, pluginsByCommand);
+  const command = findPluginCommand(commandText, [...pluginsByCommand.keys()]);
   if (!command) {
     await replyToMessage(
       gateway,
@@ -329,31 +330,6 @@ const dispatchPluginCommand = async ({
   } catch (error) {
     logger.error("plugin", `plugin failed: ${plugin.name}`, error);
   }
-};
-
-const parseCommandText = (text: string, commandPrefix: string) => {
-  const trimmedText = text.trim();
-  if (!trimmedText.startsWith(commandPrefix)) {
-    return undefined;
-  }
-
-  return trimmedText.slice(commandPrefix.length).trim();
-};
-
-const findPluginCommand = (commandText: string, pluginsByCommand: Map<string, MizPlugin>) => {
-  const commands = Array.from(pluginsByCommand.keys()).sort((left, right) => right.length - left.length);
-
-  for (const name of commands) {
-    if (commandText === name) {
-      return { name, args: "", raw: commandText };
-    }
-
-    if (commandText.startsWith(`${name} `)) {
-      return { name, args: commandText.slice(name.length).trim(), raw: commandText };
-    }
-  }
-
-  return undefined;
 };
 
 const replyToMessage = (gateway: Gateway, message: IncomingMessage, replyMessage: unknown) => {

@@ -1,5 +1,6 @@
 import type { MizPlugin } from "@/plugins";
 import { settleWithConcurrency } from "@/concurrency";
+import { getGroupIds } from "@/group-ids";
 
 const MAX_BROADCAST_LENGTH = 1_000;
 
@@ -72,23 +73,6 @@ const isWhitelisted = (
   userId: string | number | undefined,
   whitelistUserIds: readonly (string | number)[],
 ) => userId !== undefined && whitelistUserIds.some((id) => String(id) === String(userId));
-
-const getGroupIds = (value: unknown): Array<number | string> => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return Array.from(new Set(value.flatMap((group) => {
-    if (!group || typeof group !== "object") {
-      return [];
-    }
-
-    const groupId = (group as Record<string, unknown>).group_id;
-    return typeof groupId === "number" || (typeof groupId === "string" && groupId.trim())
-      ? [groupId]
-      : [];
-  })));
-};
 
 const normalizeError = (error: unknown) => error instanceof Error
   ? { name: error.name, message: error.message }

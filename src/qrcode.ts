@@ -24,7 +24,7 @@ export const createQrCode = async (text: string) => {
 export const decodeQrCode = async (imageSource: string) => {
   const image = await Jimp.read(await readImage(imageSource));
   const result = await new Promise<string>((resolve, reject) => {
-    const reader = new QrCodeReader();
+    const reader = createQrCodeReader();
     reader.callback = (error, decoded) => {
       if (error) {
         reject(error);
@@ -43,6 +43,11 @@ export const decodeQrCode = async (imageSource: string) => {
   });
 
   return result;
+};
+
+const createQrCodeReader = () => Reflect.construct(QrCodeReader, []) as {
+  callback: (error: Error | null, result?: { result?: string }) => void;
+  decode(bitmap: unknown): void;
 };
 
 const readImage = async (source: string) => {
