@@ -1,3 +1,4 @@
+import { watch } from "node:fs";
 import { loadConfig } from "@/config";
 import { ensureProjectDirectories } from "@/directories";
 import { createGateway, type Gateway } from "@/gateway";
@@ -6,7 +7,14 @@ import { createPluginRuntime } from "@/plugins";
 import { startScheduledTasks, type TaskRuntime } from "@/tasks";
 import { disableUnavailableVtbSubscriptions, syncConfiguredVtbStreamers } from "@/vtb";
 
-const registerShutdownHandlers = (gateway: Gateway, tasks: TaskRuntime, logger: Logger) => {
+const CONFIG_RELOAD_DELAY_MS = 500;
+
+const registerShutdownHandlers = (
+  gateway: Gateway,
+  getTasks: () => TaskRuntime,
+  stopConfigWatcher: () => void,
+  logger: Logger,
+) => {
   let stopping = false;
   const stop = async (signal: "SIGINT" | "SIGTERM") => {
     if (stopping) {
@@ -16,7 +24,8 @@ const registerShutdownHandlers = (gateway: Gateway, tasks: TaskRuntime, logger: 
     stopping = true;
     logger.info("miz", `received ${signal}, shutting down`);
     try {
-      await tasks.stop();
+      stopConfigWatcher();
+      await getTasks().stop();
     } catch (error) {
       logger.error("miz", "scheduled tasks failed to stop cleanly", error);
     } finally {
@@ -48,8 +57,77 @@ const main = async () => {
   await prepareVtbSubscriptions(config, gateway, logger);
   await syncConfiguredVtbStreamersOnStartup(config, logger);
 
-  const tasks = await startScheduledTasks(config, gateway, logger);
-  registerShutdownHandlers(gateway, tasks, logger);
+  let tasks = await startScheduledTasks(config, gateway, logger);
+  const stopConfigWatcher = watchConfig(config, logger, async () => {
+    await tasks.stop();
+    await prepareVtbSubscriptions(config, gateway, logger);
+    await syncConfiguredVtbStreamersOnStartup(config, logger);
+    tasks = await startScheduledTasks(config, gateway, logger);
+  });
+  registerShutdownHandlers(gateway, () => tasks, stopConfigWatcher, logger);
+};
+
+const watchConfig = (
+  config: Awaited<ReturnType<typeof loadConfig>>,
+  logger: Logger,
+  onReloaded: () => Promise<void>,
+) => {
+  let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+  let reloading = false;
+  let reloadQueued = false;
+  const reload = async () => {
+    if (reloading) {
+      reloadQueued = true;
+      return;
+    }
+
+    reloading = true;
+    try {
+      const nextConfig = await loadConfig();
+      replaceConfig(config, nextConfig);
+      await onReloaded();
+      logger.info("miz", "configuration reloaded");
+    } catch (error) {
+      logger.warn("miz", "configuration reload failed; keeping the current configuration", error);
+    } finally {
+      reloading = false;
+      if (reloadQueued) {
+        reloadQueued = false;
+        void reload();
+      }
+    }
+  };
+  const scheduleReload = () => {
+    if (reloadTimer) {
+      clearTimeout(reloadTimer);
+    }
+    reloadTimer = setTimeout(() => {
+      reloadTimer = undefined;
+      void reload();
+    }, CONFIG_RELOAD_DELAY_MS);
+  };
+  const watcher = watch("config", (_eventType, filename) => {
+    const name = filename?.toString();
+    if (name?.endsWith(".toml")) {
+      scheduleReload();
+    }
+  });
+  watcher.on("error", (error) => logger.warn("miz", "configuration watcher stopped", error));
+
+  logger.info("miz", "configuration auto-reload enabled");
+  return () => {
+    if (reloadTimer) {
+      clearTimeout(reloadTimer);
+    }
+    watcher.close();
+  };
+};
+
+const replaceConfig = <T extends object>(target: T, source: T) => {
+  for (const key of Object.keys(target)) {
+    delete (target as Record<string, unknown>)[key];
+  }
+  Object.assign(target, source);
 };
 
 const prepareVtbSubscriptions = async (
