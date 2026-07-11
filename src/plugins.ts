@@ -294,10 +294,6 @@ const dispatchPluginCommand = async ({
 
   const command = findPluginCommand(commandText, pluginsByCommand);
   if (!command) {
-    logger.warn("plugin", "unknown command", {
-      commandText,
-      availableCommands: Array.from(pluginsByCommand.keys()),
-    });
     await replyToMessage(
       gateway,
       message,

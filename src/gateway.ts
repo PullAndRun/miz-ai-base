@@ -421,13 +421,6 @@ const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
       const botMuted = mutedUntil !== undefined && mutedUntil > Math.floor(Date.now() / 1_000);
       const allowed = !wholeBan && !botMuted;
       cache.set(key, { allowed, expiresAt: Date.now() + GROUP_SEND_PERMISSION_CACHE_MS });
-      if (!allowed) {
-        logger.info("gateway", "group message skipped because sending is muted", {
-          groupId,
-          wholeBan: wholeBan === true,
-          botMuted,
-        });
-      }
       return allowed;
     } catch (error) {
       // Do not suppress valid messages merely because the status query failed.

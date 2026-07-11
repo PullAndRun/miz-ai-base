@@ -38,6 +38,9 @@ const broadcastPlugin: MizPlugin = {
       for (const [index, result] of results.entries()) {
         if (result.status === "rejected") {
           failedGroupIds.push(groupIds[index]);
+          if (isMutedGroupSendError(result.reason)) {
+            continue;
+          }
           logger.error("plugin", "broadcast delivery failed", {
             groupId: groupIds[index],
             error: normalizeError(result.reason),
@@ -90,3 +93,19 @@ const getGroupIds = (value: unknown): Array<number | string> => {
 const normalizeError = (error: unknown) => error instanceof Error
   ? { name: error.name, message: error.message }
   : error;
+
+const isMutedGroupSendError = (error: unknown) => {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const record = error as Record<string, unknown>;
+  const details = record.details;
+  const message = [record.message, isRecord(details) ? details.message : undefined]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ");
+  return /全员禁言|群禁言|禁言|shut.?up|muted/i.test(message);
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;

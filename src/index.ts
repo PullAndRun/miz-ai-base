@@ -58,11 +58,19 @@ const main = async () => {
   await syncConfiguredVtbStreamersOnStartup(config, logger);
 
   let tasks = await startScheduledTasks(config, gateway, logger);
-  const stopConfigWatcher = watchConfig(config, logger, async () => {
+  const stopConfigWatcher = watchConfig(config, logger, async (nextConfig) => {
+    const previousConfig = structuredClone(config);
     await tasks.stop();
-    await prepareVtbSubscriptions(config, gateway, logger);
-    await syncConfiguredVtbStreamersOnStartup(config, logger);
-    tasks = await startScheduledTasks(config, gateway, logger);
+    try {
+      replaceConfig(config, nextConfig);
+      await prepareVtbSubscriptions(config, gateway, logger);
+      await syncConfiguredVtbStreamersOnStartup(config, logger);
+      tasks = await startScheduledTasks(config, gateway, logger);
+    } catch (error) {
+      replaceConfig(config, previousConfig);
+      tasks = await startScheduledTasks(config, gateway, logger);
+      throw error;
+    }
   });
   registerShutdownHandlers(gateway, () => tasks, stopConfigWatcher, logger);
 };
@@ -70,7 +78,7 @@ const main = async () => {
 const watchConfig = (
   config: Awaited<ReturnType<typeof loadConfig>>,
   logger: Logger,
-  onReloaded: () => Promise<void>,
+  onReloaded: (config: Awaited<ReturnType<typeof loadConfig>>) => Promise<void>,
 ) => {
   let reloadTimer: ReturnType<typeof setTimeout> | undefined;
   let reloading = false;
@@ -84,8 +92,7 @@ const watchConfig = (
     reloading = true;
     try {
       const nextConfig = await loadConfig();
-      replaceConfig(config, nextConfig);
-      await onReloaded();
+      await onReloaded(nextConfig);
       logger.info("miz", "configuration reloaded");
     } catch (error) {
       logger.warn("miz", "configuration reload failed; keeping the current configuration", error);
