@@ -26,6 +26,7 @@ export type PluginContext = {
   command: PluginCommand;
   message: IncomingMessage;
   reply(message: unknown): Promise<unknown>;
+  replyWithoutRetry(message: unknown): Promise<unknown>;
   replyForward(messages: readonly ForwardMessageContent[], options?: {
     title?: string;
     source?: string;
@@ -147,6 +148,7 @@ const notifyPluginsOfMessage = async ({
         plugins: pluginInfo,
         commandPrefix: config.plugins.commandPrefix,
         reply: (replyMessage) => replyToMessage(gateway, message, replyMessage),
+        replyWithoutRetry: (replyMessage) => replyToMessageWithoutRetry(gateway, message, replyMessage),
         replyForward: (messages, options) =>
           gateway.sendForwardMessage(
             message,
@@ -320,6 +322,7 @@ const dispatchPluginCommand = async ({
       plugins: pluginInfo,
       commandPrefix: config.plugins.commandPrefix,
       reply: (replyMessage) => replyToMessage(gateway, message, replyMessage),
+      replyWithoutRetry: (replyMessage) => replyToMessageWithoutRetry(gateway, message, replyMessage),
       replyForward: (messages, options) =>
         gateway.sendForwardMessage(message, messages, {
           title: options?.title,
@@ -339,6 +342,18 @@ const replyToMessage = (gateway: Gateway, message: IncomingMessage, replyMessage
 
   if (message.userId !== undefined) {
     return gateway.sendPrivateMessage(message.userId, replyMessage);
+  }
+
+  throw new Error("Cannot reply: message has no group_id or user_id");
+};
+
+const replyToMessageWithoutRetry = (gateway: Gateway, message: IncomingMessage, replyMessage: unknown) => {
+  if (message.groupId !== undefined) {
+    return gateway.sendGroupMessageWithoutRetry(message.groupId, replyMessage);
+  }
+
+  if (message.userId !== undefined) {
+    return gateway.sendPrivateMessageWithoutRetry(message.userId, replyMessage);
   }
 
   throw new Error("Cannot reply: message has no group_id or user_id");

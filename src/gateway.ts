@@ -7,6 +7,7 @@ import type { ForwardMessageContent } from "@/plugins";
 export type IncomingMessage = {
   text: string;
   messageType?: string;
+  messageId?: number | string;
   groupId?: number | string;
   userId?: number | string;
   raw: Record<string, unknown>;
@@ -28,7 +29,9 @@ export type Gateway = {
   reportServerInfo(): Promise<void>;
   getGroupList(): Promise<unknown>;
   sendGroupMessage(groupId: number | string, message: unknown): Promise<unknown>;
+  sendGroupMessageWithoutRetry(groupId: number | string, message: unknown): Promise<unknown>;
   sendPrivateMessage(userId: number | string, message: unknown): Promise<unknown>;
+  sendPrivateMessageWithoutRetry(userId: number | string, message: unknown): Promise<unknown>;
   sendForwardMessage(
     target: IncomingMessage,
     messages: readonly ForwardMessageContent[],
@@ -40,6 +43,8 @@ export type Gateway = {
 const idSchema = z.union([z.string(), z.number()]);
 const FOLLOWED_GROUP_MEMBER_ID = "361390990";
 const GROUP_SEND_PERMISSION_CACHE_MS = 3_000;
+const MESSAGE_DEDUPLICATION_WINDOW_MS = 10 * 60 * 1_000;
+const MAX_DEDUPLICATED_MESSAGE_IDS = 5_000;
 
 const textSegmentSchema = z
   .looseObject({
@@ -60,6 +65,7 @@ const napCatEventSchema = z
     sub_type: z.string().optional(),
     message: z.union([z.string(), z.array(z.unknown())]).optional(),
     raw_message: z.string().optional(),
+    message_id: idSchema.optional(),
     group_id: idSchema.optional(),
     user_id: idSchema.optional(),
     self_id: idSchema.optional(),
@@ -72,7 +78,7 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
   const messageHandlers = new Set<MessageHandler>();
   const canSendGroupMessage = createGroupSendPermissionChecker(client, logger);
 
-  registerEvents(client, logger, messageHandlers, canSendGroupMessage);
+  registerEvents(client, logger, messageHandlers, canSendGroupMessage, createMessageDeduplicator());
 
   return {
     connect: () => client.connect(),
@@ -85,7 +91,15 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
       }
       return client.sendGroupMessage(groupId, message);
     },
+    sendGroupMessageWithoutRetry: async (groupId, message) => {
+      if (!await canSendGroupMessage(groupId)) {
+        return undefined;
+      }
+      return callApiWithoutRetry(client, "send_group_msg", { group_id: groupId, message });
+    },
     sendPrivateMessage: (userId, message) => client.sendPrivateMessage(userId, message),
+    sendPrivateMessageWithoutRetry: (userId, message) =>
+      callApiWithoutRetry(client, "send_private_msg", { user_id: userId, message }),
     sendForwardMessage: (target, messages, options) =>
       sendForwardMessage(client, target, messages, options, canSendGroupMessage),
     onMessage: (handler) => {
@@ -194,6 +208,7 @@ const registerEvents = (
   logger: Logger,
   messageHandlers: Set<MessageHandler>,
   canSendGroupMessage: (groupId: number | string) => Promise<boolean>,
+  isDuplicateMessage: (message: IncomingMessage) => boolean,
 ) => {
   client.on("state_change", (state: ConnectionState) => {
     logger.info("gateway", `state=${state}`);
@@ -214,8 +229,18 @@ const registerEvents = (
       return;
     }
 
+    const message = toIncomingMessage(parsedEvent.data);
+    if (isDuplicateMessage(message)) {
+      logger.warn("gateway", "duplicate message event ignored", {
+        messageId: message.messageId,
+        groupId: message.groupId,
+        userId: message.userId,
+      });
+      return;
+    }
+
     logger.info("gateway", `event=${formatEventName(parsedEvent.data)}`);
-    notifyMessageHandlers(messageHandlers, toIncomingMessage(parsedEvent.data), logger);
+    notifyMessageHandlers(messageHandlers, message, logger);
   });
 
   client.on("notice", (event) => {
@@ -271,10 +296,57 @@ const notifyMessageHandlers = (
 const toIncomingMessage = (event: NapCatEvent): IncomingMessage => ({
   text: extractMessageText(event),
   messageType: event.message_type,
+  messageId: event.message_id,
   groupId: event.group_id,
   userId: event.user_id,
   raw: event,
 });
+
+const createMessageDeduplicator = () => {
+  const seenMessageIds = new Map<string, number>();
+
+  return (message: IncomingMessage) => {
+    if (message.messageId === undefined) {
+      return false;
+    }
+
+    const now = Date.now();
+    for (const [key, receivedAt] of seenMessageIds) {
+      if (now - receivedAt <= MESSAGE_DEDUPLICATION_WINDOW_MS) {
+        break;
+      }
+      seenMessageIds.delete(key);
+    }
+
+    const key = [message.messageType ?? "unknown", message.groupId ?? message.userId ?? "unknown", message.messageId]
+      .map(String)
+      .join(":");
+    if (seenMessageIds.has(key)) {
+      return true;
+    }
+
+    seenMessageIds.set(key, now);
+    if (seenMessageIds.size > MAX_DEDUPLICATED_MESSAGE_IDS) {
+      seenMessageIds.delete(seenMessageIds.keys().next().value!);
+    }
+    return false;
+  };
+};
+
+type ApiClientWithRetryOptions = {
+  call<T>(method: string, params: Record<string, unknown>, options: { retries: number }): Promise<T>;
+};
+
+const callApiWithoutRetry = <T>(client: NapLink, method: string, params: Record<string, unknown>): Promise<T> => {
+  // NapLink 1.1.0 exposes retry options on ApiClient but not on its public send helpers.
+  // Keep this narrow escape hatch here so non-idempotent media sends never get replayed.
+  const apiClient = (client as unknown as { apiClient?: ApiClientWithRetryOptions }).apiClient;
+  if (!apiClient) {
+    throw new Error("NapLink API client is unavailable for a no-retry send");
+  }
+
+  return apiClient.call<T>(method, params, { retries: 0 });
+};
 
 const extractMessageText = (event: NapCatEvent) => {
   const message = event.message;

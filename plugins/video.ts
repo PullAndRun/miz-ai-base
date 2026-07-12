@@ -18,7 +18,7 @@ const videoPlugin: MizPlugin = {
     "下载并发送少于 10 分钟的视频。普通成员仅支持 B 站链接，白名单成员可使用其他站点。",
     "用法：miz video 视频链接",
   ].join("\n"),
-  async handle({ command, config, logger, message, reply }) {
+  async handle({ command, config, logger, message, reply, replyWithoutRetry }) {
     const url = command.args.trim();
     if (!url) {
       await reply("请这样使用：miz video 视频链接\n仅支持时长少于 10 分钟的视频。");
@@ -57,7 +57,7 @@ const videoPlugin: MizPlugin = {
       let videoPath = downloadedVideoPath;
       try {
         videoPath = await prepareVideoForQq(downloadedVideoPath, config.video);
-        await reply({
+        await replyWithoutRetry({
           type: "video",
           data: {
             file: await getNapcatVideoFile(videoPath, config.video),
