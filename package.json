@@ -18,7 +18,7 @@
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "dayjs": "^1.11.21",
-    "fast-xml-parser": "^5.9.3",
+    "fast-xml-parser": "^5.10.0",
     "jimp": "^1.6.1",
     "node-cron": "^4.6.0",
     "pg": "^8.22.0",
