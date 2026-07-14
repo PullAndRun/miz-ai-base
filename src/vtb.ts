@@ -78,7 +78,12 @@ export type VtbDynamic = {
   author: string;
 };
 export type VtbDynamicFeed = { avatarUrl: string; items: VtbDynamic[] };
-export type LiveSession = { startedAt: Date; startFans?: number; roomId?: string };
+export type LiveSession = {
+  startedAt: Date;
+  startFans?: number;
+  roomId?: string;
+  deliveredGroupIds: string[];
+};
 export type VtbCardInfo = { fans?: number; name?: string };
 type ReminderClaim = Reminder & { claimedAt: Date; nextRemindAt?: Date };
 type ScheduleEventClaim = ScheduleEvent & { claimedAt: Date };
@@ -436,11 +441,17 @@ const createVtbRepository = (prisma: PrismaClient) => {
           startedAt: session.startedAt,
           startFans: session.startFans ?? undefined,
           roomId: session.liveRoom?.toString(),
+          deliveredGroupIds: session.deliveredGroupIds,
         }
       : undefined;
   };
 
-  const startLiveSession = async (streamer: VtbStreamer, live: VtbLiveInfo, fans?: number) => {
+  const startLiveSession = async (
+    streamer: VtbStreamer,
+    live: VtbLiveInfo,
+    fans?: number,
+    deliveredGroupIds: readonly string[] = [],
+  ) => {
     await prisma.vtbLiveSession.upsert({
       where: { streamerMid: toMid(streamer.mid) },
       create: {
@@ -449,15 +460,25 @@ const createVtbRepository = (prisma: PrismaClient) => {
         liveRoom: toOptionalMid(live.roomId),
         startedAt: live.liveStartedAt ?? new Date(),
         startFans: fans,
+        deliveredGroupIds: [...deliveredGroupIds],
       },
       update: {
         streamerName: live.name,
         liveRoom: toOptionalMid(live.roomId),
         startedAt: live.liveStartedAt ?? new Date(),
         startFans: fans,
+        deliveredGroupIds: [...deliveredGroupIds],
         endedAt: null,
         endFans: null,
       },
+    });
+  };
+
+  const recordLiveDelivery = async (mid: string, groupIds: readonly string[]) => {
+    if (groupIds.length === 0) return;
+    await prisma.vtbLiveSession.update({
+      where: { streamerMid: toMid(mid) },
+      data: { deliveredGroupIds: { push: [...groupIds] } },
     });
   };
 
@@ -712,7 +733,7 @@ const createVtbRepository = (prisma: PrismaClient) => {
 
   return {
     initialize, findStreamerByName, listStreamers, deleteStreamersNotInNames, deleteStreamerByName,
-    upsertStreamer, getLiveSession, startLiveSession, stopLiveSession, getLastDynamicTime, setLastDynamicTime,
+    upsertStreamer, getLiveSession, startLiveSession, recordLiveDelivery, stopLiveSession, getLastDynamicTime, setLastDynamicTime,
     getDeliveredNewsIds, recordNewsDeliveries, ensureReminderStorage, createReminder, claimDueReminders,
     releaseReminderClaim, listPendingReminders, findPendingReminder, cancelPendingReminder, editPendingReminder,
     ensureScheduleStorage, createScheduleEvent, listUpcomingScheduleEvents, cancelUpcomingScheduleEvent,

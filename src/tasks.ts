@@ -471,61 +471,80 @@ const pollVtbSubscriptions = async (
           }));
         pushCache.set(streamer.mid, cachedPush);
         const { live, fans } = await cachedPush;
-      const session = await repository.getLiveSession(streamer.mid);
-      const isRecentLive =
-        live.liveStartedAt !== undefined &&
-        Date.now() - live.liveStartedAt.getTime() < getVtbPollingIntervalMs(config.vtb.cron);
-      if (live.isLive && !session && isRecentLive) {
-        await repository.startLiveSession(streamer, live, fans);
-        const message = [
-          { type: "text", data: { text: formatLiveMessage(live, fans) } },
-          ...(live.coverUrl ? [{ type: "image", data: { file: live.coverUrl } }] : []),
-        ];
-        const deliveredGroups = await sendVtbGroupMessage(
-          groupIds,
-          message,
-          gateway,
-          logger,
-          "live start",
-          live.name,
-          atAllGroupIds,
+        const session = await repository.getLiveSession(streamer.mid);
+        const undeliveredGroupIds = groupIds.filter(
+          (groupId) => !session?.deliveredGroupIds.includes(String(groupId)),
         );
-        logger.info("plugin", "vtb live started notification sent", { streamer: live.name, groupIds: deliveredGroups });
-      } else if (live.isLive && !session) {
-        logger.info("plugin", "vtb live start notification skipped: live is older than polling interval", {
-          streamer: live.name,
-          liveStartedAt: live.liveStartedAt,
-        });
-      } else if (!live.isLive && session) {
-        const endedAt = new Date();
-        await repository.stopLiveSession(streamer.mid, fans, endedAt);
-        const message = formatOfflineMessage(
-          live.name,
-          session.startedAt,
-          endedAt,
-          session.startFans,
-          fans,
-          session.roomId,
-        );
-        const deliveredGroups = await sendVtbGroupMessage(groupIds, message, gateway, logger, "live end", live.name);
-        logger.info("plugin", "vtb live ended notification sent", { streamer: live.name, groupIds: deliveredGroups });
-      }
+        const isRecentLive = isVtbLiveStartRecent(live.liveStartedAt, config.vtb.cron);
+        if (live.isLive && (!session ? isRecentLive : undeliveredGroupIds.length > 0)) {
+          const message = [
+            { type: "text", data: { text: formatLiveMessage(live, fans) } },
+            ...(live.coverUrl ? [{ type: "image", data: { file: live.coverUrl } }] : []),
+          ];
+          const deliveredGroups = await sendVtbGroupMessage(
+            undeliveredGroupIds,
+            message,
+            gateway,
+            logger,
+            "live start",
+            live.name,
+            new Set(
+              [...atAllGroupIds].filter((groupId) => undeliveredGroupIds.some((id) => String(id) === groupId)),
+            ),
+          );
+          const deliveredGroupIds = deliveredGroups.map(String);
+          if (session) {
+            await repository.recordLiveDelivery(streamer.mid, deliveredGroupIds);
+          } else {
+            // Store an empty list as a pending delivery as well, so a failed
+            // first send is retried even after the freshness window closes.
+            await repository.startLiveSession(streamer, live, fans, deliveredGroupIds);
+          }
+          if (deliveredGroups.length > 0) {
+            logger.info("plugin", "vtb live started notification sent", { streamer: live.name, groupIds: deliveredGroups });
+          }
+          if (deliveredGroups.length !== undeliveredGroupIds.length) {
+            logger.warn("plugin", "vtb live start notification partially delivered; will retry failed groups", {
+              streamer: live.name,
+              groupIds: undeliveredGroupIds,
+              deliveredGroups,
+            });
+          }
+        } else if (live.isLive && !session) {
+          logger.info("plugin", "vtb live start notification skipped: live is older than the freshness window", {
+            streamer: live.name,
+            liveStartedAt: live.liveStartedAt,
+          });
+        } else if (!live.isLive && session) {
+          const endedAt = new Date();
+          await repository.stopLiveSession(streamer.mid, fans, endedAt);
+          const message = formatOfflineMessage(
+            live.name,
+            session.startedAt,
+            endedAt,
+            session.startFans,
+            fans,
+            session.roomId,
+          );
+          const deliveredGroups = await sendVtbGroupMessage(groupIds, message, gateway, logger, "live end", live.name);
+          logger.info("plugin", "vtb live ended notification sent", { streamer: live.name, groupIds: deliveredGroups });
+        }
 
         const feed = await dynamicFeeds.get(streamer.mid);
         if (!feed) {
           continue;
         }
-          const latestDynamic = feed.items[0];
-          if (!latestDynamic) {
-            logger.warn("plugin", "vtb dynamic poll skipped: feed contains no valid dated item", {
-              streamer: streamer.name,
-            });
-            continue;
-          }
-          const lastPublishedAt = await repository.getLastDynamicTime(streamer.mid);
-          const isUnseen = !lastPublishedAt || latestDynamic.publishedAt > lastPublishedAt;
-          const isRecent = Date.now() - latestDynamic.publishedAt.getTime() < getVtbPollingIntervalMs(config.vtb.cron);
-          const isLivePromotion = latestDynamic.description.includes("https://live.bilibili.com");
+        const latestDynamic = feed.items[0];
+        if (!latestDynamic) {
+          logger.warn("plugin", "vtb dynamic poll skipped: feed contains no valid dated item", {
+            streamer: streamer.name,
+          });
+          continue;
+        }
+        const lastPublishedAt = await repository.getLastDynamicTime(streamer.mid);
+        const isUnseen = !lastPublishedAt || latestDynamic.publishedAt > lastPublishedAt;
+        const isRecent = Date.now() - latestDynamic.publishedAt.getTime() < getVtbPollingIntervalMs(config.vtb.cron);
+        const isLivePromotion = latestDynamic.description.includes("https://live.bilibili.com");
 
           if (isUnseen && isRecent && !isLivePromotion) {
             const message = [
@@ -606,6 +625,17 @@ const getVtbPollingIntervalMs = (cronExpression: string) => {
   const minuteInterval = /^\*\/(\d+) \* \* \* \*$/.exec(cronExpression)?.[1];
   return Math.max(1, minuteInterval ? Number(minuteInterval) : 3) * 60_000;
 };
+
+/**
+ * Cron dispatch and upstream requests have normal timing jitter.  Keep a
+ * bounded grace period so a stream opened just after the previous poll is not
+ * discarded merely because this poll begins a few seconds late.  Some live
+ * API responses also omit live_time; while the stream is reported live, that
+ * must not suppress its first notification.
+ */
+const isVtbLiveStartRecent = (liveStartedAt: Date | undefined, cronExpression: string) =>
+  liveStartedAt === undefined ||
+  Date.now() - liveStartedAt.getTime() < getVtbPollingIntervalMs(cronExpression) + 60_000;
 
 const startYtDlpUpdateTask = (config: MizConfig, logger: Logger): TaskRuntime => {
   if (!config.video.enabled) {

@@ -22,6 +22,7 @@ model VtbLiveSession {
   liveRoom       BigInt?      @map("live_room")
   startedAt      DateTime     @map("live_started_at")
   startFans      Int?         @map("start_fans")
+  deliveredGroupIds String[]  @default([]) @map("delivered_group_ids")
   endedAt        DateTime?    @map("ended_at")
   endFans        Int?         @map("end_fans")
 
