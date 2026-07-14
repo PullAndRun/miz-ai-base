@@ -101,6 +101,7 @@ const watchConfig = (
   onReloaded: (config: Awaited<ReturnType<typeof loadConfig>>) => Promise<void>,
 ) => {
   let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+  const changedFiles = new Set<string>();
   let reloading = false;
   let reloadQueued = false;
   const reload = async () => {
@@ -110,10 +111,14 @@ const watchConfig = (
     }
 
     reloading = true;
+    const reloadedFiles = [...changedFiles];
+    changedFiles.clear();
     try {
       const nextConfig = await loadConfig();
       await onReloaded(nextConfig);
-      logger.info("miz", "configuration reloaded");
+      logger.info("miz", "configuration hot-reloaded", {
+        files: reloadedFiles,
+      });
     } catch (error) {
       logger.warn("miz", "configuration reload failed; keeping the current configuration", error);
     } finally {
@@ -124,7 +129,8 @@ const watchConfig = (
       }
     }
   };
-  const scheduleReload = () => {
+  const scheduleReload = (filename: string) => {
+    changedFiles.add(filename);
     if (reloadTimer) {
       clearTimeout(reloadTimer);
     }
@@ -136,7 +142,7 @@ const watchConfig = (
   const watcher = watch("config", (_eventType, filename) => {
     const name = filename?.toString();
     if (name?.endsWith(".toml")) {
-      scheduleReload();
+      scheduleReload(name);
     }
   });
   watcher.on("error", (error) => logger.warn("miz", "configuration watcher stopped", error));
