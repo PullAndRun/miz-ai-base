@@ -594,7 +594,12 @@ const sendVtbGroupMessage = async (
 };
 
 const appendAtAllMention = (message: unknown) => Array.isArray(message)
-  ? [...message, { type: "at", data: { qq: "all" } }]
+  ? [
+      ...message,
+      { type: "text", data: { text: "\n\n「开播集合」" } },
+      { type: "at", data: { qq: "all" } },
+      { type: "text", data: { text: " 舞台灯光已经亮起，快来用弹幕为 TA 的开场应援吧！" } },
+    ]
   : message;
 
 const getVtbPollingIntervalMs = (cronExpression: string) => {
