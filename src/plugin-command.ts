@@ -13,8 +13,9 @@ export const findPluginCommand = (
   commandNames: readonly string[],
 ): PluginCommand | undefined => {
   const names = [...commandNames].sort((left, right) => right.length - left.length);
-  const name = names.find((candidate) =>
-    commandText === candidate || commandText.startsWith(`${candidate} `));
+  // Arguments may be written directly after a command name, e.g. `miz 占卜123`.
+  // Check longer command names first so overlapping names remain unambiguous.
+  const name = names.find((candidate) => commandText.startsWith(candidate));
 
   return name === undefined
     ? undefined
