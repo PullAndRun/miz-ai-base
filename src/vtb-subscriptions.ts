@@ -5,11 +5,13 @@
 export type VtbSubscription = Readonly<{
   groupId: string | number;
   streamers: readonly string[];
+  atAllStreamers?: readonly string[];
 }>;
 
 export type UpdatedVtbSubscription = {
   groupId: string | number;
   streamers: string[];
+  atAllStreamers?: string[];
 };
 
 export type SubscriptionChange = "subscribe" | "unsubscribe";
@@ -36,7 +38,7 @@ export const changeVtbSubscriptions = (
 
     return current
       ? subscriptions.map((subscription) => sameGroup(subscription.groupId, groupId)
-        ? { ...subscription, streamers: [...subscription.streamers, streamerName] }
+        ? copySubscriptionWithStreamers(subscription, [...subscription.streamers, streamerName])
         : copySubscription(subscription))
       : [...subscriptions.map(copySubscription), { groupId, streamers: [streamerName] }];
   }
@@ -47,17 +49,15 @@ export const changeVtbSubscriptions = (
     }
 
     const streamers = subscription.streamers.filter((name) => name !== streamerName);
-    return streamers.length > 0 ? [{ ...subscription, streamers }] : [];
+    return streamers.length > 0 ? [copySubscriptionWithStreamers(subscription, streamers)] : [];
   });
 };
 
 export const renameVtbSubscriptions = (
   subscriptions: readonly VtbSubscription[],
   renames: ReadonlyMap<string, string>,
-): UpdatedVtbSubscription[] => subscriptions.map((subscription) => ({
-  ...subscription,
-  streamers: subscription.streamers.map((name) => renames.get(name) ?? name),
-}));
+): UpdatedVtbSubscription[] => subscriptions.map((subscription) =>
+  copySubscriptionWithStreamers(subscription, subscription.streamers.map((name) => renames.get(name) ?? name)));
 
 export const partitionVtbSubscriptionsByGroup = (
   subscriptions: readonly VtbSubscription[],
@@ -69,7 +69,14 @@ export const partitionVtbSubscriptionsByGroup = (
   { enabled: [], disabled: [] },
 );
 
-const copySubscription = (subscription: VtbSubscription): UpdatedVtbSubscription => ({
-  ...subscription,
-  streamers: [...subscription.streamers],
+const copySubscription = (subscription: VtbSubscription): UpdatedVtbSubscription =>
+  copySubscriptionWithStreamers(subscription, [...subscription.streamers]);
+
+const copySubscriptionWithStreamers = (
+  subscription: VtbSubscription,
+  streamers: string[],
+): UpdatedVtbSubscription => ({
+  ...(subscription.atAllStreamers === undefined ? {} : { atAllStreamers: [...subscription.atAllStreamers] }),
+  groupId: subscription.groupId,
+  streamers,
 });

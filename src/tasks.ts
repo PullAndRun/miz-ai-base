@@ -369,11 +369,16 @@ const pollVtbSubscriptions = async (
   logger: Logger,
   repository: Awaited<ReturnType<typeof getVtbRepository>>,
 ) => {
-  const streamerGroups = new Map<string, Set<string | number>>();
+  const streamerGroups = new Map<string, Map<string, { groupId: string | number; atAll: boolean }>>();
   for (const subscription of config.vtb.subscriptions) {
     for (const streamer of subscription.streamers) {
-      const groups = streamerGroups.get(streamer) ?? new Set<string | number>();
-      groups.add(subscription.groupId);
+      const groups = streamerGroups.get(streamer) ?? new Map<string, { groupId: string | number; atAll: boolean }>();
+      const groupKey = String(subscription.groupId);
+      const existing = groups.get(groupKey);
+      groups.set(groupKey, {
+        groupId: existing?.groupId ?? subscription.groupId,
+        atAll: existing?.atAll === true || subscription.atAllStreamers?.includes(streamer) === true,
+      });
       streamerGroups.set(streamer, groups);
     }
   }
@@ -390,7 +395,7 @@ const pollVtbSubscriptions = async (
   try {
     const resolvedSubscriptions: Array<{
       streamerName: string;
-      groups: Set<string | number>;
+      groups: Map<string, { groupId: string | number; atAll: boolean }>;
       streamer: VtbStreamer;
     }> = [];
     for (const [streamerName, groups] of streamerGroups) {
@@ -448,7 +453,12 @@ const pollVtbSubscriptions = async (
 
     for (const { streamerName, groups, streamer } of resolvedSubscriptions) {
       try {
-        const groupIds = [...groups];
+        const groupIds = [...groups.values()].map((group) => group.groupId);
+        const atAllGroupIds = new Set(
+          [...groups.entries()]
+            .filter(([, group]) => group.atAll)
+            .map(([groupId]) => groupId),
+        );
         const cachedPush =
           pushCache.get(streamer.mid) ??
           Promise.all([
@@ -471,7 +481,15 @@ const pollVtbSubscriptions = async (
           { type: "text", data: { text: formatLiveMessage(live, fans) } },
           ...(live.coverUrl ? [{ type: "image", data: { file: live.coverUrl } }] : []),
         ];
-        const deliveredGroups = await sendVtbGroupMessage(groupIds, message, gateway, logger, "live start", live.name);
+        const deliveredGroups = await sendVtbGroupMessage(
+          groupIds,
+          message,
+          gateway,
+          logger,
+          "live start",
+          live.name,
+          atAllGroupIds,
+        );
         logger.info("plugin", "vtb live started notification sent", { streamer: live.name, groupIds: deliveredGroups });
       } else if (live.isLive && !session) {
         logger.info("plugin", "vtb live start notification skipped: live is older than polling interval", {
@@ -546,11 +564,16 @@ const sendVtbGroupMessage = async (
   logger: Logger,
   kind: "live start" | "live end" | "dynamic",
   streamer: string,
+  atAllGroupIds: ReadonlySet<string> = new Set(),
 ) => {
   const results = await settleWithConcurrency(
     groupIds,
     5,
-    (groupId) => gateway.sendGroupMessage(groupId, message),
+    async (groupId) => {
+      const shouldMentionAll =
+        atAllGroupIds.has(String(groupId)) && await gateway.canMentionAllGroupMembers(groupId);
+      return gateway.sendGroupMessage(groupId, shouldMentionAll ? appendAtAllMention(message) : message);
+    },
   );
   const deliveredGroups: Array<string | number> = [];
   for (const [index, result] of results.entries()) {
@@ -569,6 +592,10 @@ const sendVtbGroupMessage = async (
   }
   return deliveredGroups;
 };
+
+const appendAtAllMention = (message: unknown) => Array.isArray(message)
+  ? [...message, { type: "at", data: { qq: "all" } }]
+  : message;
 
 const getVtbPollingIntervalMs = (cronExpression: string) => {
   const minuteInterval = /^\*\/(\d+) \* \* \* \*$/.exec(cronExpression)?.[1];

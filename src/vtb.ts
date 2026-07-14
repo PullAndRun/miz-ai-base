@@ -730,13 +730,13 @@ const formatSyncFailure = (error: unknown) =>
   error instanceof Error ? error.message.replace(/\s+/g, " ").trim().slice(0, 200) : "未知错误";
 
 export const formatLiveMessage = (live: VtbLiveInfo, fans?: number) => [
-  "╭─「 B站开播提醒 」",
-  `│ 主播 · ${live.name}`,
-  `│ 标题 · ${live.title}`,
-  ...(live.liveStartedAt ? [`│ 开播 · ${dayjs(live.liveStartedAt).format("YYYY年MM月DD日 HH时mm分")}`] : []),
-  ...(fans === undefined ? [] : [`│ 粉丝 · ${fans.toLocaleString("zh-CN")}`]),
-  ...(live.roomId ? [`│ 直播间 · ${formatLiveRoomUrl(live.roomId)}`] : []),
-  "╰────────────",
+  "╭─「 B站开播啦 」",
+  `│ ${live.name} 开播啦，快来集合！`,
+  `│ 今天要和大家聊：${live.title}`,
+  ...(live.liveStartedAt ? [`│ 开播时间：${dayjs(live.liveStartedAt).format("YYYY年MM月DD日 HH时mm分")}`] : []),
+  ...(fans === undefined ? [] : [`│ 当前关注：${fans.toLocaleString("zh-CN")}`]),
+  ...(live.roomId ? [`│ 直播间传送门：${formatLiveRoomUrl(live.roomId)}`] : []),
+  "╰─ 去和 TA 打个招呼吧～",
 ].join("\n");
 
 export const formatLiveQueryMessage = (live: VtbLiveInfo, fans?: number) => [
@@ -760,13 +760,13 @@ export const formatOfflineMessage = (
   const fanChange = startFans === undefined || endFans === undefined ? undefined : endFans - startFans;
   const durationMinutes = Math.max(1, Math.floor((endedAt.getTime() - startedAt.getTime()) / 60_000));
   return [
-    "╭─「 B站下播提醒 」",
-    `│ ${name} 已下播，辛苦啦～`,
-    `│ 下播时间 · ${dayjs(endedAt).format("YYYY年MM月DD日 HH时mm分")}`,
-    `│ 直播时长 · ${durationMinutes.toLocaleString("zh-CN")} 分钟`,
-    ...(fanChange && fanChange > 0 ? [`│ 本场收获新粉丝 · +${fanChange.toLocaleString("zh-CN")}`] : []),
-    ...(roomId ? [`│ 直播间 · ${formatLiveRoomUrl(roomId)}`] : []),
-    "╰─ 下次直播见～",
+    "╭─「 B站下播啦 」",
+    `│ ${name} 的直播结束啦，辛苦啦～`,
+    `│ 下播时间：${dayjs(endedAt).format("YYYY年MM月DD日 HH时mm分")}`,
+    `│ 这次陪伴了大家：${durationMinutes.toLocaleString("zh-CN")} 分钟`,
+    ...(fanChange && fanChange > 0 ? [`│ 本场收获新关注：+${fanChange.toLocaleString("zh-CN")}`] : []),
+    ...(roomId ? [`│ 直播间：${formatLiveRoomUrl(roomId)}`] : []),
+    "╰─ 感谢大家的陪伴，下次见～",
   ].join("\n");
 };
 
@@ -778,14 +778,14 @@ export const formatDynamicMessage = (dynamic: VtbDynamic) => {
     dynamic.description.includes(dynamicUrl);
 
   return [
-    "╭─「 B站动态更新 」",
-    `│ 主播 · ${dynamic.author}`,
-    `│ 时间 · ${dayjs(dynamic.publishedAt).format("YYYY年MM月DD日 HH时mm分")}`,
-    `│ 标题 · ${dynamic.title}`,
-    "├─ 内容",
+    "╭─「 B站动态小报 」",
+    `│ ${dynamic.author} 有新动态啦～`,
+    `│ 刚刚更新于：${dayjs(dynamic.publishedAt).format("YYYY年MM月DD日 HH时mm分")}`,
+    `│ 这次想和大家说：${dynamic.title}`,
+    "│ TA 的小作文：",
     ...(dynamic.description ? dynamic.description.split("\n").map((line) => `│ ${line}`) : ["│ 暂无文字内容"]),
-    ...(hasDynamicUrlInDescription ? [] : [`├─ 动态 · ${dynamicUrl}`]),
-    "╰────────────",
+    ...(hasDynamicUrlInDescription ? [] : [`│ 动态传送门：${dynamicUrl}`]),
+    "╰─ 去点个赞、留句话吧～",
   ].join("\n");
 };
 

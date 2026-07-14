@@ -1,3 +1,5 @@
 [[miz.vtb.subscriptions]]
 groupId = ""
 streamers = [""]
+# 仅在机器人是群主或管理员时，这些主播开播会 @全体成员；否则发送普通开播通知。动态和下播通知不会 @。
+atAllStreamers = []

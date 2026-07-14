@@ -131,6 +131,7 @@ const rawMizConfigSchema = z.object({
           z.object({
             groupId: targetIdSchema,
             streamers: z.array(nonEmptyStringSchema).min(1),
+            atAllStreamers: z.array(nonEmptyStringSchema).optional(),
           }),
         )
         .optional(),
@@ -307,6 +308,8 @@ export type VtbConfig = {
   subscriptions: ReadonlyArray<{
     readonly groupId: string | number;
     readonly streamers: readonly string[];
+    /** Streamers whose live-start notification should mention every group member. */
+    readonly atAllStreamers?: readonly string[];
   }>;
 };
 
@@ -405,20 +408,20 @@ const writeVtbSubscriptionNames = async (renames: ReadonlyMap<string, string>) =
 
   const source = await readVtbSubscriptionConfig();
   let changed = false;
-  const updated = source.replace(/^streamers[ \t]*=[ \t]*(\[[^\r\n]*\])[ \t]*$/gm, (line, value: string) => {
-    const parsed = Bun.TOML.parse(`streamers = ${value}`) as { streamers?: unknown };
-    if (!Array.isArray(parsed.streamers) || !parsed.streamers.every((name) => typeof name === "string")) {
+  const updated = source.replace(/^(streamers|atAllStreamers)[ \t]*=[ \t]*(\[[^\r\n]*\])[ \t]*$/gm, (line, key: string, value: string) => {
+    const parsed = Bun.TOML.parse(`${key} = ${value}`) as Record<string, unknown>;
+    const names = parsed[key];
+    if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) {
       return line;
     }
 
-    const names = parsed.streamers as string[];
     const nextNames = names.map((name) => renames.get(name) ?? name);
     if (nextNames.every((name, index) => name === names[index])) {
       return line;
     }
 
     changed = true;
-    return `streamers = ${JSON.stringify(nextNames)}`;
+    return `${key} = ${JSON.stringify(nextNames)}`;
   });
 
   if (changed) {

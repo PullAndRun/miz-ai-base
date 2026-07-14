@@ -28,6 +28,7 @@ export type Gateway = {
   dispose(): void;
   reportServerInfo(): Promise<void>;
   getGroupList(): Promise<unknown>;
+  canMentionAllGroupMembers(groupId: number | string): Promise<boolean>;
   sendGroupMessage(groupId: number | string, message: unknown): Promise<unknown>;
   sendGroupMessageWithoutRetry(groupId: number | string, message: unknown): Promise<unknown>;
   sendPrivateMessage(userId: number | string, message: unknown): Promise<unknown>;
@@ -42,7 +43,7 @@ export type Gateway = {
 
 const idSchema = z.union([z.string(), z.number()]);
 const FOLLOWED_GROUP_MEMBER_ID = "361390990";
-const GROUP_SEND_PERMISSION_CACHE_MS = 3_000;
+const GROUP_PERMISSION_CACHE_MS = 3_000;
 const MESSAGE_DEDUPLICATION_WINDOW_MS = 10 * 60 * 1_000;
 const MAX_DEDUPLICATED_MESSAGE_IDS = 5_000;
 
@@ -77,6 +78,7 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
   const client = createNapLinkClient(config, logger);
   const messageHandlers = new Set<MessageHandler>();
   const canSendGroupMessage = createGroupSendPermissionChecker(client, logger);
+  const canMentionAllGroupMembers = createAtAllPermissionChecker(client, logger);
 
   registerEvents(client, logger, messageHandlers, canSendGroupMessage, createMessageDeduplicator());
 
@@ -85,6 +87,7 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
     dispose: () => client.dispose(),
     reportServerInfo: () => reportServerInfo(client, logger),
     getGroupList: () => client.getGroupList(),
+    canMentionAllGroupMembers,
     sendGroupMessage: async (groupId, message) => {
       if (!await canSendGroupMessage(groupId)) {
         return undefined;
@@ -497,12 +500,55 @@ const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
       const mutedUntil = getNumberValue(memberInfo, ["shut_up_timestamp", "shutUpTimestamp"]);
       const botMuted = mutedUntil !== undefined && mutedUntil > Math.floor(Date.now() / 1_000);
       const allowed = !wholeBan && !botMuted;
-      cache.set(key, { allowed, expiresAt: Date.now() + GROUP_SEND_PERMISSION_CACHE_MS });
+      cache.set(key, { allowed, expiresAt: Date.now() + GROUP_PERMISSION_CACHE_MS });
       return allowed;
     } catch (error) {
       // Do not suppress valid messages merely because the status query failed.
       logger.warn("gateway", "group send permission check failed; sending normally", { groupId, error });
       return true;
+    }
+  };
+};
+
+const createAtAllPermissionChecker = (client: NapLink, logger: Logger) => {
+  const cache = new Map<string, { allowed: boolean; expiresAt: number }>();
+  let selfId: Promise<string | undefined> | undefined;
+
+  const getSelfId = () => {
+    if (!selfId) {
+      selfId = client.getLoginInfo()
+        .then((info) => getIdValue(info, ["user_id", "userId", "uin", "qq"]))
+        .catch((error) => {
+          selfId = undefined;
+          logger.warn("gateway", "unable to read bot account for @all permission check", error);
+          return undefined;
+        });
+    }
+    return selfId;
+  };
+
+  return async (groupId: number | string) => {
+    const key = String(groupId);
+    const cached = cache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.allowed;
+    }
+
+    try {
+      const botId = await getSelfId();
+      if (!botId) {
+        return false;
+      }
+
+      const memberInfo = await client.getGroupMemberInfo(groupId, botId);
+      const role = getStringValue(memberInfo, ["role"]);
+      const allowed = role === "admin" || role === "owner";
+      cache.set(key, { allowed, expiresAt: Date.now() + GROUP_PERMISSION_CACHE_MS });
+      return allowed;
+    } catch (error) {
+      // @all is optional: if its permission cannot be verified, keep the live notification ordinary.
+      logger.warn("gateway", "@all permission check failed; sending ordinary group message", { groupId, error });
+      return false;
     }
   };
 };
@@ -516,6 +562,11 @@ const getNumberValue = (value: unknown, keys: readonly string[]) => {
   const raw = getValue(value, keys);
   const number = typeof raw === "number" || typeof raw === "string" ? Number(raw) : Number.NaN;
   return Number.isFinite(number) ? number : undefined;
+};
+
+const getStringValue = (value: unknown, keys: readonly string[]) => {
+  const raw = getValue(value, keys);
+  return typeof raw === "string" ? raw : undefined;
 };
 
 const getBooleanValue = (value: unknown, keys: readonly string[]) => {
