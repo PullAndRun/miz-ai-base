@@ -1,5 +1,6 @@
 import { NapLink, type ConnectionState, type Logger as NapLinkLogger } from "@naplink/naplink";
 import { z } from "zod";
+import { createExpiringCache, readExpiringCache, writeExpiringCache } from "@/cache";
 import type { MizConfig } from "@/config";
 import type { Logger } from "@/logger";
 import type { ForwardMessageContent } from "@/plugins";
@@ -21,17 +22,22 @@ export type ForwardMessageOptions = {
   senderUin?: number | string;
 };
 
+export type MessageSendOptions = {
+  timeoutMs?: number;
+};
+
 export type MessageHandler = (message: IncomingMessage) => void | Promise<void>;
 
-export class GroupMessageUnavailableError extends Error {
-  readonly groupId: number | string;
+export type GroupMessageUnavailableError = Error & Readonly<{
+  groupId: number | string;
+}>;
 
-  constructor(groupId: number | string) {
-    super(`Group message was not sent because group ${groupId} is muted or its send permission is unavailable`);
-    this.name = "GroupMessageUnavailableError";
-    this.groupId = groupId;
-  }
-}
+export const createGroupMessageUnavailableError = (
+  groupId: number | string,
+): GroupMessageUnavailableError => Object.assign(
+  new Error(`Group message was not sent because group ${groupId} is muted or its send permission is unavailable`),
+  { name: "GroupMessageUnavailableError", groupId },
+);
 
 export type Gateway = {
   connect(): Promise<void>;
@@ -40,9 +46,17 @@ export type Gateway = {
   getGroupList(): Promise<unknown>;
   canMentionAllGroupMembers(groupId: number | string): Promise<boolean>;
   sendGroupMessage(groupId: number | string, message: unknown): Promise<unknown>;
-  sendGroupMessageWithoutRetry(groupId: number | string, message: unknown): Promise<unknown>;
+  sendGroupMessageWithoutRetry(
+    groupId: number | string,
+    message: unknown,
+    options?: MessageSendOptions,
+  ): Promise<unknown>;
   sendPrivateMessage(userId: number | string, message: unknown): Promise<unknown>;
-  sendPrivateMessageWithoutRetry(userId: number | string, message: unknown): Promise<unknown>;
+  sendPrivateMessageWithoutRetry(
+    userId: number | string,
+    message: unknown,
+    options?: MessageSendOptions,
+  ): Promise<unknown>;
   sendForwardMessage(
     target: IncomingMessage,
     messages: readonly ForwardMessageContent[],
@@ -54,6 +68,7 @@ export type Gateway = {
 const idSchema = z.union([z.string(), z.number()]);
 const FOLLOWED_GROUP_MEMBER_ID = "361390990";
 const GROUP_PERMISSION_CACHE_MS = 3_000;
+const MAX_GROUP_PERMISSION_CACHE_ENTRIES = 5_000;
 const MESSAGE_DEDUPLICATION_WINDOW_MS = 10 * 60 * 1_000;
 const MAX_DEDUPLICATED_MESSAGE_IDS = 5_000;
 
@@ -100,19 +115,29 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
     canMentionAllGroupMembers,
     sendGroupMessage: async (groupId, message) => {
       if (!await canSendGroupMessage(groupId)) {
-        throw new GroupMessageUnavailableError(groupId);
+        throw createGroupMessageUnavailableError(groupId);
       }
       return client.sendGroupMessage(groupId, message);
     },
-    sendGroupMessageWithoutRetry: async (groupId, message) => {
+    sendGroupMessageWithoutRetry: async (groupId, message, options) => {
       if (!await canSendGroupMessage(groupId)) {
-        throw new GroupMessageUnavailableError(groupId);
+        throw createGroupMessageUnavailableError(groupId);
       }
-      return callApiWithoutRetry(client, "send_group_msg", { group_id: groupId, message });
+      return callApiWithoutRetry(
+        client,
+        "send_group_msg",
+        { group_id: groupId, message },
+        options?.timeoutMs,
+      );
     },
     sendPrivateMessage: (userId, message) => client.sendPrivateMessage(userId, message),
-    sendPrivateMessageWithoutRetry: (userId, message) =>
-      callApiWithoutRetry(client, "send_private_msg", { user_id: userId, message }),
+    sendPrivateMessageWithoutRetry: (userId, message, options) =>
+      callApiWithoutRetry(
+        client,
+        "send_private_msg",
+        { user_id: userId, message },
+        options?.timeoutMs,
+      ),
     sendForwardMessage: (target, messages, options) =>
       sendForwardMessage(client, target, messages, options, canSendGroupMessage),
     onMessage: (handler) => {
@@ -136,7 +161,7 @@ const sendForwardMessage = (
   if (target.groupId !== undefined) {
     return canSendGroupMessage(target.groupId).then((allowed) => {
       if (!allowed) {
-        throw new GroupMessageUnavailableError(target.groupId!);
+        throw createGroupMessageUnavailableError(target.groupId!);
       }
       return client.sendForwardMsg({
         group_id: target.groupId,
@@ -352,10 +377,19 @@ const createMessageDeduplicator = () => {
 };
 
 type ApiClientWithRetryOptions = {
-  call<T>(method: string, params: Record<string, unknown>, options: { retries: number }): Promise<T>;
+  call<T>(
+    method: string,
+    params: Record<string, unknown>,
+    options: { retries: number; timeout?: number },
+  ): Promise<T>;
 };
 
-const callApiWithoutRetry = <T>(client: NapLink, method: string, params: Record<string, unknown>): Promise<T> => {
+const callApiWithoutRetry = <T>(
+  client: NapLink,
+  method: string,
+  params: Record<string, unknown>,
+  timeoutMs?: number,
+): Promise<T> => {
   // NapLink 1.1.0 exposes retry options on ApiClient but not on its public send helpers.
   // Keep this narrow escape hatch here so non-idempotent media sends never get replayed.
   const apiClient = (client as unknown as { apiClient?: ApiClientWithRetryOptions }).apiClient;
@@ -363,7 +397,10 @@ const callApiWithoutRetry = <T>(client: NapLink, method: string, params: Record<
     throw new Error("NapLink API client is unavailable for a no-retry send");
   }
 
-  return apiClient.call<T>(method, params, { retries: 0 });
+  return apiClient.call<T>(method, params, {
+    retries: 0,
+    ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
+  });
 };
 
 const extractMessageText = (event: NapCatEvent) => {
@@ -538,8 +575,11 @@ const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
 };
 
 const createAtAllPermissionChecker = (client: NapLink, logger: Logger) => {
-  const cache = new Map<string, { allowed: boolean; expiresAt: number }>();
+  let cache = createExpiringCache<string, boolean>(MAX_GROUP_PERMISSION_CACHE_ENTRIES);
   let selfId: Promise<string | undefined> | undefined;
+  const cachePermission = (key: string, allowed: boolean) => {
+    cache = writeExpiringCache(cache, key, allowed, GROUP_PERMISSION_CACHE_MS, Date.now());
+  };
 
   const getSelfId = () => {
     if (!selfId) {
@@ -556,9 +596,11 @@ const createAtAllPermissionChecker = (client: NapLink, logger: Logger) => {
 
   return async (groupId: number | string) => {
     const key = String(groupId);
-    const cached = cache.get(key);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.allowed;
+    const cacheRead = readExpiringCache(cache, key, Date.now());
+    cache = cacheRead.cache;
+    const cached = cacheRead.value;
+    if (cached !== undefined) {
+      return cached;
     }
 
     try {
@@ -572,7 +614,7 @@ const createAtAllPermissionChecker = (client: NapLink, logger: Logger) => {
       const hasRole = role === "admin" || role === "owner";
       if (!hasRole) {
         logger.info("gateway", "@all unavailable: bot is not a group owner or administrator", { groupId, role });
-        cache.set(key, { allowed: false, expiresAt: Date.now() + GROUP_PERMISSION_CACHE_MS });
+        cachePermission(key, false);
         return false;
       }
 
@@ -582,13 +624,13 @@ const createAtAllPermissionChecker = (client: NapLink, logger: Logger) => {
         if (!allowed) {
           logger.info("gateway", "@all unavailable: group quota exhausted", { groupId, role, remaining });
         }
-        cache.set(key, { allowed, expiresAt: Date.now() + GROUP_PERMISSION_CACHE_MS });
+        cachePermission(key, allowed);
         return allowed;
       } catch (error) {
         // Older NapCat versions can lack this optional action. The role is
         // still sufficient to preserve the previous @all behavior.
         logger.warn("gateway", "unable to read @all quota; falling back to role check", { groupId, role, error });
-        cache.set(key, { allowed: true, expiresAt: Date.now() + GROUP_PERMISSION_CACHE_MS });
+        cachePermission(key, true);
         return true;
       }
     } catch (error) {

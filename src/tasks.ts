@@ -14,6 +14,8 @@ import { settleWithConcurrency, startWithConcurrency } from "@/concurrency";
 import { getGroupIds } from "@/group-ids";
 import { deliverUnsentNews, fetchFinanceNews, formatScheduledNewsItems } from "@/news";
 import { updateYtDlp } from "@/video";
+import { createExclusiveCronTask, type ScheduledTaskRuntime } from "@/scheduled-task";
+import { serializeError } from "@/errors";
 import {
   closeVtbRepository,
   createVtbNotificationMessage,
@@ -40,9 +42,7 @@ type VtbPollState = {
   cardInfos: Map<string, { fans?: number; avatarUrl?: string; expiresAt: number }>;
 };
 
-export type TaskRuntime = {
-  stop(): Promise<void>;
-};
+export type TaskRuntime = ScheduledTaskRuntime;
 
 export const startScheduledTasks = async (
   config: MizConfig,
@@ -92,17 +92,10 @@ const stopTaskRuntime = async (tasks: readonly TaskRuntime[]) => {
 };
 
 const stopTasks = async (tasks: readonly TaskRuntime[]) => {
-  let failure: unknown;
-  for (const task of tasks) {
-    try {
-      await task.stop();
-    } catch (error) {
-      failure ??= error;
-    }
-  }
-
+  const results = await Promise.allSettled(tasks.map((task) => task.stop()));
+  const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failure) {
-    throw failure;
+    throw failure.reason;
   }
 };
 
@@ -127,17 +120,8 @@ const startScheduleTask = async (config: MizConfig, gateway: Gateway, logger: Lo
     return createNoopTask();
   }
 
-  let running = false;
-  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
-    if (running) {
-      logger.warn("plugin", "schedule task skipped: previous run is still active");
-      return;
-    }
-
-    running = true;
-    try {
-      const events = await repository.claimDueScheduleEvents(new Date(), config.schedule.batchSize);
+    const events = await repository.claimDueScheduleEvents(new Date(), config.schedule.batchSize);
       for (const event of events) {
         try {
           await gateway.sendGroupMessage(event.groupId, [
@@ -168,27 +152,18 @@ const startScheduleTask = async (config: MizConfig, gateway: Gateway, logger: Lo
         }
       }
 
-      await repository.cleanupFinishedScheduleEvents();
-    } finally {
-      running = false;
-    }
+    await repository.cleanupFinishedScheduleEvents();
   };
 
-  const task = cron.schedule(cronExpression, () => {
-    const wasRunning = running;
-    const run = runTask();
-    if (!wasRunning) {
-      currentRun = run;
-    }
-    void run.catch((error) => logger.error("plugin", "schedule task failed", error));
-  });
   logger.info("plugin", "schedule task started", { cronExpression, reminderMinutes: config.schedule.reminderMinutes });
-  return {
-    stop: async () => {
-      task.stop();
-      await currentRun?.catch((error) => logger.warn("plugin", "schedule task ended with an error during shutdown", error));
-    },
-  };
+  return createExclusiveCronTask({
+    cronExpression,
+    logger,
+    run: runTask,
+    skippedMessage: "schedule task skipped: previous run is still active",
+    failureMessage: "schedule task failed",
+    shutdownFailureMessage: "schedule task ended with an error during shutdown",
+  });
 };
 
 const startActivityTask = async (config: MizConfig, gateway: Gateway, logger: Logger): Promise<TaskRuntime> => {
@@ -212,17 +187,8 @@ const startActivityTask = async (config: MizConfig, gateway: Gateway, logger: Lo
     return createNoopTask();
   }
 
-  let running = false;
-  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
-    if (running) {
-      logger.warn("plugin", "activity task skipped: previous run is still active");
-      return;
-    }
-
-    running = true;
-    try {
-      const activities = await repository.claimDueActivities(new Date(), config.activity.batchSize);
+    const activities = await repository.claimDueActivities(new Date(), config.activity.batchSize);
       for (const activity of activities) {
         try {
           const participantIds = activity.registrations.length > 0
@@ -263,28 +229,21 @@ const startActivityTask = async (config: MizConfig, gateway: Gateway, logger: Lo
           });
         }
       }
-      await repository.cleanupFinishedActivities();
-    } finally {
-      running = false;
-    }
+    await repository.cleanupFinishedActivities();
   };
 
-  const task = cron.schedule(cronExpression, () => {
-    const wasRunning = running;
-    const run = runTask();
-    if (!wasRunning) currentRun = run;
-    void run.catch((error) => logger.error("plugin", "activity task failed", error));
-  });
   logger.info("plugin", "activity task started", {
     cronExpression,
     reminderMinutes: config.activity.reminderMinutes,
   });
-  return {
-    stop: async () => {
-      task.stop();
-      await currentRun?.catch((error) => logger.warn("plugin", "activity task ended with an error during shutdown", error));
-    },
-  };
+  return createExclusiveCronTask({
+    cronExpression,
+    logger,
+    run: runTask,
+    skippedMessage: "activity task skipped: previous run is still active",
+    failureMessage: "activity task failed",
+    shutdownFailureMessage: "activity task ended with an error during shutdown",
+  });
 };
 
 const startTodoTask = async (config: MizConfig, gateway: Gateway, logger: Logger): Promise<TaskRuntime> => {
@@ -308,17 +267,8 @@ const startTodoTask = async (config: MizConfig, gateway: Gateway, logger: Logger
     return createNoopTask();
   }
 
-  let running = false;
-  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
-    if (running) {
-      logger.warn("plugin", "todo task skipped: previous run is still active");
-      return;
-    }
-
-    running = true;
-    try {
-      const todos = await repository.claimDueTodos(new Date(), config.todo.batchSize);
+    const todos = await repository.claimDueTodos(new Date(), config.todo.batchSize);
       for (const todo of todos) {
         try {
           const targetId = todo.assigneeId ?? todo.creatorId;
@@ -349,25 +299,18 @@ const startTodoTask = async (config: MizConfig, gateway: Gateway, logger: Logger
           });
         }
       }
-      await repository.cleanupFinishedTodos();
-    } finally {
-      running = false;
-    }
+    await repository.cleanupFinishedTodos();
   };
 
-  const task = cron.schedule(cronExpression, () => {
-    const wasRunning = running;
-    const run = runTask();
-    if (!wasRunning) currentRun = run;
-    void run.catch((error) => logger.error("plugin", "todo task failed", error));
-  });
   logger.info("plugin", "todo task started", { cronExpression, reminderMinutes: config.todo.reminderMinutes });
-  return {
-    stop: async () => {
-      task.stop();
-      await currentRun?.catch((error) => logger.warn("plugin", "todo task ended with an error during shutdown", error));
-    },
-  };
+  return createExclusiveCronTask({
+    cronExpression,
+    logger,
+    run: runTask,
+    skippedMessage: "todo task skipped: previous run is still active",
+    failureMessage: "todo task failed",
+    shutdownFailureMessage: "todo task ended with an error during shutdown",
+  });
 };
 
 const startReminderTask = async (config: MizConfig, gateway: Gateway, logger: Logger): Promise<TaskRuntime> => {
@@ -391,17 +334,8 @@ const startReminderTask = async (config: MizConfig, gateway: Gateway, logger: Lo
     return createNoopTask();
   }
 
-  let running = false;
-  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
-    if (running) {
-      logger.warn("plugin", "reminder task skipped: previous run is still active");
-      return;
-    }
-
-    running = true;
-    try {
-      const reminders = await repository.claimDueReminders(new Date(), config.reminder.batchSize);
+    const reminders = await repository.claimDueReminders(new Date(), config.reminder.batchSize);
       for (const reminder of reminders) {
         try {
           await gateway.sendGroupMessage(reminder.groupId, [
@@ -426,26 +360,17 @@ const startReminderTask = async (config: MizConfig, gateway: Gateway, logger: Lo
           });
         }
       }
-    } finally {
-      running = false;
-    }
   };
 
-  const task = cron.schedule(cronExpression, () => {
-    const wasRunning = running;
-    const run = runTask();
-    if (!wasRunning) {
-      currentRun = run;
-    }
-    void run.catch((error) => logger.error("plugin", "reminder task failed", error));
-  });
   logger.info("plugin", "reminder task started", { cronExpression });
-  return {
-    stop: async () => {
-      task.stop();
-      await currentRun?.catch((error) => logger.warn("plugin", "reminder task ended with an error during shutdown", error));
-    },
-  };
+  return createExclusiveCronTask({
+    cronExpression,
+    logger,
+    run: runTask,
+    skippedMessage: "reminder task skipped: previous run is still active",
+    failureMessage: "reminder task failed",
+    shutdownFailureMessage: "reminder task ended with an error during shutdown",
+  });
 };
 
 const startVtbNameSyncTask = (config: MizConfig, logger: Logger): TaskRuntime => {
@@ -464,17 +389,8 @@ const startVtbNameSyncTask = (config: MizConfig, logger: Logger): TaskRuntime =>
     return createNoopTask();
   }
 
-  let running = false;
-  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
-    if (running) {
-      logger.warn("plugin", "vtb name sync task skipped: previous run is still active");
-      return;
-    }
-
-    running = true;
-    try {
-      const { databaseSync, renamed, roomUpdated, failed } = await syncVtbSubscriptionNames(config);
+    const { databaseSync, renamed, roomUpdated, failed } = await syncVtbSubscriptionNames(config);
       if (databaseSync.removed.length > 0) {
         logger.info("plugin", "vtb streamers removed because they are absent from subscription config", {
           streamers: databaseSync.removed,
@@ -491,26 +407,17 @@ const startVtbNameSyncTask = (config: MizConfig, logger: Logger): TaskRuntime =>
       if (failed.length > 0) {
         logger.warn("plugin", "vtb name sync skipped some streamers", { streamers: failed });
       }
-    } finally {
-      running = false;
-    }
   };
 
-  const task = cron.schedule(cronExpression, () => {
-    const wasRunning = running;
-    const run = runTask();
-    if (!wasRunning) {
-      currentRun = run;
-    }
-    void run.catch((error) => logger.error("plugin", "vtb name sync task failed", error));
-  });
   logger.info("plugin", "vtb name sync task started", { cronExpression });
-  return {
-    stop: async () => {
-      task.stop();
-      await currentRun?.catch((error) => logger.warn("plugin", "vtb name sync task ended with an error during shutdown", error));
-    },
-  };
+  return createExclusiveCronTask({
+    cronExpression,
+    logger,
+    run: runTask,
+    skippedMessage: "vtb name sync task skipped: previous run is still active",
+    failureMessage: "vtb name sync task failed",
+    shutdownFailureMessage: "vtb name sync task ended with an error during shutdown",
+  });
 };
 
 const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger): Promise<TaskRuntime> => {
@@ -543,27 +450,11 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
     return createNoopTask();
   }
 
-  let running = false;
-  let currentRun: Promise<void> | undefined;
   const pollState: VtbPollState = {
     dynamicCursor: 0,
     cardInfos: new Map(),
   };
-  const runTask = async () => {
-    if (running) {
-      return;
-    }
-
-    running = true;
-    currentRun = pollVtbSubscriptions(config, gateway, logger, repository, pollState).finally(() => {
-      running = false;
-    });
-    await currentRun;
-  };
-
-  const task = cron.schedule(cronExpression, () => {
-    void runTask().catch((error) => logger.error("plugin", "vtb task failed", error));
-  });
+  const runTask = () => pollVtbSubscriptions(config, gateway, logger, repository, pollState);
 
   logger.info("plugin", "vtb task started", {
     cronExpression,
@@ -573,14 +464,13 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
     cardCacheMinutes: config.vtb.cardCacheMinutes,
   });
 
-  return {
-    stop: async () => {
-      task.stop();
-      await currentRun?.catch((error) => {
-        logger.warn("plugin", "vtb task ended with an error during shutdown", normalizeError(error));
-      });
-    },
-  };
+  return createExclusiveCronTask({
+    cronExpression,
+    logger,
+    run: runTask,
+    failureMessage: "vtb task failed",
+    shutdownFailureMessage: "vtb task ended with an error during shutdown",
+  });
 };
 
 const pollVtbSubscriptions = async (
@@ -725,7 +615,7 @@ const pollVtbSubscriptions = async (
         const undeliveredGroupIds = groupIds.filter(
           (groupId) => !activeSession?.deliveredGroupIds.includes(String(groupId)),
         );
-        const isRecentLive = isVtbLiveStartRecent(live.liveStartedAt, config.vtb.cron);
+        const isRecentLive = isVtbLiveStartRecent(live.liveStartedAt, config.vtb.cron, now);
         if (
           live.isLive &&
           !belongsToEndedSession &&
@@ -774,7 +664,7 @@ const pollVtbSubscriptions = async (
             liveStartedAt: live.liveStartedAt,
           });
         } else if (!live.isLive && session) {
-          const endedAt = session.endedAt ?? new Date();
+          const endedAt = session.endedAt ?? new Date(now);
           const endFans = session.endFans ?? fans;
           if (!session.endedAt) {
             await repository.markLiveSessionEnded(streamer.mid, endFans, endedAt);
@@ -820,7 +710,7 @@ const pollVtbSubscriptions = async (
         const dynamicState = await repository.getDynamicDeliveryState(streamer.mid);
         const isNewDynamic = !dynamicState || latestDynamic.publishedAt > dynamicState.publishedAt;
         const isCurrentDynamic = dynamicState?.publishedAt.getTime() === latestDynamic.publishedAt.getTime();
-        const isRecent = Date.now() - latestDynamic.publishedAt.getTime() <
+        const isRecent = now - latestDynamic.publishedAt.getTime() <
           config.vtb.dynamicPollMinutes * 60_000 + getVtbPollingIntervalMs(config.vtb.cron);
         const isLivePromotion = latestDynamic.description.includes("https://live.bilibili.com");
 
@@ -962,9 +852,13 @@ const getVtbPollingIntervalMs = (cronExpression: string) => {
  * API responses also omit live_time; while the stream is reported live, that
  * must not suppress its first notification.
  */
-const isVtbLiveStartRecent = (liveStartedAt: Date | undefined, cronExpression: string) =>
+const isVtbLiveStartRecent = (
+  liveStartedAt: Date | undefined,
+  cronExpression: string,
+  nowMs: number,
+) =>
   liveStartedAt === undefined ||
-  Date.now() - liveStartedAt.getTime() < getVtbPollingIntervalMs(cronExpression) + 60_000;
+  nowMs - liveStartedAt.getTime() < getVtbPollingIntervalMs(cronExpression) + 60_000;
 
 const startYtDlpUpdateTask = (config: MizConfig, logger: Logger): TaskRuntime => {
   if (!config.video.enabled) {
@@ -980,39 +874,20 @@ const startYtDlpUpdateTask = (config: MizConfig, logger: Logger): TaskRuntime =>
     return createNoopTask();
   }
 
-  let running = false;
-  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
-    if (running) {
-      logger.warn("plugin", "yt-dlp update task skipped: previous run is still active");
-      return;
-    }
-
-    running = true;
-    try {
-      await updateYtDlp(config.video);
-      logger.info("plugin", "yt-dlp updated");
-    } finally {
-      running = false;
-    }
+    await updateYtDlp(config.video);
+    logger.info("plugin", "yt-dlp updated");
   };
-
-  const task = cron.schedule(cronExpression, () => {
-    const wasRunning = running;
-    const run = runTask();
-    if (!wasRunning) {
-      currentRun = run;
-    }
-    void run.catch((error) => logger.error("plugin", "yt-dlp update failed", error));
-  });
 
   logger.info("plugin", "yt-dlp update task started", { cronExpression });
-  return {
-    stop: async () => {
-      task.stop();
-      await currentRun?.catch((error) => logger.warn("plugin", "yt-dlp update ended with an error during shutdown", error));
-    },
-  };
+  return createExclusiveCronTask({
+    cronExpression,
+    logger,
+    run: runTask,
+    skippedMessage: "yt-dlp update task skipped: previous run is still active",
+    failureMessage: "yt-dlp update failed",
+    shutdownFailureMessage: "yt-dlp update ended with an error during shutdown",
+  });
 };
 
 const startNewsTask = (config: MizConfig, gateway: Gateway, logger: Logger): TaskRuntime => {
@@ -1037,42 +912,23 @@ const startNewsTask = (config: MizConfig, gateway: Gateway, logger: Logger): Tas
     return createNoopTask();
   }
 
-  let running = false;
-  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
-    if (running) {
-      logger.warn("plugin", "news task skipped: previous run is still active");
-      return;
-    }
-
-    running = true;
-    try {
-      await pushNewsToConfiguredGroups(config, gateway, logger);
-    } finally {
-      running = false;
-    }
+    await pushNewsToConfiguredGroups(config, gateway, logger);
   };
-
-  const task = cron.schedule(cronExpression, () => {
-    const wasRunning = running;
-    const run = runTask();
-    if (!wasRunning) {
-      currentRun = run;
-    }
-    void run.catch((error) => logger.error("plugin", "news task failed", error));
-  });
 
   logger.info("plugin", "news task started", {
     cronExpression,
     groups: config.news.groupIds.length,
   });
 
-  return {
-    stop: async () => {
-      task.stop();
-      await currentRun?.catch((error) => logger.warn("plugin", "news task ended with an error during shutdown", error));
-    },
-  };
+  return createExclusiveCronTask({
+    cronExpression,
+    logger,
+    run: runTask,
+    skippedMessage: "news task skipped: previous run is still active",
+    failureMessage: "news task failed",
+    shutdownFailureMessage: "news task ended with an error during shutdown",
+  });
 };
 
 const pushNewsToConfiguredGroups = async (
@@ -1143,41 +999,20 @@ const startWallpaperTask = (
     return createNoopTask();
   }
 
-  let running = false;
-  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
-    if (running) {
-      logger.warn("plugin", "wallpaper task skipped: previous run is still active");
-      return;
-    }
-
-    running = true;
-    try {
-      await sendDailyWallpaper(config, gateway, logger);
-    } finally {
-      running = false;
-    }
+    await sendDailyWallpaper(config, gateway, logger);
   };
-
-  const task = cron.schedule(cronExpression, () => {
-    const wasRunning = running;
-    const run = runTask();
-    if (!wasRunning) {
-      currentRun = run;
-    }
-    void run.catch((error) => {
-      logger.error("plugin", "wallpaper task failed", error);
-    });
-  });
 
   logger.info("plugin", "wallpaper task started", { cronExpression });
 
-  return {
-    stop: async () => {
-      task.stop();
-      await currentRun?.catch((error) => logger.warn("plugin", "wallpaper task ended with an error during shutdown", error));
-    },
-  };
+  return createExclusiveCronTask({
+    cronExpression,
+    logger,
+    run: runTask,
+    skippedMessage: "wallpaper task skipped: previous run is still active",
+    failureMessage: "wallpaper task failed",
+    shutdownFailureMessage: "wallpaper task ended with an error during shutdown",
+  });
 };
 
 const sendDailyWallpaper = async (config: MizConfig, gateway: Gateway, logger: Logger) => {
@@ -1238,44 +1073,23 @@ const startFf14PriceAlertTask = (
     return createNoopTask();
   }
 
-  let running = false;
-  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
-    if (running) {
-      logger.warn("plugin", "ff14 price alert task skipped: previous run is still active");
-      return;
-    }
-
-    running = true;
-    try {
-      await runFf14PriceAlerts(config, gateway, logger);
-    } finally {
-      running = false;
-    }
+    await runFf14PriceAlerts(config, gateway, logger);
   };
-
-  const task = cron.schedule(cronExpression, () => {
-    const wasRunning = running;
-    const run = runTask();
-    if (!wasRunning) {
-      currentRun = run;
-    }
-    void run.catch((error) => {
-      logger.error("plugin", "ff14 price alert task failed", error);
-    });
-  });
 
   logger.info("plugin", "ff14 price alert task started", {
     cronExpression,
     alerts: alerts.length,
   });
 
-  return {
-    stop: async () => {
-      task.stop();
-      await currentRun?.catch((error) => logger.warn("plugin", "ff14 price alert task ended with an error during shutdown", error));
-    },
-  };
+  return createExclusiveCronTask({
+    cronExpression,
+    logger,
+    run: runTask,
+    skippedMessage: "ff14 price alert task skipped: previous run is still active",
+    failureMessage: "ff14 price alert task failed",
+    shutdownFailureMessage: "ff14 price alert task ended with an error during shutdown",
+  });
 };
 
 const runFf14PriceAlerts = async (
@@ -1351,14 +1165,4 @@ const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout
 const hasVtbApiEndpoints = (config: MizConfig["vtb"]) =>
   Boolean(config.userApiUrl && config.cardApiUrl && config.liveApiUrl && config.dynamicApiUrl);
 
-const normalizeError = (error: unknown) => {
-  if (error instanceof Error) {
-    return {
-      name: error.name,
-      message: error.message,
-      stack: error.stack,
-    };
-  }
-
-  return error;
-};
+const normalizeError = serializeError;

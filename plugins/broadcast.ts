@@ -1,6 +1,8 @@
 import type { MizPlugin } from "@/plugins";
 import { settleWithConcurrency } from "@/concurrency";
 import { getGroupIds } from "@/group-ids";
+import { isWhitelistedUser } from "@/group-permissions";
+import { summarizeError } from "@/errors";
 
 const MAX_BROADCAST_LENGTH = 1_000;
 
@@ -23,7 +25,7 @@ const broadcastPlugin: MizPlugin = {
       return;
     }
 
-    if (!isWhitelisted(message.userId, config.broadcast.whitelistUserIds)) {
+    if (!isWhitelistedUser(message.userId, config.broadcast.whitelistUserIds)) {
       await reply("📣 这支扩音器只对广播白名单成员开放。需要使用的话，请联系管理员。");
       return;
     }
@@ -49,7 +51,7 @@ const broadcastPlugin: MizPlugin = {
           }
           logger.error("plugin", "broadcast delivery failed", {
             groupId: groupIds[index],
-            error: normalizeError(result.reason),
+            error: summarizeError(result.reason),
           });
         }
       }
@@ -66,22 +68,13 @@ const broadcastPlugin: MizPlugin = {
           : `📣 公告已送到 ${sentCount} 个群，还有 ${failedGroupIds.length} 个卡在路上。可能遇到群禁言或连接异常，稍后可以再补发。`,
       );
     } catch (error) {
-      logger.error("plugin", "broadcast failed", normalizeError(error));
+      logger.error("plugin", "broadcast failed", summarizeError(error));
       await reply("这次广播没能顺利送出。确认一下群禁言和连接状态，稍后再试吧。");
     }
   },
 };
 
 export default broadcastPlugin;
-
-const isWhitelisted = (
-  userId: string | number | undefined,
-  whitelistUserIds: readonly (string | number)[],
-) => userId !== undefined && whitelistUserIds.some((id) => String(id) === String(userId));
-
-const normalizeError = (error: unknown) => error instanceof Error
-  ? { name: error.name, message: error.message }
-  : error;
 
 const isMutedGroupSendError = (error: unknown) => {
   if (!error || typeof error !== "object") {

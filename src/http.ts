@@ -1,5 +1,6 @@
 export const HTTP_RETRY_COUNT = 3;
 export const HTTP_RETRY_DELAY_MS = 10_000;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export type HttpRequestError = Error & Readonly<{ status: number; retryAfterMs?: number }>;
 
@@ -33,11 +34,16 @@ export const fetchWithRetry = async (url: string | URL, init: RetryRequestInit =
     ...requestInit
   } = init;
   let lastError: unknown;
-  const maximumRetries = Math.max(0, Math.floor(retryCount));
+  const maximumRetries = normalizeNonNegativeNumber(retryCount, "retryCount");
+  const baseRetryDelayMs = normalizeNonNegativeNumber(retryDelayMs, "retryDelayMs");
+  const maximumRetryJitterMs = normalizeNonNegativeNumber(retryJitterMs, "retryJitterMs");
+  const requestTimeoutMs = timeoutMs === undefined
+    ? undefined
+    : normalizeNonNegativeNumber(timeoutMs, "timeoutMs");
 
   for (let attempt = 0; attempt <= maximumRetries; attempt += 1) {
     try {
-      const timeoutSignal = timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs);
+      const timeoutSignal = requestTimeoutMs === undefined ? undefined : AbortSignal.timeout(requestTimeoutMs);
       const requestSignal = signal && timeoutSignal
         ? AbortSignal.any([signal, timeoutSignal])
         : signal ?? timeoutSignal;
@@ -60,9 +66,13 @@ export const fetchWithRetry = async (url: string | URL, init: RetryRequestInit =
       }
 
       const retryAfterMs = isHttpRequestError(error) ? error.retryAfterMs ?? 0 : 0;
-      const exponentialDelayMs = retryDelayMs * 2 ** attempt;
-      const jitterMs = retryJitterMs > 0 ? Math.random() * retryJitterMs : 0;
-      await delay(Math.max(retryAfterMs, exponentialDelayMs + jitterMs), signal ?? undefined);
+      const exponentialDelayMs = baseRetryDelayMs * 2 ** attempt;
+      const jitterMs = maximumRetryJitterMs > 0 ? Math.random() * maximumRetryJitterMs : 0;
+      const backoffMs = Math.min(
+        MAX_TIMER_DELAY_MS,
+        Math.max(retryAfterMs, exponentialDelayMs + jitterMs),
+      );
+      await delay(backoffMs, signal ?? undefined);
     }
   }
 
@@ -91,6 +101,14 @@ const parseRetryAfterMs = (value: string | null) => {
 
   const timestamp = Date.parse(value);
   return Number.isNaN(timestamp) ? undefined : Math.max(0, timestamp - Date.now());
+};
+
+const normalizeNonNegativeNumber = (value: number, name: string) => {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new RangeError(`${name} must be a finite non-negative number`);
+  }
+
+  return Math.floor(value);
 };
 
 export const readResponseBytes = async (response: Response, maximumBytes: number) => {
@@ -128,6 +146,12 @@ export const readResponseBytes = async (response: Response, maximumBytes: number
     reader.releaseLock();
   }
 };
+
+export const readResponseText = async (response: Response, maximumBytes: number) =>
+  new TextDecoder().decode(await readResponseBytes(response, maximumBytes));
+
+export const readResponseJson = async (response: Response, maximumBytes: number): Promise<unknown> =>
+  JSON.parse(await readResponseText(response, maximumBytes));
 
 const delay = (milliseconds: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {

@@ -1,4 +1,6 @@
 import type { MizPlugin } from "@/plugins";
+import { isGroupAdministrator, isWhitelistedUser } from "@/group-permissions";
+import { summarizeError } from "@/errors";
 import {
   createVtbNotificationMessage,
   formatDynamicMessage,
@@ -73,7 +75,7 @@ const vtbPlugin: MizPlugin = {
           await reply("主播关注名单跟着群聊走，回到目标群里管理吧。私聊仍然可以查询直播和动态。");
           return;
         }
-        if (!isGroupAdministrator(message.raw) && !isSubscriptionWhitelisted(
+        if (!isGroupAdministrator(message.raw) && !isWhitelistedUser(
           message.userId,
           config.vtb.subscriptionWhitelistUserIds,
         )) {
@@ -120,7 +122,7 @@ const vtbPlugin: MizPlugin = {
             logger.warn("plugin", "vtb subscription saved but database synchronization failed", {
               groupId: message.groupId,
               streamerName,
-              error: error instanceof Error ? { name: error.name, message: error.message } : error,
+              error: summarizeError(error),
             });
           }
           if (!databaseSynchronized) {
@@ -152,7 +154,7 @@ const vtbPlugin: MizPlugin = {
       }
 
       if (type === "sync") {
-        if (!isSyncWhitelisted(message.userId, config.vtb.syncWhitelistUserIds)) {
+        if (!isWhitelistedUser(message.userId, config.vtb.syncWhitelistUserIds)) {
           await reply("资料同步通道只对同步白名单成员开放。");
           return;
         }
@@ -235,23 +237,3 @@ const vtbPlugin: MizPlugin = {
 };
 
 export default vtbPlugin;
-
-const isSyncWhitelisted = (
-  userId: string | number | undefined,
-  whitelistUserIds: readonly (string | number)[],
-) => userId !== undefined && whitelistUserIds.some((id) => String(id) === String(userId));
-
-const isGroupAdministrator = (raw: Record<string, unknown>) => {
-  const sender = raw.sender;
-  if (!sender || typeof sender !== "object") {
-    return false;
-  }
-
-  const role = (sender as Record<string, unknown>).role;
-  return role === "admin" || role === "owner";
-};
-
-const isSubscriptionWhitelisted = (
-  userId: string | number | undefined,
-  whitelistUserIds: readonly (string | number)[],
-) => userId !== undefined && whitelistUserIds.some((id) => String(id) === String(userId));

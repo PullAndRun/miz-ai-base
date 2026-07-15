@@ -1,6 +1,6 @@
 import dayjs from "dayjs";
 import { z } from "zod";
-import { fetchWithRetry } from "@/http";
+import { fetchWithRetry, readResponseJson } from "@/http";
 
 const itemSearchResultSchema = z.looseObject({
   ID: z.number().int().positive(),
@@ -68,6 +68,7 @@ export type Ff14MarketResult = {
 
 const DEFAULT_MAX_LISTING_COUNT = 10;
 const FETCH_TIMEOUT_MS = 15_000;
+const MAX_FF14_RESPONSE_BYTES = 5 * 1024 * 1024;
 
 export const isFf14RegionKey = (value: string | undefined): value is Ff14RegionKey =>
   value !== undefined && value in FF14_REGION_NAMES;
@@ -160,7 +161,7 @@ const fetchJsonOnce = async <T>(url: string | URL, schema: z.ZodType<T>): Promis
     timeoutMs: FETCH_TIMEOUT_MS,
   });
 
-  return schema.parse(await response.json());
+  return schema.parse(await readResponseJson(response, MAX_FF14_RESPONSE_BYTES));
 };
 
 const fetchJson = fetchJsonOnce;

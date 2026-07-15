@@ -91,12 +91,36 @@ const redactValue = <T>(value: T, seen: WeakSet<object>): T => {
       ) as T;
   }
 
+  if (typeof value === "bigint") {
+    return value.toString() as T;
+  }
+
   if (Array.isArray(value)) {
     if (seen.has(value)) {
       return "[circular]" as T;
     }
     seen.add(value);
     return value.map((item) => redactValue(item, seen)) as T;
+  }
+
+  if (value instanceof Error) {
+    if (seen.has(value)) {
+      return "[circular]" as T;
+    }
+    seen.add(value);
+    return {
+      ...Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [
+          key,
+          /token|password|cookie|authorization|secret|api[_-]?key|signature/i.test(key)
+            ? "[redacted]"
+            : redactValue(item, seen),
+        ]),
+      ),
+      name: value.name,
+      message: redactValue(value.message, seen),
+      stack: redactValue(value.stack, seen),
+    } as T;
   }
 
   if (value && typeof value === "object") {

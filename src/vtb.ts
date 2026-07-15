@@ -1,6 +1,7 @@
 import dayjs from "dayjs";
 import { XMLParser } from "fast-xml-parser";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { createHash } from "node:crypto";
 import {
   PrismaClient,
   type Activity,
@@ -10,8 +11,9 @@ import {
   type ScheduleEvent,
 } from "@/generated/prisma/client";
 import { z } from "zod";
+import { createExpiringCache, readExpiringCache, writeExpiringCache } from "@/cache";
 import type { MizConfig, VtbConfig } from "@/config";
-import { fetchWithRetry, readResponseBytes } from "@/http";
+import { fetchWithRetry, readResponseBytes, readResponseJson, readResponseText } from "@/http";
 import { partitionVtbSubscriptionsByGroup } from "@/vtb-subscriptions";
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -24,7 +26,9 @@ const VTB_DYNAMIC_REQUEST_INTERVAL_MS = 750;
 const VTB_LIVE_QUERY_CACHE_MS = 60_000;
 const VTB_IMAGE_CACHE_MS = 10 * 60_000;
 const MAX_VTB_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_VTB_RESPONSE_BYTES = 5 * 1024 * 1024;
 const MAX_VTB_IMAGE_CACHE_ENTRIES = 16;
+const MAX_VTB_QUERY_CACHE_ENTRIES = 1_000;
 const VTB_RISK_CODES = new Set([-352, -412, -509, -799]);
 const textValueSchema = z.union([z.string(), z.number(), z.boolean()]);
 
@@ -135,10 +139,10 @@ const vtbRequestStates = new Map<string, {
   queue: Promise<void>;
 }>();
 const vtbInFlightRequests = new Map<string, Promise<unknown>>();
-const vtbLiveQueryCache = new Map<string, { live: VtbLiveInfo; expiresAt: number }>();
-const vtbCardQueryCache = new Map<string, { card: VtbCardInfo; expiresAt: number }>();
-const vtbDynamicQueryCache = new Map<string, { feed: VtbDynamicFeed; expiresAt: number }>();
-const vtbImageCache = new Map<string, { file: string; expiresAt: number }>();
+let vtbLiveQueryCache = createExpiringCache<string, VtbLiveInfo>(MAX_VTB_QUERY_CACHE_ENTRIES);
+let vtbCardQueryCache = createExpiringCache<string, VtbCardInfo>(MAX_VTB_QUERY_CACHE_ENTRIES);
+let vtbDynamicQueryCache = createExpiringCache<string, VtbDynamicFeed>(MAX_VTB_QUERY_CACHE_ENTRIES);
+let vtbImageCache = createExpiringCache<string, string>(MAX_VTB_IMAGE_CACHE_ENTRIES);
 
 export const getVtbRepository = async (config: MizConfig) => {
   if (!repositoryPromise) {
@@ -321,9 +325,12 @@ export const getVtbFanCount = async (mid: string, config: VtbConfig) => {
 };
 
 export const getVtbCardInfo = async (mid: string, config: VtbConfig): Promise<VtbCardInfo> => {
-  const cached = vtbCardQueryCache.get(getVtbCardCacheKey(config, mid));
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.card;
+  const cacheKey = getVtbCardCacheKey(config, mid);
+  const cacheRead = readExpiringCache(vtbCardQueryCache, cacheKey, Date.now());
+  vtbCardQueryCache = cacheRead.cache;
+  const cached = cacheRead.value;
+  if (cached) {
+    return cached;
   }
   return (await getVtbCardInfos([mid], config)).get(mid) ?? {};
 };
@@ -366,12 +373,15 @@ export const getVtbCardInfos = async (mids: readonly string[], config: VtbConfig
         ),
       });
     }
-    const expiresAt = Date.now() + (config.cardCacheMinutes ?? 30) * 60_000;
+    const cacheTimeToLiveMs = (config.cardCacheMinutes ?? 30) * 60_000;
     for (const mid of batch) {
-      vtbCardQueryCache.set(getVtbCardCacheKey(config, mid), {
-        card: cards.get(mid) ?? {},
-        expiresAt,
-      });
+      vtbCardQueryCache = writeExpiringCache(
+        vtbCardQueryCache,
+        getVtbCardCacheKey(config, mid),
+        cards.get(mid) ?? {},
+        cacheTimeToLiveMs,
+        Date.now(),
+      );
     }
   }
 
@@ -379,9 +389,12 @@ export const getVtbCardInfos = async (mids: readonly string[], config: VtbConfig
 };
 
 export const getVtbLiveInfo = async (streamer: VtbStreamer, config: VtbConfig): Promise<VtbLiveInfo> => {
-  const cached = vtbLiveQueryCache.get(getVtbLiveCacheKey(config, streamer.mid));
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.live;
+  const cacheKey = getVtbLiveCacheKey(config, streamer.mid);
+  const cacheRead = readExpiringCache(vtbLiveQueryCache, cacheKey, Date.now());
+  vtbLiveQueryCache = cacheRead.cache;
+  const cached = cacheRead.value;
+  if (cached) {
+    return cached;
   }
   const live = (await getVtbLiveInfos([streamer], config)).get(streamer.mid);
   if (!live) {
@@ -417,10 +430,13 @@ export const getVtbLiveInfos = async (streamers: readonly VtbStreamer[], config:
       }
       const result = results.get(streamer.mid);
       if (result) {
-        vtbLiveQueryCache.set(getVtbLiveCacheKey(config, streamer.mid), {
-          live: result,
-          expiresAt: Date.now() + VTB_LIVE_QUERY_CACHE_MS,
-        });
+        vtbLiveQueryCache = writeExpiringCache(
+          vtbLiveQueryCache,
+          getVtbLiveCacheKey(config, streamer.mid),
+          result,
+          VTB_LIVE_QUERY_CACHE_MS,
+          Date.now(),
+        );
       }
     }
   }
@@ -434,9 +450,11 @@ export const getVtbDynamics = async (
   retryCount = 0,
 ): Promise<VtbDynamicFeed> => {
   const dynamicUrl = `${config.dynamicApiUrl}${encodeURIComponent(streamer.mid)}`;
-  const cached = vtbDynamicQueryCache.get(dynamicUrl);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.feed;
+  const cacheRead = readExpiringCache(vtbDynamicQueryCache, dynamicUrl, Date.now());
+  vtbDynamicQueryCache = cacheRead.cache;
+  const cached = cacheRead.value;
+  if (cached) {
+    return cached;
   }
   const channel = dynamicSchema.parse(xmlParser.parse(await fetchDynamicText(dynamicUrl, retryCount))).rss.channel;
   const feed = {
@@ -457,10 +475,13 @@ export const getVtbDynamics = async (
       .filter((item): item is VtbDynamic => item.publishedAt !== undefined)
       .sort((left, right) => right.publishedAt.getTime() - left.publishedAt.getTime()),
   };
-  vtbDynamicQueryCache.set(dynamicUrl, {
+  vtbDynamicQueryCache = writeExpiringCache(
+    vtbDynamicQueryCache,
+    dynamicUrl,
     feed,
-    expiresAt: Date.now() + getVtbDynamicQueryCacheMs(config),
-  });
+    getVtbDynamicQueryCacheMs(config),
+    Date.now(),
+  );
   return feed;
 };
 
@@ -470,25 +491,25 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
     return undefined;
   }
 
-  const cached = vtbImageCache.get(url);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.file;
-  }
+  const cacheKey = `${url}\n${getVtbCredentialKey(config.bilibiliCookie)}`;
+  const cacheRead = readExpiringCache(vtbImageCache, cacheKey, Date.now());
+  vtbImageCache = cacheRead.cache;
+  const cached = cacheRead.value;
   if (cached) {
-    vtbImageCache.delete(url);
+    return cached;
   }
 
+  const requestHeaders = createVtbRequestHeaders(
+    config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined,
+  );
+  const requestInit = { headers: requestHeaders } satisfies RequestInit;
   const file = await runProtectedVtbRequest(
     url,
-    undefined,
+    requestInit,
     VTB_JSON_REQUEST_INTERVAL_MS,
     async () => {
       const response = await fetchWithRetry(url, {
-        headers: {
-          "user-agent": "Mozilla/5.0",
-          referer: "https://www.bilibili.com/",
-          ...(config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : {}),
-        },
+        ...requestInit,
         timeoutMs: FETCH_TIMEOUT_MS,
         retryCount: 1,
         retryDelayMs: 2_000,
@@ -508,14 +529,13 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
     },
   );
   recordVtbRequestSuccess(url);
-  while (vtbImageCache.size >= MAX_VTB_IMAGE_CACHE_ENTRIES) {
-    const oldestKey = vtbImageCache.keys().next().value;
-    if (oldestKey === undefined) {
-      break;
-    }
-    vtbImageCache.delete(oldestKey);
-  }
-  vtbImageCache.set(url, { file, expiresAt: Date.now() + VTB_IMAGE_CACHE_MS });
+  vtbImageCache = writeExpiringCache(
+    vtbImageCache,
+    cacheKey,
+    file,
+    VTB_IMAGE_CACHE_MS,
+    Date.now(),
+  );
   return file;
 };
 
@@ -1371,26 +1391,24 @@ const toOptionalMid = (value: string | undefined) => {
 };
 
 const fetchJson = async (url: string, headers?: Record<string, string>, init?: RequestInit) => {
+  const requestInit: RequestInit = {
+    ...init,
+    headers: createVtbRequestHeaders(headers, init?.headers),
+  };
   return runProtectedVtbRequest(
     url,
-    init,
+    requestInit,
     VTB_JSON_REQUEST_INTERVAL_MS,
     async () => {
       const response = await fetchWithRetry(url, {
-        ...init,
-        headers: {
-          "user-agent": "Mozilla/5.0",
-          referer: "https://www.bilibili.com/",
-          ...(headers ?? {}),
-          ...(init?.headers ?? {}),
-        },
+        ...requestInit,
         timeoutMs: FETCH_TIMEOUT_MS,
         retryCount: 1,
         retryDelayMs: 2_000,
         retryJitterMs: 3_000,
         retryRateLimited: false,
       });
-      return response.json();
+      return readResponseJson(response, MAX_VTB_RESPONSE_BYTES);
     },
   );
 };
@@ -1406,7 +1424,7 @@ const fetchText = async (url: string) => {
         retryCount: 0,
         retryRateLimited: false,
       });
-      return response.text();
+      return readResponseText(response, MAX_VTB_RESPONSE_BYTES);
     },
   );
   recordVtbRequestSuccess(url);
@@ -1424,6 +1442,7 @@ const runProtectedVtbRequest = async <T>(
   const requestKey = [
     init?.method?.toUpperCase() ?? "GET",
     url,
+    getRequestHeadersKey(init?.headers),
     typeof init?.body === "string" ? init.body : "",
   ].join("\n");
   const existingRequest = vtbInFlightRequests.get(requestKey);
@@ -1576,11 +1595,40 @@ const isVtbCooldownError = (error: unknown) =>
 const waitForVtbRequest = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
+const createVtbRequestHeaders = (...sources: Array<HeadersInit | undefined>) => {
+  const headers = new Headers({
+    "user-agent": "Mozilla/5.0",
+    referer: "https://www.bilibili.com/",
+  });
+  for (const source of sources) {
+    if (!source) {
+      continue;
+    }
+    new Headers(source).forEach((value, key) => headers.set(key, value));
+  }
+  return headers;
+};
+
+const getRequestHeadersKey = (headers: HeadersInit | undefined) => {
+  if (!headers) {
+    return "";
+  }
+
+  const serializedHeaders = Array.from(new Headers(headers).entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}:${value}`)
+    .join("\n");
+  return createHash("sha256").update(serializedHeaders).digest("base64url");
+};
+
 const getVtbLiveCacheKey = (config: VtbConfig, mid: string) =>
-  `${config.liveApiUrl}\n${mid}`;
+  `${config.liveApiUrl}\n${getVtbCredentialKey(config.bilibiliCookie)}\n${mid}`;
 
 const getVtbCardCacheKey = (config: VtbConfig, mid: string) =>
-  `${config.cardApiUrl}\n${mid}`;
+  `${config.cardApiUrl}\n${getVtbCredentialKey(config.bilibiliCookie)}\n${mid}`;
+
+const getVtbCredentialKey = (cookie: string) =>
+  cookie ? createHash("sha256").update(cookie).digest("base64url") : "";
 
 const getVtbDynamicQueryCacheMs = (config: VtbConfig) =>
   Math.max(60_000, Math.min(10 * 60_000, (config.dynamicPollMinutes ?? 15) * 30_000));

@@ -3,9 +3,11 @@ import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { VideoConfig } from "@/config";
+import { isWhitelistedUser } from "@/group-permissions";
 
 const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 const TRANSCODE_TIMEOUT_MS = 30 * 60_000;
+const PROCESS_FORCE_KILL_DELAY_MS = 5_000;
 const MAX_CAPTURED_PROCESS_OUTPUT_BYTES = 1024 * 1024;
 export const MAX_VIDEO_DURATION_SECONDS = 10 * 60;
 
@@ -36,7 +38,7 @@ export const isVideoUrl = (value: string) => {
 export const isWhitelistedVideoUser = (
   userId: number | string | undefined,
   whitelistUserIds: readonly (number | string)[],
-) => userId !== undefined && whitelistUserIds.some((id) => String(id) === String(userId));
+) => isWhitelistedUser(userId, whitelistUserIds);
 
 export const downloadVideo = async ({
   url,
@@ -66,13 +68,18 @@ export const downloadVideo = async ({
     "after_move:filepath",
     ...createRequestArgs(url, config),
   ];
-  const output = await runYtDlp(config, args);
-  const videoPath = await findDownloadedVideo(output, downloadDirectory, downloadStartedAt);
-  if (!videoPath) {
-    throw new Error("yt-dlp returned a missing video file");
-  }
+  try {
+    const output = await runYtDlp(config, args);
+    const videoPath = await findDownloadedVideo(output, downloadDirectory, downloadStartedAt, requestId);
+    if (!videoPath) {
+      throw new Error("yt-dlp returned a missing video file");
+    }
 
-  return videoPath;
+    return videoPath;
+  } catch (error) {
+    await deleteDownloadArtifacts(downloadDirectory, requestId);
+    throw error;
+  }
 };
 
 export const getVideoDuration = async (url: string, config: VideoConfig) => {
@@ -173,6 +180,7 @@ const runProcess = (
     let timedOut = false;
     let settled = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let forceKillTimeout: ReturnType<typeof setTimeout> | undefined;
     const settle = (callback: () => void) => {
       if (settled) {
         return;
@@ -182,11 +190,19 @@ const runProcess = (
       if (timeout) {
         clearTimeout(timeout);
       }
+      if (forceKillTimeout) {
+        clearTimeout(forceKillTimeout);
+      }
       callback();
     };
     timeout = setTimeout(() => {
       timedOut = true;
       child.kill();
+      forceKillTimeout = setTimeout(() => {
+        if (!settled) {
+          child.kill("SIGKILL");
+        }
+      }, PROCESS_FORCE_KILL_DELAY_MS);
     }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => appendCapturedOutput(stdout, chunk));
@@ -260,6 +276,7 @@ const findDownloadedVideo = async (
   output: string,
   downloadDirectory: string,
   downloadStartedAt: number,
+  requestId: string,
 ) => {
   const outputCandidates = output
     .split(/\r?\n/)
@@ -270,14 +287,19 @@ const findDownloadedVideo = async (
   for (const candidate of outputCandidates) {
     const videoPath = path.resolve(candidate);
     const file = await stat(videoPath).catch(() => undefined);
-    if (file?.isFile() && isFinalVideoPath(videoPath) && isPathInsideDirectory(videoPath, downloadDirectory)) {
+    if (
+      file?.isFile() &&
+      isFinalVideoPath(videoPath) &&
+      path.basename(videoPath).includes(requestId) &&
+      isPathInsideDirectory(videoPath, downloadDirectory)
+    ) {
       return videoPath;
     }
   }
 
   const candidates = await Promise.all(
     (await readdir(downloadDirectory, { withFileTypes: true }))
-      .filter((entry) => entry.isFile() && isFinalVideoPath(entry.name))
+      .filter((entry) => entry.isFile() && entry.name.includes(requestId) && isFinalVideoPath(entry.name))
       .map(async (entry) => {
         const videoPath = path.join(downloadDirectory, entry.name);
         return {
@@ -290,6 +312,15 @@ const findDownloadedVideo = async (
   return candidates
     .filter((candidate) => candidate.modifiedAt >= downloadStartedAt - 2_000)
     .sort((left, right) => right.modifiedAt - left.modifiedAt)[0]?.videoPath;
+};
+
+const deleteDownloadArtifacts = async (downloadDirectory: string, requestId: string) => {
+  const entries = await readdir(downloadDirectory, { withFileTypes: true }).catch(() => []);
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && entry.name.includes(requestId))
+      .map((entry) => rm(path.join(downloadDirectory, entry.name), { force: true }).catch(() => undefined)),
+  );
 };
 
 const isFinalVideoPath = (value: string) =>

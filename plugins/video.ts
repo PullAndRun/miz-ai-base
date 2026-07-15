@@ -1,4 +1,5 @@
 import type { MizPlugin } from "@/plugins";
+import type { Logger } from "@/logger";
 import {
   deleteDownloadedVideo,
   downloadVideo,
@@ -10,6 +11,9 @@ import {
   isWhitelistedVideoUser,
   prepareVideoForQq,
 } from "@/video";
+
+const VIDEO_SEND_TIMEOUT_MS = 10 * 60_000;
+const VIDEO_SEND_CLEANUP_GRACE_MS = 10 * 60_000;
 
 const videoPlugin: MizPlugin = {
   name: "video",
@@ -55,18 +59,38 @@ const videoPlugin: MizPlugin = {
 
       const downloadedVideoPath = await downloadVideo({ url, config: config.video });
       let videoPath = downloadedVideoPath;
+      let delayedCleanup = false;
       try {
         videoPath = await prepareVideoForQq(downloadedVideoPath, config.video);
-        await replyWithoutRetry({
-          type: "video",
-          data: {
-            file: await getNapcatVideoFile(videoPath, config.video),
-          },
-        });
+        try {
+          await replyWithoutRetry({
+            type: "video",
+            data: {
+              file: await getNapcatVideoFile(videoPath, config.video),
+            },
+          }, { timeoutMs: VIDEO_SEND_TIMEOUT_MS });
+        } catch (error) {
+          if (!isVideoSendTimeoutError(error)) {
+            throw error;
+          }
+
+          delayedCleanup = config.video.runtimeMode === "docker";
+          logger.warn("plugin", "video send timed out; NapCat may still complete the upload", {
+            userId: message.userId,
+            groupId: message.groupId,
+            timeoutMs: VIDEO_SEND_TIMEOUT_MS,
+            error,
+          });
+          return;
+        }
       } finally {
-        await deleteDownloadedVideo(videoPath);
-        if (videoPath !== downloadedVideoPath) {
-          await deleteDownloadedVideo(downloadedVideoPath);
+        const videoPaths = videoPath === downloadedVideoPath
+          ? [videoPath]
+          : [videoPath, downloadedVideoPath];
+        if (delayedCleanup) {
+          scheduleVideoCleanup(videoPaths, logger);
+        } else {
+          await cleanupVideoFiles(videoPaths);
         }
       }
       logger.info("plugin", "video sent", {
@@ -75,10 +99,28 @@ const videoPlugin: MizPlugin = {
         source: isBilibiliUrl(url) ? "bilibili" : "whitelist",
       });
     } catch (error) {
-      logger.error("plugin", "video download failed", error);
+      logger.error("plugin", "video processing or delivery failed", error);
       await reply("视频刚才在路上卡住了，稍后再试一次吧。如果内容需要登录，请让管理员检查对应站点的登录配置。");
     }
   },
 };
 
 export default videoPlugin;
+
+export const isVideoSendTimeoutError = (error: unknown) =>
+  typeof error === "object" &&
+  error !== null &&
+  (error as { code?: unknown }).code === "E_API_TIMEOUT";
+
+const cleanupVideoFiles = async (videoPaths: readonly string[]) => {
+  await Promise.all(videoPaths.map((videoPath) => deleteDownloadedVideo(videoPath)));
+};
+
+const scheduleVideoCleanup = (videoPaths: readonly string[], logger: Logger) => {
+  const timer = setTimeout(() => {
+    void cleanupVideoFiles(videoPaths).catch((error) => {
+      logger.warn("plugin", "delayed video cleanup failed", error);
+    });
+  }, VIDEO_SEND_CLEANUP_GRACE_MS);
+  timer.unref?.();
+};

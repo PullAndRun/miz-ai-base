@@ -1,5 +1,6 @@
 import dayjs from "dayjs";
 import type { MizPlugin, PluginContext } from "@/plugins";
+import { canManageGroupFeature } from "@/group-permissions";
 import { getVtbRepository } from "@/vtb";
 
 const MAX_REMINDER_CONTENT_LENGTH = 300;
@@ -59,7 +60,7 @@ const remindPlugin: MizPlugin = {
         return;
       }
 
-      const canManage = isReminderManager(message.raw, message.userId, config.reminder.manageWhitelistUserIds);
+      const canManage = canManageGroupFeature(message.raw, message.userId, config.reminder.manageWhitelistUserIds);
       const targetId = reminder.targetId ?? String(message.userId);
       if (targetId !== String(message.userId) && !canManage) {
         await reply("给自己挂提醒可以直接用；想提醒其他群友，需要管理员或提醒白名单权限。");
@@ -95,7 +96,7 @@ const remindPlugin: MizPlugin = {
 export default remindPlugin;
 
 const listReminders = async ({ config, message, reply }: ReminderContext) => {
-  const canManage = isReminderManager(message.raw, message.userId, config.reminder.manageWhitelistUserIds);
+  const canManage = canManageGroupFeature(message.raw, message.userId, config.reminder.manageWhitelistUserIds);
   const repository = await getVtbRepository(config);
   const reminders = await repository.listPendingReminders(
     message.groupId!,
@@ -127,7 +128,7 @@ const cancelReminder = async ({ config, message, reply }: ReminderContext, id: n
     return;
   }
 
-  const canManage = isReminderManager(message.raw, message.userId, config.reminder.manageWhitelistUserIds);
+  const canManage = canManageGroupFeature(message.raw, message.userId, config.reminder.manageWhitelistUserIds);
   if (String(reminder.creatorId) !== String(message.userId) && !canManage) {
     await reply("自己的提醒可以随时取下；管理别人创建的提醒需要管理员或提醒白名单权限。");
     return;
@@ -145,7 +146,7 @@ const editReminder = async ({ config, message, reply }: ReminderContext, id: num
     return;
   }
 
-  const canManage = isReminderManager(message.raw, message.userId, config.reminder.manageWhitelistUserIds);
+  const canManage = canManageGroupFeature(message.raw, message.userId, config.reminder.manageWhitelistUserIds);
   if (String(reminder.creatorId) !== String(message.userId) && !canManage) {
     await reply("自己的提醒可以随时调整；管理别人创建的提醒需要管理员或提醒白名单权限。");
     return;
@@ -210,24 +211,6 @@ const parseReminderSpec = (args: string): ReminderSpec | undefined => {
     targetId: target?.[1],
     content,
   };
-};
-
-const isReminderManager = (
-  raw: Record<string, unknown>,
-  userId: string | number | undefined,
-  whitelistUserIds: readonly (string | number)[],
-) => isGroupAdministrator(raw) || (
-  userId !== undefined && whitelistUserIds.some((id) => String(id) === String(userId))
-);
-
-const isGroupAdministrator = (raw: Record<string, unknown>) => {
-  const sender = raw.sender;
-  if (!sender || typeof sender !== "object") {
-    return false;
-  }
-
-  const role = (sender as Record<string, unknown>).role;
-  return role === "admin" || role === "owner";
 };
 
 const formatReminderSpec = (spec: ReminderSpec) => [

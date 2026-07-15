@@ -8,6 +8,8 @@ describe("group ID normalization", () => {
       { group_id: 123 },
       { group_id: "" },
       { group_id: Number.NaN },
+      { group_id: 1.5 },
+      { group_id: Number.MAX_SAFE_INTEGER + 1 },
       null,
     ])).toEqual(["123"]);
   });

@@ -26,17 +26,21 @@ export const findPluginCommand = (
   commandText: string,
   commandNames: readonly string[],
 ): PluginCommand | undefined => {
-  const names = [...commandNames].sort((left, right) => right.length - left.length);
   // Arguments may be written directly after a command name, e.g. `miz 占卜123`.
-  // Check longer command names first so overlapping names remain unambiguous.
-  const name = names.find((candidate) => {
+  // Select the longest matching name without sorting or allocating on every
+  // incoming message, so overlapping commands remain unambiguous.
+  let name: string | undefined;
+  for (const candidate of commandNames) {
     if (!commandText.startsWith(candidate)) {
-      return false;
+      continue;
     }
 
     const suffix = commandText.slice(candidate.length);
-    return suffix === "" || /^\s/.test(suffix) || /[^\x00-\x7F]$/.test(candidate);
-  });
+    const matches = suffix === "" || /^\s/.test(suffix) || /[^\x00-\x7F]$/.test(candidate);
+    if (matches && (name === undefined || candidate.length > name.length)) {
+      name = candidate;
+    }
+  }
 
   return name === undefined
     ? undefined

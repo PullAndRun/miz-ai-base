@@ -1,6 +1,7 @@
 import dayjs from "dayjs";
 import type { MizPlugin } from "@/plugins";
 import { canManageGroupFeature } from "@/group-permissions";
+import { parseStrictLocalDateTime } from "@/local-date-time";
 import { getVtbRepository } from "@/vtb";
 
 const MAX_TODO_CONTENT_LENGTH = 300;
@@ -28,7 +29,7 @@ const todoPlugin: MizPlugin = {
       return;
     }
 
-    const action = parseTodoAction(command.args);
+    const action = parseTodoAction(command.args, Date.now());
     if (!action) {
       await reply(createTodoUsage());
       return;
@@ -121,7 +122,7 @@ const todoPlugin: MizPlugin = {
 
 export default todoPlugin;
 
-export const parseTodoAction = (args: string): TodoAction | undefined => {
+export const parseTodoAction = (args: string, nowMs: number): TodoAction | undefined => {
   const normalized = args.trim();
   if (normalized === "list") return { type: "list" as const };
 
@@ -139,8 +140,8 @@ export const parseTodoAction = (args: string): TodoAction | undefined => {
   let dueAt: Date | undefined;
   const dateTime = /^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\s+([\s\S]+)$/.exec(remaining);
   if (dateTime) {
-    dueAt = parseLocalDateTime(dateTime[1], dateTime[2]);
-    if (!dueAt || dueAt <= new Date()) return undefined;
+    dueAt = parseStrictLocalDateTime(dateTime[1], dateTime[2]);
+    if (!dueAt || dueAt.getTime() <= nowMs) return undefined;
     remaining = dateTime[3].trim();
   }
 
@@ -153,19 +154,6 @@ export const parseTodoAction = (args: string): TodoAction | undefined => {
   const content = (target?.[2] ?? remaining).trim();
   if (!content || content.length > MAX_TODO_CONTENT_LENGTH) return undefined;
   return { type: "add" as const, dueAt, assigneeId, content };
-};
-
-const parseLocalDateTime = (date: string, time: string) => {
-  const value = new Date(`${date}T${time}:00`);
-  if (
-    Number.isNaN(value.getTime()) ||
-    value.getFullYear() !== Number(date.slice(0, 4)) ||
-    value.getMonth() + 1 !== Number(date.slice(5, 7)) ||
-    value.getDate() !== Number(date.slice(8, 10)) ||
-    value.getHours() !== Number(time.slice(0, 2)) ||
-    value.getMinutes() !== Number(time.slice(3, 5))
-  ) return undefined;
-  return value;
 };
 
 const createTodoUsage = () => [

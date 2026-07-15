@@ -1,5 +1,7 @@
 import dayjs from "dayjs";
 import type { MizPlugin } from "@/plugins";
+import { canManageGroupFeature } from "@/group-permissions";
+import { parseStrictLocalDateTime } from "@/local-date-time";
 import { getVtbRepository } from "@/vtb";
 
 const MAX_SCHEDULE_CONTENT_LENGTH = 300;
@@ -20,7 +22,7 @@ const schedulePlugin: MizPlugin = {
       return;
     }
 
-    const action = parseScheduleAction(command.args);
+    const action = parseScheduleAction(command.args, Date.now());
     if (!action) {
       await reply("📅 群日程可以这样安排：\n添加：miz schedule add 2030-08-01 20:00 活动内容\n查看：miz schedule list\n取消：miz schedule cancel 编号\n时间请写成 YYYY-MM-DD HH:mm，并且要晚于现在。");
       return;
@@ -41,7 +43,7 @@ const schedulePlugin: MizPlugin = {
         return;
       }
 
-      if (!isScheduleManager(message.raw, message.userId, config.schedule.manageWhitelistUserIds)) {
+      if (!canManageGroupFeature(message.raw, message.userId, config.schedule.manageWhitelistUserIds)) {
         await reply("翻日程表可以直接用；添加或取消安排需要群主、群管理员或日程白名单权限。");
         return;
       }
@@ -77,7 +79,7 @@ const schedulePlugin: MizPlugin = {
 
 export default schedulePlugin;
 
-export const parseScheduleAction = (args: string) => {
+export const parseScheduleAction = (args: string, nowMs: number) => {
   const normalized = args.trim();
   if (normalized === "list") {
     return { type: "list" as const };
@@ -93,16 +95,11 @@ export const parseScheduleAction = (args: string) => {
     return undefined;
   }
 
-  const eventAt = new Date(`${add[1]}T${add[2]}:00`);
+  const eventAt = parseStrictLocalDateTime(add[1], add[2]);
   const content = add[3].trim();
   if (
-    Number.isNaN(eventAt.getTime()) ||
-    eventAt <= new Date() ||
-    eventAt.getFullYear() !== Number(add[1].slice(0, 4)) ||
-    eventAt.getMonth() + 1 !== Number(add[1].slice(5, 7)) ||
-    eventAt.getDate() !== Number(add[1].slice(8, 10)) ||
-    eventAt.getHours() !== Number(add[2].slice(0, 2)) ||
-    eventAt.getMinutes() !== Number(add[2].slice(3, 5)) ||
+    !eventAt ||
+    eventAt.getTime() <= nowMs ||
     !content ||
     content.length > MAX_SCHEDULE_CONTENT_LENGTH
   ) {
@@ -110,22 +107,4 @@ export const parseScheduleAction = (args: string) => {
   }
 
   return { type: "add" as const, eventAt, content };
-};
-
-const isScheduleManager = (
-  raw: Record<string, unknown>,
-  userId: string | number | undefined,
-  whitelistUserIds: readonly (string | number)[],
-) => isGroupAdministrator(raw) || (
-  userId !== undefined && whitelistUserIds.some((id) => String(id) === String(userId))
-);
-
-const isGroupAdministrator = (raw: Record<string, unknown>) => {
-  const sender = raw.sender;
-  if (!sender || typeof sender !== "object") {
-    return false;
-  }
-
-  const role = (sender as Record<string, unknown>).role;
-  return role === "admin" || role === "owner";
 };

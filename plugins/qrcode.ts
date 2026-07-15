@@ -1,5 +1,6 @@
 import type { MizPlugin } from "@/plugins";
 import { createQrCode, decodeQrCode } from "@/qrcode";
+import { summarizeError } from "@/errors";
 
 const qrcodePlugin: MizPlugin = {
   name: "qrcode",
@@ -28,7 +29,7 @@ const qrcodePlugin: MizPlugin = {
         const text = await decodeQrCode(imageSource);
         await reply(`🔍 二维码读出来啦\n\n${text}`);
       } catch (error) {
-        logger.warn("plugin", "qrcode decode failed", normalizeError(error));
+        logger.warn("plugin", "qrcode decode failed", summarizeError(error));
         await reply("这个二维码有点看不清。换一张更清晰、四周完整的图片再试吧，大小不要超过 10MB。");
       }
       return;
@@ -41,7 +42,7 @@ const qrcodePlugin: MizPlugin = {
         data: { file: `base64://${image.toString("base64")}` },
       });
     } catch (error) {
-      logger.warn("plugin", "qrcode generation failed", normalizeError(error));
+      logger.warn("plugin", "qrcode generation failed", summarizeError(error));
       await reply("二维码这次没画出来。确认内容不是空白、长度不超过 1000 个字符，再试一次吧。");
     }
   },
@@ -76,7 +77,3 @@ const findImageSource = (value: unknown): string | undefined => {
 
   return undefined;
 };
-
-const normalizeError = (error: unknown) => error instanceof Error
-  ? { name: error.name, message: error.message }
-  : error;

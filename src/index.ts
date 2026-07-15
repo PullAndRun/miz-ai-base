@@ -77,20 +77,23 @@ const createAppRuntime = async (
   logger: Logger,
 ): Promise<AppRuntime> => {
   let detachPluginHandler: (() => void) | undefined;
+  let taskRuntime: Awaited<ReturnType<typeof startScheduledTasks>> | undefined;
 
   try {
     const config = await prepareVtbSubscriptions(loadedConfig, gateway, logger);
     await syncConfiguredVtbStreamersOnStartup(config, logger);
     const plugins = await createPluginRuntime(config, gateway, logger);
+    const tasks = await startScheduledTasks(config, gateway, logger);
+    taskRuntime = tasks;
     const detach = gateway.onMessage(plugins.handleMessage);
     detachPluginHandler = detach;
-    const tasks = await startScheduledTasks(config, gateway, logger);
     let stopPromise: Promise<void> | undefined;
     return {
       config,
       stop: () => {
         stopPromise ??= (async () => {
           detach();
+          await plugins.stop();
           await tasks.stop();
         })();
         return stopPromise;
@@ -98,9 +101,15 @@ const createAppRuntime = async (
     };
   } catch (error) {
     detachPluginHandler?.();
-    await closeVtbRepository().catch((closeError) => {
-      logger.warn("plugin", "database connection failed to close after runtime startup error", closeError);
-    });
+    if (taskRuntime) {
+      await taskRuntime.stop().catch((stopError) => {
+        logger.warn("plugin", "scheduled tasks failed to stop after runtime startup error", stopError);
+      });
+    } else {
+      await closeVtbRepository().catch((closeError) => {
+        logger.warn("plugin", "database connection failed to close after runtime startup error", closeError);
+      });
+    }
     throw error;
   }
 };

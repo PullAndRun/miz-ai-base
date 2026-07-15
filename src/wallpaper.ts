@@ -1,8 +1,11 @@
 import { z } from "zod";
-import { fetchWithRetry, readResponseBytes } from "@/http";
+import { createBoundedCache, readBoundedCache, writeBoundedCache } from "@/cache";
+import { fetchWithRetry, readResponseBytes, readResponseJson } from "@/http";
 
 const FETCH_TIMEOUT_MS = 20_000;
+const MAX_WALLPAPER_METADATA_BYTES = 1024 * 1024;
 const MAX_WALLPAPER_BYTES = 25 * 1024 * 1024;
+const MAX_WALLPAPER_CACHE_ENTRIES = 4;
 
 const bingImageSchema = z.looseObject({
   url: z.string().min(1),
@@ -28,21 +31,24 @@ export type Wallpaper = {
   imageBase64: string;
 };
 
-let cachedWallpaper: Wallpaper | undefined;
-let pendingWallpaperRequest: Promise<Wallpaper> | undefined;
+let cachedWallpapers = createBoundedCache<string, Wallpaper>(MAX_WALLPAPER_CACHE_ENTRIES);
+const pendingWallpaperRequests = new Map<string, Promise<Wallpaper>>();
 
 /**
  * Fetches the lightweight daily metadata on every request, but only downloads
  * the image itself when Bing publishes a new wallpaper.
  */
 export const getDailyWallpaper = (apiUrl: string, imageBaseUrl: string): Promise<Wallpaper> => {
-  if (!pendingWallpaperRequest) {
-    pendingWallpaperRequest = refreshDailyWallpaper(apiUrl, imageBaseUrl).finally(() => {
-      pendingWallpaperRequest = undefined;
+  const cacheKey = `${apiUrl}\n${imageBaseUrl}`;
+  let pendingRequest = pendingWallpaperRequests.get(cacheKey);
+  if (!pendingRequest) {
+    pendingRequest = refreshDailyWallpaper(cacheKey, apiUrl, imageBaseUrl).finally(() => {
+      pendingWallpaperRequests.delete(cacheKey);
     });
+    pendingWallpaperRequests.set(cacheKey, pendingRequest);
   }
 
-  return pendingWallpaperRequest;
+  return pendingRequest;
 };
 
 export const createWallpaperMessage = (wallpaper: Wallpaper) => [
@@ -73,7 +79,14 @@ export const createWallpaperMessage = (wallpaper: Wallpaper) => [
   },
 ];
 
-const refreshDailyWallpaper = async (apiUrl: string, imageBaseUrl: string): Promise<Wallpaper> => {
+const refreshDailyWallpaper = async (
+  cacheKey: string,
+  apiUrl: string,
+  imageBaseUrl: string,
+): Promise<Wallpaper> => {
+  const cachedWallpaperRead = readBoundedCache(cachedWallpapers, cacheKey);
+  cachedWallpapers = cachedWallpaperRead.cache;
+  const cachedWallpaper = cachedWallpaperRead.value;
   try {
     const image = await fetchWallpaperMetadata(apiUrl);
     const id = image.hsh ?? image.url;
@@ -83,14 +96,15 @@ const refreshDailyWallpaper = async (apiUrl: string, imageBaseUrl: string): Prom
     }
 
     const imageBase64 = await fetchImageAsBase64(resolveImageUrl(image.url, imageBaseUrl));
-    cachedWallpaper = {
+    const wallpaper = {
       id,
       date: image.startdate ?? image.start_date,
       title: cleanText(image.title),
       copyright: cleanText(image.copyright) ?? "Bing 每日一图",
       imageBase64,
     };
-    return cachedWallpaper;
+    cachedWallpapers = writeBoundedCache(cachedWallpapers, cacheKey, wallpaper);
+    return wallpaper;
   } catch (error) {
     if (cachedWallpaper) {
       return cachedWallpaper;
@@ -103,7 +117,9 @@ const refreshDailyWallpaper = async (apiUrl: string, imageBaseUrl: string): Prom
 const fetchWallpaperMetadata = async (apiUrl: string) => {
   const response = await fetchWithRetry(apiUrl, { timeoutMs: FETCH_TIMEOUT_MS });
 
-  const payload = bingWallpaperSchema.parse(await response.json());
+  const payload = bingWallpaperSchema.parse(
+    await readResponseJson(response, MAX_WALLPAPER_METADATA_BYTES),
+  );
   if (payload.images?.[0]) {
     return payload.images[0];
   }

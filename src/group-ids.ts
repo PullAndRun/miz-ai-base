@@ -14,7 +14,7 @@ export const getGroupIds = (value: unknown): GroupId[] => {
 
       const groupId = (group as Record<string, unknown>).group_id;
       const normalizedGroupId = typeof groupId === "string" ? groupId.trim() : groupId;
-      return (typeof normalizedGroupId === "number" && Number.isFinite(normalizedGroupId)) ||
+      return (typeof normalizedGroupId === "number" && Number.isSafeInteger(normalizedGroupId)) ||
         (typeof normalizedGroupId === "string" && normalizedGroupId)
         ? [String(normalizedGroupId), normalizedGroupId]
         : undefined;

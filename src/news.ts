@@ -1,9 +1,11 @@
 import { z } from "zod";
+import { createBoundedCache, readBoundedCache, writeBoundedCache } from "@/cache";
 import type { MizConfig } from "@/config";
-import { fetchWithRetry } from "@/http";
+import { fetchWithRetry, readResponseJson } from "@/http";
 import { getVtbRepository } from "@/vtb";
 
 const FETCH_TIMEOUT_MS = 15_000;
+const MAX_NEWS_RESPONSE_BYTES = 5 * 1024 * 1024;
 const MAX_SAVED_NEWS = 100;
 const MAX_SENT_NEWS_TARGET_CACHES = 500;
 const NEWS_LIMIT = 10;
@@ -34,11 +36,11 @@ export type News = {
 };
 
 type SentNewsCache = {
-  ids: string[];
-  idSet: Set<string>;
+  ids: readonly string[];
+  idSet: ReadonlySet<string>;
 };
 
-const sentNewsByTarget = new Map<string, SentNewsCache>();
+let sentNewsByTarget = createBoundedCache<string, SentNewsCache>(MAX_SENT_NEWS_TARGET_CACHES);
 const deliveryQueues = new Map<string, Promise<void>>();
 
 /** Serializes delivery so a story is recorded only after a successful send. */
@@ -59,14 +61,24 @@ export const deliverUnsentNews = async (
   await previousDelivery;
   try {
     const sentNews = await getSentNewsCache(config, targetKey);
-    const freshNews = (availableNews ?? await fetchFinanceNews(apiUrl))
-      .filter((news) => !sentNews.idSet.has(news.id));
+    const seenNewsIds = new Set(sentNews.idSet);
+    const freshNews = (availableNews ?? await fetchFinanceNews(apiUrl)).filter((news) => {
+      if (seenNewsIds.has(news.id)) {
+        return false;
+      }
+      seenNewsIds.add(news.id);
+      return true;
+    });
     if (freshNews.length === 0) {
       return [];
     }
 
     await deliver(freshNews);
-    rememberSentNews(sentNews, freshNews);
+    sentNewsByTarget = writeBoundedCache(
+      sentNewsByTarget,
+      targetKey,
+      rememberSentNews(sentNews, freshNews),
+    );
     await persistDeliveredNews(config, targetKey, freshNews);
     return freshNews;
   } finally {
@@ -102,7 +114,7 @@ export const fetchFinanceNews = async (apiUrl: string): Promise<News[]> => {
     timeoutMs: FETCH_TIMEOUT_MS,
   });
 
-  const payload = financeNewsResponseSchema.parse(await response.json());
+  const payload = financeNewsResponseSchema.parse(await readResponseJson(response, MAX_NEWS_RESPONSE_BYTES));
   const items = findNewsItems(payload);
   const seenIds = new Set<string>();
   const news: News[] = [];
@@ -208,52 +220,32 @@ const removeOverlappingText = (title: string, detail: string | undefined) => {
 };
 
 const getSentNewsCache = async (config: MizConfig, targetKey: string) => {
-  const existingCache = sentNewsByTarget.get(targetKey);
+  const existingCacheRead = readBoundedCache(sentNewsByTarget, targetKey);
+  sentNewsByTarget = existingCacheRead.cache;
+  const existingCache = existingCacheRead.value;
   if (existingCache) {
-    touchSentNewsCache(targetKey, existingCache);
     return existingCache;
   }
 
-  const cache: SentNewsCache = { ids: [], idSet: new Set<string>() };
+  let cache: SentNewsCache = { ids: [], idSet: new Set<string>() };
   try {
     const ids = await getVtbRepository(config).then((repository) =>
       repository.getDeliveredNewsIds(targetKey, MAX_SAVED_NEWS),
     );
     // Repository results are newest-first, while the in-memory queue evicts
     // from the front. Store oldest-first so freshly delivered IDs survive.
-    cache.ids.push(...ids.slice(0, MAX_SAVED_NEWS).reverse());
-    cache.idSet = new Set(cache.ids);
+    const cachedIds = ids.slice(0, MAX_SAVED_NEWS).reverse();
+    cache = { ids: cachedIds, idSet: new Set(cachedIds) };
   } catch {
     // News remains usable if the optional persistence table has not been migrated yet.
   }
-  touchSentNewsCache(targetKey, cache);
+  sentNewsByTarget = writeBoundedCache(sentNewsByTarget, targetKey, cache);
   return cache;
 };
 
-const touchSentNewsCache = (targetKey: string, cache: SentNewsCache) => {
-  sentNewsByTarget.delete(targetKey);
-  sentNewsByTarget.set(targetKey, cache);
-  while (sentNewsByTarget.size > MAX_SENT_NEWS_TARGET_CACHES) {
-    const oldestTarget = sentNewsByTarget.keys().next().value;
-    if (oldestTarget === undefined) {
-      return;
-    }
-    sentNewsByTarget.delete(oldestTarget);
-  }
-};
-
-const rememberSentNews = (cache: SentNewsCache, news: readonly News[]) => {
-  for (const item of news) {
-    cache.ids.push(item.id);
-    cache.idSet.add(item.id);
-  }
-
-  while (cache.ids.length > MAX_SAVED_NEWS) {
-    const oldestId = cache.ids.shift();
-    if (oldestId) {
-      cache.idSet.delete(oldestId);
-    }
-  }
+const rememberSentNews = (cache: SentNewsCache, news: readonly News[]): SentNewsCache => {
+  const ids = [...cache.ids, ...news.map((item) => item.id)].slice(-MAX_SAVED_NEWS);
+  return { ids, idSet: new Set(ids) };
 };
 
 const persistDeliveredNews = async (config: MizConfig, targetKey: string, news: readonly News[]) => {

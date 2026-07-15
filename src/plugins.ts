@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import type { MizConfig } from "@/config";
-import type { Gateway, IncomingMessage } from "@/gateway";
+import type { Gateway, IncomingMessage, MessageSendOptions } from "@/gateway";
 import type { Logger } from "@/logger";
 import { findPluginCommand, parseCommandText } from "@/plugin-command";
 
@@ -26,7 +26,7 @@ export type PluginContext = {
   command: PluginCommand;
   message: IncomingMessage;
   reply(message: unknown): Promise<unknown>;
-  replyWithoutRetry(message: unknown): Promise<unknown>;
+  replyWithoutRetry(message: unknown, options?: MessageSendOptions): Promise<unknown>;
   replyForward(messages: readonly ForwardMessageContent[], options?: {
     title?: string;
     source?: string;
@@ -50,6 +50,7 @@ export type MizPlugin = {
 
 export type PluginRuntime = {
   handleMessage(message: IncomingMessage): Promise<void>;
+  stop(): Promise<void>;
 };
 
 const nonEmptyStringSchema = z.string().trim().min(1);
@@ -97,8 +98,14 @@ export const createPluginRuntime = async (
     commands: Array.from(pluginsByCommand.keys()),
   });
 
-  return {
-    handleMessage: async (message) => {
+  let stopping = false;
+  const inFlightHandlers = new Set<Promise<void>>();
+  const handleMessage = (message: IncomingMessage) => {
+    if (stopping) {
+      return Promise.resolve();
+    }
+
+    const execution = (async () => {
       await notifyPluginsOfMessage({
         config,
         gateway,
@@ -115,6 +122,20 @@ export const createPluginRuntime = async (
         pluginInfo,
         pluginsByCommand,
       });
+    })();
+    inFlightHandlers.add(execution);
+    void execution.then(
+      () => inFlightHandlers.delete(execution),
+      () => inFlightHandlers.delete(execution),
+    );
+    return execution;
+  };
+
+  return {
+    handleMessage,
+    stop: async () => {
+      stopping = true;
+      await Promise.allSettled([...inFlightHandlers]);
     },
   };
 };
@@ -140,26 +161,13 @@ const notifyPluginsOfMessage = async ({
     }
 
     try {
-      await plugin.onMessage({
+      await plugin.onMessage(createPluginMessageContext({
         config,
         message,
         gateway,
         logger,
-        plugins: pluginInfo,
-        commandPrefix: config.plugins.commandPrefix,
-        reply: (replyMessage) => replyToMessage(gateway, message, replyMessage),
-        replyWithoutRetry: (replyMessage) => replyToMessageWithoutRetry(gateway, message, replyMessage),
-        replyForward: (messages, options) =>
-          gateway.sendForwardMessage(
-            message,
-            messages,
-            {
-              title: options?.title,
-              source: options?.source,
-              summary: options?.summary,
-            },
-          ),
-      });
+        pluginInfo,
+      }));
     } catch (error) {
       logger.error("plugin", `message hook failed: ${plugin.name}`, error);
     }
@@ -316,25 +324,48 @@ const dispatchPluginCommand = async ({
   try {
     await plugin.handle({
       command,
-      config,
-      message,
-      gateway,
-      logger,
-      plugins: pluginInfo,
-      commandPrefix: config.plugins.commandPrefix,
-      reply: (replyMessage) => replyToMessage(gateway, message, replyMessage),
-      replyWithoutRetry: (replyMessage) => replyToMessageWithoutRetry(gateway, message, replyMessage),
-      replyForward: (messages, options) =>
-        gateway.sendForwardMessage(message, messages, {
-          title: options?.title,
-          source: options?.source,
-          summary: options?.summary,
-        }),
+      ...createPluginMessageContext({
+        config,
+        message,
+        gateway,
+        logger,
+        pluginInfo,
+      }),
     });
   } catch (error) {
     logger.error("plugin", `plugin failed: ${plugin.name}`, error);
   }
 };
+
+const createPluginMessageContext = ({
+  config,
+  gateway,
+  logger,
+  message,
+  pluginInfo,
+}: {
+  config: MizConfig;
+  gateway: Gateway;
+  logger: Logger;
+  message: IncomingMessage;
+  pluginInfo: readonly PluginInfo[];
+}): PluginMessageContext => ({
+  config,
+  message,
+  gateway,
+  logger,
+  plugins: pluginInfo,
+  commandPrefix: config.plugins.commandPrefix,
+  reply: (replyMessage) => replyToMessage(gateway, message, replyMessage),
+  replyWithoutRetry: (replyMessage, options) =>
+    replyToMessageWithoutRetry(gateway, message, replyMessage, options),
+  replyForward: (messages, options) =>
+    gateway.sendForwardMessage(message, messages, {
+      title: options?.title,
+      source: options?.source,
+      summary: options?.summary,
+    }),
+});
 
 const replyToMessage = (gateway: Gateway, message: IncomingMessage, replyMessage: unknown) => {
   if (message.groupId !== undefined) {
@@ -348,13 +379,18 @@ const replyToMessage = (gateway: Gateway, message: IncomingMessage, replyMessage
   throw new Error("Cannot reply: message has no group_id or user_id");
 };
 
-const replyToMessageWithoutRetry = (gateway: Gateway, message: IncomingMessage, replyMessage: unknown) => {
+const replyToMessageWithoutRetry = (
+  gateway: Gateway,
+  message: IncomingMessage,
+  replyMessage: unknown,
+  options?: MessageSendOptions,
+) => {
   if (message.groupId !== undefined) {
-    return gateway.sendGroupMessageWithoutRetry(message.groupId, replyMessage);
+    return gateway.sendGroupMessageWithoutRetry(message.groupId, replyMessage, options);
   }
 
   if (message.userId !== undefined) {
-    return gateway.sendPrivateMessageWithoutRetry(message.userId, replyMessage);
+    return gateway.sendPrivateMessageWithoutRetry(message.userId, replyMessage, options);
   }
 
   throw new Error("Cannot reply: message has no group_id or user_id");

@@ -425,18 +425,26 @@ export const loadConfig = async (): Promise<MizConfig> => {
     throw new Error(`Config file not found: ${CONFIG_PATH}`);
   }
 
+  const runtimeMode = getRuntimeMode();
+  const [configSource, ff14Config, vtbConfig, localConfig, dockerConfig] = await Promise.all([
+    configFile.text(),
+    loadOptionalConfig(FF14_CONFIG_PATH),
+    loadOptionalConfig(VTB_CONFIG_PATH),
+    loadOptionalConfig(LOCAL_CONFIG_PATH),
+    runtimeMode === "docker" ? loadDockerConfig() : Promise.resolve({}),
+  ]);
   const normalConfig = mergeConfig(
     mergeConfig(
       mergeConfig(
-        Bun.TOML.parse(await configFile.text()),
-        await loadOptionalConfig(FF14_CONFIG_PATH),
+        Bun.TOML.parse(configSource),
+        ff14Config,
       ),
-      await loadOptionalConfig(VTB_CONFIG_PATH),
+      vtbConfig,
     ),
-    await loadOptionalConfig(LOCAL_CONFIG_PATH),
+    localConfig,
   );
-  const source = getRuntimeMode() === "docker"
-    ? mergeConfig(normalConfig, await loadDockerConfig())
+  const source = runtimeMode === "docker"
+    ? mergeConfig(normalConfig, dockerConfig)
     : normalConfig;
   return appConfigSchema.parse(source).miz;
 };

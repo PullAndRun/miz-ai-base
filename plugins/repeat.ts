@@ -1,4 +1,10 @@
 import type { MizPlugin, PluginMessageContext } from "@/plugins";
+import {
+  createBoundedCache,
+  deleteBoundedCacheEntry,
+  readBoundedCache,
+  writeBoundedCache,
+} from "@/cache";
 import { parseCommandText } from "@/plugin-command";
 
 type RepeatState = {
@@ -6,7 +12,8 @@ type RepeatState = {
   count: number;
 };
 
-const repeatStates = new Map<string, RepeatState>();
+const MAX_REPEAT_GROUP_STATES = 5_000;
+let repeatStates = createBoundedCache<string, RepeatState>(MAX_REPEAT_GROUP_STATES);
 
 const repeatPlugin: MizPlugin = {
   name: "repeat",
@@ -27,13 +34,15 @@ const repeatIfNeeded = async ({ commandPrefix, message, plugins, reply }: Plugin
   const candidate = getRepeatCandidate(message.text, message.raw.message);
   const commandNames = plugins.flatMap((plugin) => plugin.commands);
   if (!candidate || parseCommandText(message.text, commandPrefix, commandNames) !== undefined) {
-    repeatStates.delete(groupKey);
+    repeatStates = deleteBoundedCacheEntry(repeatStates, groupKey);
     return;
   }
 
-  const previous = repeatStates.get(groupKey);
+  const previousRead = readBoundedCache(repeatStates, groupKey);
+  repeatStates = previousRead.cache;
+  const previous = previousRead.value;
   const count = previous?.signature === candidate.signature ? previous.count + 1 : 1;
-  repeatStates.set(groupKey, { signature: candidate.signature, count });
+  repeatStates = writeBoundedCache(repeatStates, groupKey, { signature: candidate.signature, count });
   if (count !== 3) {
     return;
   }

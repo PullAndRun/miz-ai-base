@@ -1,6 +1,7 @@
 import dayjs from "dayjs";
 import type { MizPlugin } from "@/plugins";
 import { canManageGroupFeature } from "@/group-permissions";
+import { parseStrictLocalDateTime } from "@/local-date-time";
 import { getVtbRepository } from "@/vtb";
 
 const MAX_ACTIVITY_CONTENT_LENGTH = 300;
@@ -29,7 +30,7 @@ const activityPlugin: MizPlugin = {
       return;
     }
 
-    const action = parseActivityAction(command.args);
+    const action = parseActivityAction(command.args, Date.now());
     if (!action) {
       await reply(createActivityUsage());
       return;
@@ -129,7 +130,7 @@ const activityPlugin: MizPlugin = {
 
 export default activityPlugin;
 
-export const parseActivityAction = (args: string): ActivityAction | undefined => {
+export const parseActivityAction = (args: string, nowMs: number): ActivityAction | undefined => {
   const normalized = args.trim();
   if (normalized === "list") return { type: "list" as const };
 
@@ -144,25 +145,12 @@ export const parseActivityAction = (args: string): ActivityAction | undefined =>
 
   const create = /^(?:create|add)\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\s+(.+)$/.exec(normalized);
   if (!create) return undefined;
-  const eventAt = parseLocalDateTime(create[1], create[2]);
+  const eventAt = parseStrictLocalDateTime(create[1], create[2]);
   const content = create[3].trim();
-  if (!eventAt || eventAt <= new Date() || !content || content.length > MAX_ACTIVITY_CONTENT_LENGTH) {
+  if (!eventAt || eventAt.getTime() <= nowMs || !content || content.length > MAX_ACTIVITY_CONTENT_LENGTH) {
     return undefined;
   }
   return { type: "create" as const, eventAt, content };
-};
-
-const parseLocalDateTime = (date: string, time: string) => {
-  const value = new Date(`${date}T${time}:00`);
-  if (
-    Number.isNaN(value.getTime()) ||
-    value.getFullYear() !== Number(date.slice(0, 4)) ||
-    value.getMonth() + 1 !== Number(date.slice(5, 7)) ||
-    value.getDate() !== Number(date.slice(8, 10)) ||
-    value.getHours() !== Number(time.slice(0, 2)) ||
-    value.getMinutes() !== Number(time.slice(3, 5))
-  ) return undefined;
-  return value;
 };
 
 const createActivityUsage = () => [
