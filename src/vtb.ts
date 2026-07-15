@@ -1115,22 +1115,22 @@ const formatSyncFailure = (error: unknown) =>
 
 export const formatLiveMessage = (live: VtbLiveInfo, fans?: number) => [
   "开播提醒",
-  `${live.name} 开播了`,
-  `标题：${live.title}`,
-  ...(live.liveStartedAt ? [`开播：${dayjs(live.liveStartedAt).format("YYYY年MM月DD日 HH:mm")}`] : []),
+  `${live.name} 开播啦`,
+  `直播标题：${live.title}`,
+  ...(live.liveStartedAt ? [`开播时间：${dayjs(live.liveStartedAt).format("YYYY年MM月DD日 HH:mm")}`] : []),
   ...(fans === undefined ? [] : [`粉丝：${fans.toLocaleString("zh-CN")}`]),
   ...(live.roomId ? [`直播间：${formatLiveRoomUrl(live.roomId)}`] : []),
-  "直播已经开始，想看的来集合吧。",
+  "现在正在播，想看的可以去直播间。",
 ].join("\n");
 
 export const formatLiveQueryMessage = (live: VtbLiveInfo, fans?: number) => [
   `直播状态 · ${live.name}`,
-  live.isLive ? "正在直播" : "当前未开播",
-  `标题：${live.title}`,
-  ...(live.liveStartedAt ? [`开播：${dayjs(live.liveStartedAt).format("YYYY年MM月DD日 HH:mm")}`] : []),
+  live.isLive ? "现在正在直播" : "现在没有开播",
+  `直播标题：${live.title}`,
+  ...(live.liveStartedAt ? [`开播时间：${dayjs(live.liveStartedAt).format("YYYY年MM月DD日 HH:mm")}`] : []),
   ...(fans === undefined ? [] : [`粉丝：${fans.toLocaleString("zh-CN")}`]),
   ...(live.roomId ? [`直播间：${formatLiveRoomUrl(live.roomId)}`] : []),
-  live.isLive ? "直播正在进行中。" : "目前没有直播，等下次开播。",
+  live.isLive ? "想看的话，现在就可以去直播间。" : "等下次开播吧。",
 ].join("\n");
 
 export const formatOfflineMessage = (
@@ -1144,13 +1144,12 @@ export const formatOfflineMessage = (
   const fanChange = startFans === undefined || endFans === undefined ? undefined : endFans - startFans;
   const durationMinutes = Math.max(1, Math.floor((endedAt.getTime() - startedAt.getTime()) / 60_000));
   return [
-    "下播提醒",
-    `${name} 下播了，辛苦啦`,
-    `下播：${dayjs(endedAt).format("YYYY年MM月DD日 HH:mm")}`,
+    `直播结束 · ${name}`,
+    `下播时间：${dayjs(endedAt).format("YYYY年MM月DD日 HH:mm")}`,
     `直播时长：${durationMinutes.toLocaleString("zh-CN")} 分钟`,
     ...(fanChange && fanChange > 0 ? [`新增粉丝：+${fanChange.toLocaleString("zh-CN")}`] : []),
     ...(roomId ? [`直播间：${formatLiveRoomUrl(roomId)}`] : []),
-    "感谢陪伴，下次直播见。",
+    "这场直播结束了，下次见。",
   ].join("\n");
 };
 
@@ -1162,9 +1161,8 @@ export const formatDynamicMessage = (dynamic: VtbDynamic) => {
     dynamic.description.includes(dynamicUrl);
 
   return [
-    "主播动态",
     `${dynamic.author} 发布了新动态`,
-    `时间：${dayjs(dynamic.publishedAt).format("YYYY年MM月DD日 HH:mm")}`,
+    `发布时间：${dayjs(dynamic.publishedAt).format("YYYY年MM月DD日 HH:mm")}`,
     `标题：${dynamic.title}`,
     ...(dynamic.description ? ["", ...dynamic.description.split("\n")] : ["", "这条动态没有文字内容。"]),
     ...(hasDynamicUrlInDescription ? [] : ["", `查看动态：${dynamicUrl}`]),

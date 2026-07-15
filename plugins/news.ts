@@ -4,15 +4,15 @@ import { createNoNewsMessage, deliverUnsentNews, formatNewsMessages } from "@/ne
 const newsPlugin: MizPlugin = {
   name: "news",
   commands: ["news", "新闻"],
-  description: "读取当前会话中尚未看过的财经快讯。\n用法：miz news",
+  description: "看看当前会话里还没读过的财经快讯。\n用法：miz news",
   async handle({ command, config, logger, message, reply, replyForward }) {
     if (command.args) {
-      await reply("财经快讯暂不支持关键词筛选，直接发送 miz news。");
+      await reply("新闻暂时不能按关键词筛选，直接发 miz news 就行。");
       return;
     }
 
     if (!config.news.apiUrl) {
-      await reply("财经快讯还没有接入新闻源，请联系管理员完成配置。");
+      await reply("新闻源还没配置好，请联系管理员处理。");
       return;
     }
 
@@ -30,7 +30,7 @@ const newsPlugin: MizPlugin = {
       }
     } catch (error) {
       logger.error("plugin", "news request failed", error);
-      await reply("新闻源暂时没有响应，过一会儿再刷新吧。");
+      await reply("新闻源刚才没响应，过一会儿再刷新吧。");
     }
   },
 };

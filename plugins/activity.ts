@@ -15,7 +15,7 @@ const activityPlugin: MizPlugin = {
   name: "activity",
   commands: ["activity", "活动"],
   description: [
-    "发起活动报名，群友可以自己参加或退出，开始前会提醒已经报名的人。",
+    "想约群友一起做点什么，可以发起活动报名；大家能自己参加或退出，开始前还会收到提醒。",
     "发起活动：miz activity create 2030-08-01 20:00 活动内容",
     "查看活动：miz activity list",
     "参加活动：miz activity join 编号",
@@ -25,7 +25,7 @@ const activityPlugin: MizPlugin = {
   ].join("\n"),
   async handle({ command, config, logger, message, reply }) {
     if (message.groupId === undefined || message.userId === undefined) {
-      await reply("活动报名要放在对应群里操作，这样报名名单才不会串群。");
+      await reply("活动报名按群分开记录，回到要办活动的群里操作吧。");
       return;
     }
 
@@ -40,9 +40,9 @@ const activityPlugin: MizPlugin = {
       if (action.type === "list") {
         const activities = await repository.listUpcomingActivities(message.groupId);
         await reply(activities.length === 0
-          ? "最近还没有活动在报名。想约大家的话，可以直接发起一个。"
+          ? "现在没有活动在报名。想约大家的话，可以直接发起一个。"
           : [
-              `正在报名的活动有 ${activities.length} 个：`,
+              `现在有 ${activities.length} 个活动在报名：`,
               ...activities.map((activity) =>
                 `#${activity.displayId} · ${dayjs(activity.eventAt).format("YYYY年M月D日 HH:mm")} · ${activity.content} · ${activity._count.registrations}/${config.activity.maxParticipants} 人`),
             ].join("\n"));
@@ -57,13 +57,13 @@ const activityPlugin: MizPlugin = {
           config.activity.maxParticipants,
         );
         if (result.status === "joined") {
-          await reply(`报名成功，活动 #${action.id} 现在有 ${result.participantCount} 人。开始前会在群里叫你。`);
+          await reply(`报名成功 · 活动 #${action.id}\n现在共 ${result.participantCount} 人，开始前会提醒你。`);
         } else if (result.status === "already_joined") {
-          await reply(`你已经报名活动 #${action.id} 了，不用重复报名。`);
+          await reply(`你已经报过活动 #${action.id} 了，不用重复操作。`);
         } else if (result.status === "full") {
-          await reply(`活动 #${action.id} 已经满员（${config.activity.maxParticipants} 人），这次先没能排进去。`);
+          await reply(`活动 #${action.id} 已满员（${config.activity.maxParticipants} 人），这次没排上。`);
         } else {
-          await reply("没找到这个正在报名的活动。可以先发 miz activity list 核对编号。");
+          await reply(`没找到正在报名的活动 #${action.id}。先发 miz activity list 看看编号吧。`);
         }
         return;
       }
@@ -71,10 +71,10 @@ const activityPlugin: MizPlugin = {
       if (action.type === "leave") {
         const result = await repository.leaveActivity(action.id, message.groupId, message.userId);
         await reply(result.status === "left"
-          ? `已经退出活动 #${action.id}。`
+          ? `已退出活动 #${action.id}。`
           : result.status === "not_joined"
-            ? `你还没有报名活动 #${action.id}，不需要退出。`
-            : "没找到这个正在报名的活动。可以先发 miz activity list 核对编号。");
+            ? `你还没报名活动 #${action.id}，不用退出。`
+            : `没找到正在报名的活动 #${action.id}。先发 miz activity list 看看编号吧。`);
         return;
       }
 
@@ -84,15 +84,15 @@ const activityPlugin: MizPlugin = {
         config.activity.manageWhitelistUserIds,
       );
       if (!canManage) {
-        await reply("报名和退出可以直接操作；发起或取消活动需要群管理或活动白名单权限。");
+        await reply("参加和退出活动可以直接操作；发起或取消活动需要群管理或活动白名单权限。");
         return;
       }
 
       if (action.type === "cancel") {
         const result = await repository.cancelUpcomingActivity(action.id, message.groupId);
         await reply(result.count === 1
-          ? `活动 #${action.id} 已取消。`
-          : "没找到这个还没开始的活动。可以先发 miz activity list 核对编号。");
+          ? `活动 #${action.id} 已取消，报名也一起结束了。`
+          : `没找到还没开始的活动 #${action.id}。先发 miz activity list 看看编号吧。`);
         return;
       }
 
@@ -112,14 +112,15 @@ const activityPlugin: MizPlugin = {
         creatorId: message.userId,
       });
       await reply([
-        `活动报名开好了 · #${activity.displayId}`,
-        dayjs(action.eventAt).format("YYYY年M月D日 HH:mm"),
-        action.content,
-        `名额 ${config.activity.maxParticipants} 人，参加请发：miz activity join ${activity.displayId}`,
+        `活动报名已发起 · #${activity.displayId}`,
+        `时间：${dayjs(action.eventAt).format("YYYY年M月D日 HH:mm")}`,
+        `活动：${action.content}`,
+        `名额：${config.activity.maxParticipants} 人`,
+        `想参加就发：miz activity join ${activity.displayId}`,
       ].join("\n"));
     } catch (error) {
       logger.error("plugin", "activity command failed", error);
-      await reply("活动信息刚才没保存成功。稍后再试一次，原命令可以直接重发。");
+      await reply("活动刚才没建起来，稍后再发一次吧。");
     }
   },
 };
@@ -163,7 +164,7 @@ const parseLocalDateTime = (date: string, time: string) => {
 };
 
 const createActivityUsage = () => [
-  "活动报名这样用：",
+  "活动报名支持这些操作：",
   "发起：miz activity create 2030-08-01 20:00 活动内容",
   "查看：miz activity list",
   "参加：miz activity join 编号",

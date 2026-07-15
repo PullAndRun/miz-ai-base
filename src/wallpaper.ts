@@ -50,8 +50,8 @@ export const createWallpaperMessage = (wallpaper: Wallpaper) => [
     type: "text",
     data: {
       text: [
-        "今日壁纸",
-        wallpaper.date ? formatDate(wallpaper.date) : "Bing 今日精选",
+        `每日一图 · ${wallpaper.date ? formatDate(wallpaper.date) : "Bing 今日精选"}`,
+        "早上好，今天想和大家分享这片风景。",
       ].join("\n"),
     },
   },
@@ -65,10 +65,9 @@ export const createWallpaperMessage = (wallpaper: Wallpaper) => [
     type: "text",
     data: {
       text: [
-        "图片信息",
-        ...(wallpaper.title ? [`主题：${wallpaper.title}`] : []),
-        `版权：${wallpaper.copyright}`,
-        "喜欢的话可以保存下来，换个新背景。",
+        ...(wallpaper.title ? [`「${wallpaper.title}」`] : []),
+        `图片版权：${wallpaper.copyright}`,
+        "希望它能给你带来一点好心情。",
       ].join("\n"),
     },
   },
@@ -88,7 +87,7 @@ const refreshDailyWallpaper = async (apiUrl: string, imageBaseUrl: string): Prom
       id,
       date: image.startdate ?? image.start_date,
       title: cleanText(image.title),
-      copyright: cleanText(image.copyright) ?? "Bing 每日壁纸",
+      copyright: cleanText(image.copyright) ?? "Bing 每日一图",
       imageBase64,
     };
     return cachedWallpaper;

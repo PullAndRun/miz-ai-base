@@ -15,8 +15,8 @@ describe("user-facing copy", () => {
     }, 12_345);
 
     expect(message).toContain("开播提醒");
-    expect(message).toContain("示例主播 开播了");
-    expect(message).toContain("直播已经开始");
+    expect(message).toContain("示例主播 开播啦");
+    expect(message).toContain("想看的可以去直播间");
     expect(message).not.toMatch(/亮灯|营业|TA|传送门|舞台进行中/);
   });
 
@@ -38,7 +38,7 @@ describe("user-facing copy", () => {
       link: "https://t.bilibili.com/123",
     });
 
-    expect(offline).toContain("感谢陪伴，下次直播见");
+    expect(offline).toContain("这场直播结束了，下次见");
     expect(dynamic).toContain("发布了新动态");
     expect(dynamic).not.toMatch(/小作文|TA/);
   });
@@ -47,14 +47,19 @@ describe("user-facing copy", () => {
     const news = formatNewsMessages([{ id: "1", title: "市场更新", detail: "详情内容" }]).join("\n");
     const wallpaper = JSON.stringify(createWallpaperMessage({
       id: "wallpaper",
+      date: "20300801",
+      title: "山间晨雾",
       copyright: "示例版权",
       imageBase64: "AA==",
     }));
 
     expect(news).toContain("财经快讯");
-    expect(news).toContain("仅供参考");
-    expect(wallpaper).toContain("今日壁纸");
-    expect(wallpaper).toContain("喜欢的话可以保存下来");
+    expect(news).toContain("别只凭这些消息做决定");
+    expect(wallpaper).toContain("每日一图 · 2030年08月01日");
+    expect(wallpaper).toContain("早上好，今天想和大家分享这片风景");
+    expect(wallpaper).toContain("「山间晨雾」");
+    expect(wallpaper).toContain("希望它能给你带来一点好心情");
+    expect(wallpaper).not.toMatch(/壁纸|保存|换上/);
     expect(`${news}\n${wallpaper}`).not.toMatch(/舞台|应援|主播/);
   });
 
@@ -68,7 +73,8 @@ describe("user-facing copy", () => {
     } as never);
 
     expect(replyText).toContain("主题小签");
-    expect(replyText).toContain("小签说：");
+    expect(replyText).toContain("关于「明天的安排」：");
+    expect(replyText).toContain("重要的事还是听自己的");
     expect(replyText).not.toMatch(/\d+%|仅供娱乐|心想事成/);
   });
 });

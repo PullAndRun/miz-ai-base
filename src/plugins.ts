@@ -301,8 +301,8 @@ const dispatchPluginCommand = async ({
       gateway,
       message,
       commandText
-        ? `没找到“${commandText.split(/\s+/, 1)[0]}”这个命令。\n发送 ${config.plugins.commandPrefix} help 查看可用命令。`
-        : `发送 ${config.plugins.commandPrefix} help 查看可用命令。`,
+        ? `没找到“${commandText.split(/\s+/, 1)[0]}”这个功能。\n发 ${config.plugins.commandPrefix} help 看看现在能用什么。`
+        : `发 ${config.plugins.commandPrefix} help 看看现在能用什么。`,
     );
     return;
   }

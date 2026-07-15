@@ -14,18 +14,18 @@ const pluginDisplayNames: Readonly<Record<string, string>> = {
   schedule: "群日程",
   todo: "群待办",
   video: "视频",
-  vtb: "主播直播与动态",
-  wallpaper: "今日壁纸",
+  vtb: "B 站主播",
+  wallpaper: "每日一图",
 };
 
 const helpPlugin: MizPlugin = {
   name: "help",
   commands: ["help", "帮助"],
-  description: "查看当前可用的命令、说明和示例",
+  description: "看看 miz 能做什么，以及每个命令怎么用。",
   async handle({ commandPrefix, plugins, replyForward }) {
     const lines = createHelpMessages(commandPrefix, plugins);
 
-    await replyForward(lines.length > 0 ? lines : ["现在没有可用命令，插件可能还没有加载完成。"], {
+    await replyForward(lines.length > 0 ? lines : ["暂时没有可用功能，可能还在加载。"], {
       title: "miz · 功能菜单",
       source: commandPrefix,
       summary: `${lines.length} 项可用功能`,
@@ -40,9 +40,9 @@ export const createHelpMessages = (commandPrefix: string, plugins: readonly Plug
     .filter((plugin) => plugin.commands.length > 0)
     .map((plugin) => {
       const commands = plugin.commands.map((command) => `${commandPrefix} ${command}`).join("\n");
-      const description = formatDescription(plugin.description ?? "这个功能还没有补充说明。");
+      const description = formatDescription(plugin.description ?? "这个功能还没写说明。");
       const displayName = pluginDisplayNames[plugin.name] ?? plugin.name;
-      return `【${displayName}】\n${description}\n命令：\n${commands}`;
+      return `【${displayName}】\n${description}\n可用命令：\n${commands}`;
     });
 
 const formatDescription = (description: string) => description.replace(/\s*(用法[：:])/g, "\n$1");

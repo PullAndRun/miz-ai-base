@@ -8,14 +8,14 @@ const broadcastPlugin: MizPlugin = {
   name: "broadcast",
   commands: ["broadcast", "广播"],
   description: [
-    "向机器人所在的全部群发送公告，仅限广播白名单使用。",
+    "把一条公告发到机器人所在的全部群，仅限广播白名单使用。",
     "用法：miz broadcast 广播内容",
     "广播内容最多 1000 个字符。",
   ].join("\n"),
   async handle({ command, config, gateway, logger, message, reply }) {
     const content = command.args.trim();
     if (!content) {
-      await reply("还没有填写公告内容。\n用法：miz broadcast 公告内容");
+      await reply("先写上要发的公告内容。\n例如：miz broadcast 今晚 8 点维护");
       return;
     }
     if (content.length > MAX_BROADCAST_LENGTH) {
@@ -24,14 +24,14 @@ const broadcastPlugin: MizPlugin = {
     }
 
     if (!isWhitelisted(message.userId, config.broadcast.whitelistUserIds)) {
-      await reply("全群公告只开放给广播白名单成员。");
+      await reply("这个功能只对广播白名单成员开放。");
       return;
     }
 
     try {
       const groupIds = getGroupIds(await gateway.getGroupList());
       if (groupIds.length === 0) {
-        await reply("群列表是空的，公告没有发送。请检查机器人是否已经加入群聊，以及网关是否在线。");
+        await reply("目前没有可发送的群。请确认机器人已经加入群聊，并检查网关是否在线。");
         return;
       }
 
@@ -62,12 +62,12 @@ const broadcastPlugin: MizPlugin = {
       });
       await reply(
         failedGroupIds.length === 0
-          ? `公告发送完成，已送达 ${sentCount} 个群。`
-          : `公告已送达 ${sentCount} 个群，另有 ${failedGroupIds.length} 个群未送达。可能是群禁言或连接异常，可以稍后补发。`,
+          ? `公告已发到 ${sentCount} 个群。`
+          : `公告已发到 ${sentCount} 个群，另有 ${failedGroupIds.length} 个没发成功。可能遇到群禁言或连接异常，可以稍后补发。`,
       );
     } catch (error) {
       logger.error("plugin", "broadcast failed", normalizeError(error));
-      await reply("公告没有发出去。可能是群禁言或网关连接异常，请确认状态后再试。");
+      await reply("这次公告没发出去。可能遇到群禁言或连接异常，确认状态后再试吧。");
     }
   },
 };

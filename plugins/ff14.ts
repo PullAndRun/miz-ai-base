@@ -10,7 +10,7 @@ const ff14Plugin: MizPlugin = {
   name: "ff14",
   commands: ["ff14"],
   description: [
-    "查询最终幻想14国服各分区的道具价格和低价挂单。",
+    "查询 FF14 国服市场的道具价格和低价挂单。",
     "用法：miz ff14 分区 道具名",
     "分区：猫=猫小胖，猪=莫古力，狗=豆豆柴，鸟=陆行鸟",
     "示例：miz ff14 猫 水之碎晶",
@@ -24,7 +24,7 @@ const ff14Plugin: MizPlugin = {
     }
 
     if (!config.ff14.itemSearchApiUrl || !config.ff14.marketApiUrl) {
-      await reply("FF14 市场数据源尚未配置，请联系管理员处理。");
+      await reply("FF14 市场还没配置好，请联系管理员处理。");
       return;
     }
 
@@ -40,7 +40,7 @@ const ff14Plugin: MizPlugin = {
         marketApiUrl: config.ff14.marketApiUrl,
       });
       if (!result) {
-        await reply(`没有查到“${request.itemName}”。请检查道具全名和所选分区。`);
+        await reply(`没查到“${request.itemName}”。看看道具名和分区有没有写对。`);
         return;
       }
 
@@ -57,7 +57,7 @@ const ff14Plugin: MizPlugin = {
       );
     } catch (error) {
       logger.error("plugin", "ff14 price query failed", error);
-      await reply("市场数据暂时没有响应，过一会儿再查吧。");
+      await reply("市场数据刚才没响应，过一会儿再查吧。");
     }
   },
 };
@@ -80,7 +80,7 @@ const parseRequest = (args: string) => {
 
 const createUsageMessage = () =>
   [
-    "用法：miz ff14 分区 道具名",
+    "这样查询：miz ff14 分区 道具名",
     "分区：猫=猫小胖，猪=莫古力，狗=豆豆柴，鸟=陆行鸟",
     "例如：miz ff14 猫 水之碎晶",
   ].join("\n");

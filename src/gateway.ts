@@ -451,7 +451,7 @@ const createWelcomeMessage = (userId: string | number, memberName: string, group
   {
     type: "text",
     data: {
-      text: ` 欢迎加入「${groupName}」！\n先看看群公告和置顶消息，熟悉之后就随意聊天。有活动时，也欢迎一起来玩。`,
+      text: ` 欢迎加入「${groupName}」！\n可以先看看群公告和置顶，了解一下群里的基本信息。熟悉之后随意聊，有活动也欢迎一起参加。`,
     },
   },
 ];

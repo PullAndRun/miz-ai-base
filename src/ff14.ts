@@ -124,7 +124,7 @@ export const formatFf14MarketMessages = ({
         `道具：${item.Name}（${item.ID}）`,
         `分区：${regionName}`,
         ...(minimumPrice === undefined ? [] : [`提醒价格：${formatGil(minimumPrice)}`]),
-        "当前没有挂单，可能是暂时无人出售或市场数据尚未更新。",
+        "当前没有挂单，可能暂时没人卖，也可能是市场数据还没更新。",
       ].join("\n"),
     ];
   }
@@ -229,7 +229,7 @@ const formatListing = (listing: Listing, index: number) =>
     `#${index} · ${listing.worldName ?? "未知服务器"}`,
     `单价：${formatGil(listing.pricePerUnit)}`,
     `数量：${listing.quantity.toLocaleString("zh-CN")} · 总价：${formatGil(listing.total)}`,
-    `最后复查：${formatReviewTime(listing.lastReviewTime)}`,
+    `最近复查：${formatReviewTime(listing.lastReviewTime)}`,
   ].join("\n");
 
 const formatGil = (value: number | undefined) => {
@@ -241,11 +241,11 @@ const formatGil = (value: number | undefined) => {
 };
 
 const formatCount = (value: number | undefined) =>
-  typeof value === "number" ? value.toLocaleString("zh-CN") : "未提供";
+  typeof value === "number" ? value.toLocaleString("zh-CN") : "暂无数据";
 
 const formatUploadTime = (value: number | undefined) => {
   if (typeof value !== "number" || value <= 0) {
-    return "未提供";
+    return "暂无数据";
   }
 
   return dayjs(value).format("YYYY年MM月DD日 HH:mm");
@@ -253,7 +253,7 @@ const formatUploadTime = (value: number | undefined) => {
 
 const formatReviewTime = (value: number | undefined) => {
   if (typeof value !== "number" || value <= 0) {
-    return "未提供";
+    return "暂无数据";
   }
 
   return dayjs.unix(value).format("YYYY年MM月DD日 HH:mm");

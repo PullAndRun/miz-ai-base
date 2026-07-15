@@ -137,7 +137,7 @@ const startScheduleTask = async (config: MizConfig, gateway: Gateway, logger: Lo
             {
               type: "text",
               data: {
-                text: ` 日程提醒\n${event.content}\n开始时间：${dayjs(event.eventAt).format("YYYY年MM月DD日 HH:mm")}\n快到时间了，记得准备一下。`,
+                text: ` 日程快开始了\n安排：${event.content}\n时间：${dayjs(event.eventAt).format("YYYY年MM月DD日 HH:mm")}\n记得提前准备。`,
               },
             },
           ]);
@@ -229,7 +229,7 @@ const startActivityTask = async (config: MizConfig, gateway: Gateway, logger: Lo
             {
               type: "text",
               data: {
-                text: `活动快开始了\n#${activity.displayId} · ${activity.content}\n开始时间：${dayjs(activity.eventAt).format("YYYY年M月D日 HH:mm")}\n已经报名的朋友记得准备一下。`,
+                text: `活动快开始了\n#${activity.displayId} · ${activity.content}\n时间：${dayjs(activity.eventAt).format("YYYY年M月D日 HH:mm")}\n报过名的朋友记得准备。`,
               },
             },
           ]);
@@ -319,7 +319,7 @@ const startTodoTask = async (config: MizConfig, gateway: Gateway, logger: Logger
             {
               type: "text",
               data: {
-                text: ` 待办快到截止时间了\n#${todo.displayId} · ${todo.content}\n截止：${dayjs(todo.dueAt).format("YYYY年M月D日 HH:mm")}\n忙完记得用 miz todo done ${todo.displayId} 标记完成。`,
+                text: ` 待办快到期了\n#${todo.displayId} · ${todo.content}\n截止：${dayjs(todo.dueAt).format("YYYY年M月D日 HH:mm")}\n完成后发 miz todo done ${todo.displayId} 标记一下。`,
               },
             },
           ]);
@@ -398,7 +398,7 @@ const startReminderTask = async (config: MizConfig, gateway: Gateway, logger: Lo
         try {
           await gateway.sendGroupMessage(reminder.groupId, [
             { type: "at", data: { qq: reminder.targetId } },
-            { type: "text", data: { text: ` 提醒时间到：${reminder.content}` } },
+            { type: "text", data: { text: ` 提醒你一下：${reminder.content}` } },
           ]);
           logger.info("plugin", "reminder sent", { id: reminder.id, groupId: reminder.groupId });
         } catch (error) {
@@ -866,7 +866,7 @@ const appendAtAllMention = (message: unknown) => Array.isArray(message)
       ...message,
       { type: "text", data: { text: "\n\n" } },
       { type: "at", data: { qq: "all" } },
-      { type: "text", data: { text: " 主播开播啦，想看的来集合。" } },
+      { type: "text", data: { text: " 主播开播了，想看的可以去直播间。" } },
     ]
   : message;
 
@@ -1245,7 +1245,7 @@ const runFf14PriceAlerts = async (
         {
           title: `FF14 价格提醒 · ${result.item.Name}`,
           source: "miz ff14",
-          summary: `${FF14_REGION_NAMES[alert.region]} · 已到 ${alert.minimumPrice.toLocaleString("zh-CN")} gil 以内`,
+          summary: `${FF14_REGION_NAMES[alert.region]} · 价格已到 ${alert.minimumPrice.toLocaleString("zh-CN")} gil 以下`,
         },
       );
 
