@@ -64,11 +64,12 @@ describe("user-facing copy", () => {
       imageBase64: "AA==",
     }));
 
-    expect(news).toContain("财经快讯送达 · 1 条新消息");
-    expect(news).toContain("消息跑得很快，做决定前记得再确认一下。");
+    expect(news).toContain("新闻快讯送达 · 1 条新消息");
+    expect(news).toContain("新消息已送达，感兴趣的话可以继续了解详情。");
+    expect(news).not.toContain("财经");
     expect(scheduledNews).toContain("#1\n• 市场更新");
     expect(singleScheduledNews).toBe("• 单条市场更新");
-    expect(scheduledNews).not.toMatch(/财经快讯送达|条新消息|消息跑得很快|做决定前记得再确认一下/);
+    expect(scheduledNews).not.toMatch(/新闻快讯送达|条新消息|新消息已送达|继续了解详情/);
     expect(wallpaper).toContain("🌄 今日风景 · 2030年08月01日");
     expect(wallpaper).toContain("新的一天，先把这片风景送到你眼前");
     expect(wallpaper).toContain("「山间晨雾」");

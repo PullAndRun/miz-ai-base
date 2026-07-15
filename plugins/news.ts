@@ -4,7 +4,7 @@ import { createNoNewsMessage, deliverUnsentNews, formatNewsMessages } from "@/ne
 const newsPlugin: MizPlugin = {
   name: "news",
   commands: ["news", "新闻"],
-  description: "把当前会话里还没读过的财经快讯送到眼前。\n用法：miz news",
+  description: "把当前会话里还没读过的新闻快讯送到眼前。\n用法：miz news",
   async handle({ command, config, logger, message, reply, replyForward }) {
     if (command.args) {
       await reply("📰 快讯暂时不支持关键词筛选，直接发 miz news 就能刷新。");
@@ -19,7 +19,7 @@ const newsPlugin: MizPlugin = {
     try {
       const news = await deliverUnsentNews(config, config.news.apiUrl, getTargetKey(message), async (items) => {
         await replyForward(formatNewsMessages(items), {
-          title: "📰 财经快讯",
+          title: "📰 新闻快讯",
           source: "miz news",
           summary: `${items.length} 条新消息送达`,
         });

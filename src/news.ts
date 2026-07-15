@@ -90,9 +90,9 @@ export const deliverUnsentNews = async (
 };
 
 export const formatNewsMessages = (news: readonly News[]) => [
-  `📰 财经快讯送达 · ${news.length} 条新消息`,
+  `📰 新闻快讯送达 · ${news.length} 条新消息`,
   ...formatNewsItems(news),
-  "消息跑得很快，做决定前记得再确认一下。",
+  "新消息已送达，感兴趣的话可以继续了解详情。",
 ];
 
 export const formatNewsItems = (news: readonly News[]) => news.map(formatNews);

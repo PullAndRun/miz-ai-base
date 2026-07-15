@@ -8,7 +8,7 @@ const pluginDisplayNames: Readonly<Record<string, string>> = {
   faq: "群问答",
   help: "功能菜单",
   joke: "笑话图",
-  news: "财经快讯",
+  news: "新闻快讯",
   qrcode: "二维码",
   remind: "群提醒",
   schedule: "群日程",
