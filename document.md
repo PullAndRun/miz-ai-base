@@ -24,7 +24,7 @@ Linux/Docker 使用无扩展名的工具文件；Windows 使用 `.exe` 文件。
 - `[miz.bilibili]`：B 站登录凭据 `cookie`，供 B 站视频和 VTB 功能复用。
 - `[miz.plugins]`：命令前缀与插件目录，默认前缀为 `miz`。
 - `[miz.video]`：下载目录、NapCat 媒体目录及不同系统的工具路径。
-- `[miz.vtb]`：B 站用户、卡片、直播和动态接口，以及群订阅列表。每个 `[[miz.vtb.subscriptions]]` 可用 `atAllStreamers = ["主播名"]` 单独指定开播时 @全体成员；仅当机器人是群主或管理员时生效，否则发送普通开播通知。动态和下播通知不会 @。
+- `[miz.vtb]`：B 站用户、卡片、直播和动态接口，以及群订阅列表。每个 `[[miz.vtb.subscriptions]]` 可用 `atAllStreamers = ["主播名"]` 单独指定开播时 @全体成员；仅当机器人是群主或管理员，且 QQ 账号在该群仍有可用的 @全体 次数时生效，否则发送普通开播通知。动态和下播通知不会 @。
 - `[miz.news]`、`[miz.wallpaper]`、`[miz.ff14]`：各功能的定时任务和接口配置。
 
 除视频白名单、群列表和 VTB/FF14 订阅外，接口地址为空时对应定时任务会自动禁用并记录原因。

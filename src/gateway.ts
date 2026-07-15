@@ -463,7 +463,6 @@ const getDisplayName = (value: unknown, keys: readonly string[], seen = new Set<
 };
 
 const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
-  const cache = new Map<string, { allowed: boolean; expiresAt: number }>();
   let selfId: Promise<string | undefined> | undefined;
 
   const getSelfId = () => {
@@ -480,32 +479,45 @@ const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
   };
 
   return async (groupId: number | string) => {
-    const key = String(groupId);
-    const cached = cache.get(key);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.allowed;
-    }
-
     try {
       const botId = await getSelfId();
       if (!botId) {
-        return true;
+        logger.warn("gateway", "group send skipped: unable to identify bot account", { groupId });
+        return false;
       }
 
       const [groupInfo, memberInfo] = await Promise.all([
-        client.getGroupInfo(groupId),
-        client.getGroupMemberInfo(groupId, botId),
+        // Always bypass NapCat's group-info cache. A whole-group mute can be
+        // enabled between two VTB notifications and must block this send.
+        client.getGroupInfo(groupId, true),
+        client.getGroupMemberInfo(groupId, botId, true),
       ]);
-      const wholeBan = getBooleanValue(groupInfo, ["whole_ban", "wholeBan"]);
+      const wholeBan = getBooleanValue(groupInfo, [
+        "whole_ban",
+        "wholeBan",
+        "group_all_shut",
+        "groupAllShut",
+        "is_all_shut",
+        "isAllShut",
+        "shut_up_all",
+        "shutUpAll",
+      ]);
       const mutedUntil = getNumberValue(memberInfo, ["shut_up_timestamp", "shutUpTimestamp"]);
       const botMuted = mutedUntil !== undefined && mutedUntil > Math.floor(Date.now() / 1_000);
       const allowed = !wholeBan && !botMuted;
-      cache.set(key, { allowed, expiresAt: Date.now() + GROUP_PERMISSION_CACHE_MS });
+      if (!allowed) {
+        logger.info("gateway", "group send skipped: group or bot is muted", {
+          groupId,
+          wholeBan,
+          mutedUntil,
+        });
+      }
       return allowed;
     } catch (error) {
-      // Do not suppress valid messages merely because the status query failed.
-      logger.warn("gateway", "group send permission check failed; sending normally", { groupId, error });
-      return true;
+      // Sending while the status is unknown would create a noisy NapCat error
+      // and an unnecessary VTB retry, so fail closed.
+      logger.warn("gateway", "group send skipped: unable to read mute status", { groupId, error });
+      return false;
     }
   };
 };
@@ -542,9 +554,28 @@ const createAtAllPermissionChecker = (client: NapLink, logger: Logger) => {
 
       const memberInfo = await client.getGroupMemberInfo(groupId, botId);
       const role = getStringValue(memberInfo, ["role"]);
-      const allowed = role === "admin" || role === "owner";
-      cache.set(key, { allowed, expiresAt: Date.now() + GROUP_PERMISSION_CACHE_MS });
-      return allowed;
+      const hasRole = role === "admin" || role === "owner";
+      if (!hasRole) {
+        logger.info("gateway", "@all unavailable: bot is not a group owner or administrator", { groupId, role });
+        cache.set(key, { allowed: false, expiresAt: Date.now() + GROUP_PERMISSION_CACHE_MS });
+        return false;
+      }
+
+      try {
+        const remaining = await client.getGroupAtAllRemain(groupId);
+        const allowed = remaining > 0;
+        if (!allowed) {
+          logger.info("gateway", "@all unavailable: group quota exhausted", { groupId, role, remaining });
+        }
+        cache.set(key, { allowed, expiresAt: Date.now() + GROUP_PERMISSION_CACHE_MS });
+        return allowed;
+      } catch (error) {
+        // Older NapCat versions can lack this optional action. The role is
+        // still sufficient to preserve the previous @all behavior.
+        logger.warn("gateway", "unable to read @all quota; falling back to role check", { groupId, role, error });
+        cache.set(key, { allowed: true, expiresAt: Date.now() + GROUP_PERMISSION_CACHE_MS });
+        return true;
+      }
     } catch (error) {
       // @all is optional: if its permission cannot be verified, keep the live notification ordinary.
       logger.warn("gateway", "@all permission check failed; sending ordinary group message", { groupId, error });
