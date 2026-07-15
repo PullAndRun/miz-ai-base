@@ -78,25 +78,24 @@ export const deliverUnsentNews = async (
 };
 
 export const formatNewsMessages = (news: readonly News[]) => [
-  [
-    "╭─「 财经速递 」",
-    `│ 为你整理 ${news.length} 条财经快讯`,
-    "│ 市场动态，快速掌握",
-    "╰────────────",
-  ].join("\n"),
+  `财经快讯 · ${news.length} 条更新`,
   ...formatNewsItems(news),
-  "资讯瞬息万变，以上内容仅供参考。",
+  "市场信息变化较快，以上内容仅供参考。",
 ];
 
 export const formatNewsItems = (news: readonly News[]) => news.map(formatNews);
 
 export const formatScheduledNewsItems = (news: readonly News[]) =>
-  news.map((item, index) => [
-    ...(news.length > 1 ? [`#${index + 1}`] : []),
-    formatNews(item),
-  ].join("\n"));
+  [
+    `财经快讯 · ${news.length} 条更新`,
+    ...news.map((item, index) => [
+      ...(news.length > 1 ? [`#${index + 1}`] : []),
+      formatNews(item),
+    ].join("\n")),
+    "市场信息变化较快，以上内容仅供参考。",
+  ];
 
-export const createNoNewsMessage = () => "暂时没有新的财经快讯。晚些时候再来看看吧。";
+export const createNoNewsMessage = () => "没有新的财经快讯。";
 
 export const fetchFinanceNews = async (apiUrl: string): Promise<News[]> => {
   const response = await fetchWithRetry(apiUrl, {
@@ -220,7 +219,9 @@ const getSentNewsCache = async (config: MizConfig, targetKey: string) => {
     const ids = await getVtbRepository(config).then((repository) =>
       repository.getDeliveredNewsIds(targetKey, MAX_SAVED_NEWS),
     );
-    cache.ids.push(...ids.slice(0, MAX_SAVED_NEWS));
+    // Repository results are newest-first, while the in-memory queue evicts
+    // from the front. Store oldest-first so freshly delivered IDs survive.
+    cache.ids.push(...ids.slice(0, MAX_SAVED_NEWS).reverse());
     cache.idSet = new Set(cache.ids);
   } catch {
     // News remains usable if the optional persistence table has not been migrated yet.
@@ -271,5 +272,5 @@ const persistDeliveredNews = async (config: MizConfig, targetKey: string, news: 
 const formatNews = (news: News) =>
   [
     `• ${news.title}`,
-    ...(news.detail ? [`• ${news.detail}`] : []),
+    ...(news.detail ? [`  ${news.detail}`] : []),
   ].join("\n");

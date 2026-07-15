@@ -83,6 +83,13 @@ export type LiveSession = {
   startFans?: number;
   roomId?: string;
   deliveredGroupIds: string[];
+  endedAt?: Date;
+  endFans?: number;
+  endDeliveredGroupIds: string[];
+};
+export type VtbDynamicDeliveryState = {
+  publishedAt: Date;
+  deliveredGroupIds: string[];
 };
 export type VtbCardInfo = { fans?: number; name?: string };
 type ReminderClaim = Reminder & { claimedAt: Date; nextRemindAt?: Date };
@@ -314,7 +321,11 @@ export const getVtbCardInfos = async (mids: readonly string[], config: VtbConfig
 };
 
 export const getVtbLiveInfo = async (streamer: VtbStreamer, config: VtbConfig): Promise<VtbLiveInfo> => {
-  return (await getVtbLiveInfos([streamer], config)).get(streamer.mid)!;
+  const live = (await getVtbLiveInfos([streamer], config)).get(streamer.mid);
+  if (!live) {
+    throw new Error(`Bilibili live API omitted streamer ${streamer.mid}`);
+  }
+  return live;
 };
 
 export const getVtbLiveInfos = async (streamers: readonly VtbStreamer[], config: VtbConfig) => {
@@ -333,7 +344,10 @@ export const getVtbLiveInfos = async (streamers: readonly VtbStreamer[], config:
     if (response.code !== 0) throw new Error(`Bilibili live API failed: code ${response.code}`);
 
     for (const streamer of batch) {
-      results.set(streamer.mid, toVtbLiveInfo(streamer, findLiveInfo(response.data, streamer.mid)));
+      const live = findLiveInfo(response.data, streamer.mid);
+      if (live) {
+        results.set(streamer.mid, toVtbLiveInfo(streamer, live));
+      }
     }
   }
 
@@ -372,7 +386,9 @@ export type VtbRepository = ReturnType<typeof createVtbRepository>;
 /** The persistence adapter is a closure over Prisma, not an object with mutable instance state. */
 const createVtbRepository = (prisma: PrismaClient) => {
   const initialize = async () => {
-    await prisma.vtbLiveSession.deleteMany({ where: { endedAt: null } });
+    // Validate the connection without discarding delivery state. Active and
+    // partially delivered sessions must survive restarts and hot reloads.
+    await prisma.vtbStreamer.findFirst({ select: { mid: true } });
   };
 
   const findStreamerByName = async (name: string): Promise<VtbStreamer | undefined> => {
@@ -436,12 +452,15 @@ const createVtbRepository = (prisma: PrismaClient) => {
 
   const getLiveSession = async (mid: string): Promise<LiveSession | undefined> => {
     const session = await prisma.vtbLiveSession.findUnique({ where: { streamerMid: toMid(mid) } });
-    return session && !session.endedAt
+    return session
       ? {
           startedAt: session.startedAt,
           startFans: session.startFans ?? undefined,
           roomId: session.liveRoom?.toString(),
           deliveredGroupIds: session.deliveredGroupIds,
+          endedAt: session.endedAt ?? undefined,
+          endFans: session.endFans ?? undefined,
+          endDeliveredGroupIds: session.endDeliveredGroupIds,
         }
       : undefined;
   };
@@ -461,6 +480,7 @@ const createVtbRepository = (prisma: PrismaClient) => {
         startedAt: live.liveStartedAt ?? new Date(),
         startFans: fans,
         deliveredGroupIds: [...deliveredGroupIds],
+        endDeliveredGroupIds: [],
       },
       update: {
         streamerName: live.name,
@@ -468,6 +488,7 @@ const createVtbRepository = (prisma: PrismaClient) => {
         startedAt: live.liveStartedAt ?? new Date(),
         startFans: fans,
         deliveredGroupIds: [...deliveredGroupIds],
+        endDeliveredGroupIds: [],
         endedAt: null,
         endFans: null,
       },
@@ -482,21 +503,39 @@ const createVtbRepository = (prisma: PrismaClient) => {
     });
   };
 
-  const stopLiveSession = async (mid: string, fans?: number, endedAt = new Date()) => {
+  const markLiveSessionEnded = async (mid: string, fans?: number, endedAt = new Date()) => {
     await prisma.vtbLiveSession.update({
       where: { streamerMid: toMid(mid) },
       data: { endedAt, endFans: fans },
     });
   };
 
-  const getLastDynamicTime = async (mid: string) =>
-    (await prisma.vtbDynamicState.findUnique({ where: { streamerMid: toMid(mid) } }))?.lastPublishedAt;
+  const recordLiveEndDelivery = async (mid: string, groupIds: readonly string[]) => {
+    if (groupIds.length === 0) return;
+    await prisma.vtbLiveSession.update({
+      where: { streamerMid: toMid(mid) },
+      data: { endDeliveredGroupIds: { push: [...groupIds] } },
+    });
+  };
 
-  const setLastDynamicTime = async (mid: string, publishedAt: Date) => {
+  const getDynamicDeliveryState = async (mid: string): Promise<VtbDynamicDeliveryState | undefined> => {
+    const state = await prisma.vtbDynamicState.findUnique({ where: { streamerMid: toMid(mid) } });
+    return state ? { publishedAt: state.lastPublishedAt, deliveredGroupIds: state.deliveredGroupIds } : undefined;
+  };
+
+  const startDynamicDelivery = async (mid: string, publishedAt: Date, deliveredGroupIds: readonly string[] = []) => {
     await prisma.vtbDynamicState.upsert({
       where: { streamerMid: toMid(mid) },
-      create: { streamerMid: toMid(mid), lastPublishedAt: publishedAt },
-      update: { lastPublishedAt: publishedAt },
+      create: { streamerMid: toMid(mid), lastPublishedAt: publishedAt, deliveredGroupIds: [...deliveredGroupIds] },
+      update: { lastPublishedAt: publishedAt, deliveredGroupIds: [...deliveredGroupIds] },
+    });
+  };
+
+  const recordDynamicDelivery = async (mid: string, groupIds: readonly string[]) => {
+    if (groupIds.length === 0) return;
+    await prisma.vtbDynamicState.update({
+      where: { streamerMid: toMid(mid) },
+      data: { deliveredGroupIds: { push: [...groupIds] } },
     });
   };
 
@@ -733,7 +772,8 @@ const createVtbRepository = (prisma: PrismaClient) => {
 
   return {
     initialize, findStreamerByName, listStreamers, deleteStreamersNotInNames, deleteStreamerByName,
-    upsertStreamer, getLiveSession, startLiveSession, recordLiveDelivery, stopLiveSession, getLastDynamicTime, setLastDynamicTime,
+    upsertStreamer, getLiveSession, startLiveSession, recordLiveDelivery, markLiveSessionEnded, recordLiveEndDelivery,
+    getDynamicDeliveryState, startDynamicDelivery, recordDynamicDelivery,
     getDeliveredNewsIds, recordNewsDeliveries, ensureReminderStorage, createReminder, claimDueReminders,
     releaseReminderClaim, listPendingReminders, findPendingReminder, cancelPendingReminder, editPendingReminder,
     ensureScheduleStorage, createScheduleEvent, listUpcomingScheduleEvents, cancelUpcomingScheduleEvent,
@@ -748,26 +788,26 @@ const getNextReminderTime = (current: Date, intervalMinutes: number, now: Date) 
 };
 
 const formatSyncFailure = (error: unknown) =>
-  error instanceof Error ? error.message.replace(/\s+/g, " ").trim().slice(0, 200) : "未知错误";
+  error instanceof Error ? error.message.replace(/\s+/g, " ").trim().slice(0, 200) : "没有返回具体原因";
 
 export const formatLiveMessage = (live: VtbLiveInfo, fans?: number) => [
-  "╭─「 B站开播啦 」",
-  `│ ${live.name} 开播啦，快来集合！`,
-  `│ 今天要和大家聊：${live.title}`,
-  ...(live.liveStartedAt ? [`│ 开播时间：${dayjs(live.liveStartedAt).format("YYYY年MM月DD日 HH时mm分")}`] : []),
-  ...(fans === undefined ? [] : [`│ 当前关注：${fans.toLocaleString("zh-CN")}`]),
-  ...(live.roomId ? [`│ 直播间传送门：${formatLiveRoomUrl(live.roomId)}`] : []),
-  "╰─ 去和 TA 打个招呼吧～",
+  "直播间亮灯了",
+  `${live.name} 开播了`,
+  `标题：${live.title}`,
+  ...(live.liveStartedAt ? [`开播：${dayjs(live.liveStartedAt).format("YYYY年MM月DD日 HH:mm")}`] : []),
+  ...(fans === undefined ? [] : [`粉丝：${fans.toLocaleString("zh-CN")}`]),
+  ...(live.roomId ? [`直播间：${formatLiveRoomUrl(live.roomId)}`] : []),
+  "有空就来一起看吧。",
 ].join("\n");
 
 export const formatLiveQueryMessage = (live: VtbLiveInfo, fans?: number) => [
-  "╭─「 B站直播信息 」",
-  `│ 主播 · ${live.name}`,
-  `│ 标题 · ${live.title}`,
-  ...(live.liveStartedAt ? [`│ 开播 · ${dayjs(live.liveStartedAt).format("YYYY年MM月DD日 HH时mm分")}`] : []),
-  ...(fans === undefined ? [] : [`│ 粉丝 · ${fans.toLocaleString("zh-CN")}`]),
-  ...(live.roomId ? [`│ 直播间 · ${formatLiveRoomUrl(live.roomId)}`] : []),
-  `╰─ 当前状态 · ${live.isLive ? "直播中" : "未开播"}`,
+  `直播状态 · ${live.name}`,
+  live.isLive ? "正在直播" : "当前未开播",
+  `标题：${live.title}`,
+  ...(live.liveStartedAt ? [`开播：${dayjs(live.liveStartedAt).format("YYYY年MM月DD日 HH:mm")}`] : []),
+  ...(fans === undefined ? [] : [`粉丝：${fans.toLocaleString("zh-CN")}`]),
+  ...(live.roomId ? [`直播间：${formatLiveRoomUrl(live.roomId)}`] : []),
+  live.isLive ? "直播间正在营业。" : "等下一次亮灯。",
 ].join("\n");
 
 export const formatOfflineMessage = (
@@ -781,13 +821,13 @@ export const formatOfflineMessage = (
   const fanChange = startFans === undefined || endFans === undefined ? undefined : endFans - startFans;
   const durationMinutes = Math.max(1, Math.floor((endedAt.getTime() - startedAt.getTime()) / 60_000));
   return [
-    "╭─「 B站下播啦 」",
-    `│ ${name} 的直播结束啦，辛苦啦～`,
-    `│ 下播时间：${dayjs(endedAt).format("YYYY年MM月DD日 HH时mm分")}`,
-    `│ 这次陪伴了大家：${durationMinutes.toLocaleString("zh-CN")} 分钟`,
-    ...(fanChange && fanChange > 0 ? [`│ 本场收获新关注：+${fanChange.toLocaleString("zh-CN")}`] : []),
-    ...(roomId ? [`│ 直播间：${formatLiveRoomUrl(roomId)}`] : []),
-    "╰─ 感谢大家的陪伴，下次见～",
+    "本场直播结束",
+    `${name} 下播了`,
+    `下播：${dayjs(endedAt).format("YYYY年MM月DD日 HH:mm")}`,
+    `直播时长：${durationMinutes.toLocaleString("zh-CN")} 分钟`,
+    ...(fanChange && fanChange > 0 ? [`新增粉丝：+${fanChange.toLocaleString("zh-CN")}`] : []),
+    ...(roomId ? [`直播间：${formatLiveRoomUrl(roomId)}`] : []),
+    "辛苦了，也谢谢这一场的陪伴。",
   ].join("\n");
 };
 
@@ -799,14 +839,12 @@ export const formatDynamicMessage = (dynamic: VtbDynamic) => {
     dynamic.description.includes(dynamicUrl);
 
   return [
-    "╭─「 B站动态小报 」",
-    `│ ${dynamic.author} 有新动态啦～`,
-    `│ 刚刚更新于：${dayjs(dynamic.publishedAt).format("YYYY年MM月DD日 HH时mm分")}`,
-    `│ 这次想和大家说：${dynamic.title}`,
-    "│ TA 的小作文：",
-    ...(dynamic.description ? dynamic.description.split("\n").map((line) => `│ ${line}`) : ["│ 暂无文字内容"]),
-    ...(hasDynamicUrlInDescription ? [] : [`│ 动态传送门：${dynamicUrl}`]),
-    "╰─ 去点个赞、留句话吧～",
+    "动态更新",
+    `${dynamic.author} 发了新动态`,
+    `时间：${dayjs(dynamic.publishedAt).format("YYYY年MM月DD日 HH:mm")}`,
+    `标题：${dynamic.title}`,
+    ...(dynamic.description ? ["", ...dynamic.description.split("\n")] : ["", "这条动态没有文字内容。"]),
+    ...(hasDynamicUrlInDescription ? [] : ["", `查看动态：${dynamicUrl}`]),
   ].join("\n");
 };
 
@@ -819,9 +857,14 @@ export const formatDynamicUrl = (link: string) => {
 
 const createConfiguredVtbRepository = async (config: MizConfig) => {
   const prisma = new PrismaClient({ adapter: new PrismaPg(getDatabaseUrl(config)) });
-  const repository = createVtbRepository(prisma);
-  await repository.initialize();
-  return repository;
+  try {
+    const repository = createVtbRepository(prisma);
+    await repository.initialize();
+    return repository;
+  } catch (error) {
+    await prisma.$disconnect().catch(() => undefined);
+    throw error;
+  }
 };
 
 export const getDatabaseUrl = (config: MizConfig) => {
@@ -934,7 +977,7 @@ const findLiveInfo = (value: unknown, mid: string) => {
 };
 
 const toVtbLiveInfo = (streamer: VtbStreamer, live: z.infer<typeof liveInfoSchema> | undefined): VtbLiveInfo => ({
-  title: live?.title?.trim() || "暂无直播标题",
+  title: live?.title?.trim() || "还没有直播标题",
   roomId: live?.room_id === undefined ? streamer.roomId : String(live.room_id),
   liveStartedAt: parseDate(live?.live_time),
   isLive: live?.live_status === 1,

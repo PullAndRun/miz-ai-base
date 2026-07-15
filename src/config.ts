@@ -445,6 +445,7 @@ type VtbSubscriptionBlock = {
   end: number;
   text: string;
   streamers: string[];
+  atAllStreamers?: string[];
 };
 
 const findVtbSubscriptionBlock = (source: string, groupId: string | number): VtbSubscriptionBlock | undefined => {
@@ -460,7 +461,15 @@ const findVtbSubscriptionBlock = (source: string, groupId: string | number): Vtb
       if (!Array.isArray(streamers) || !streamers.every((name) => typeof name === "string")) {
         throw new Error(`Invalid streamers for VTB subscription group ${groupId}`);
       }
-      return { start, end, text, streamers };
+      const rawAtAllStreamers = parseTomlAssignment(text, "atAllStreamers");
+      if (
+        rawAtAllStreamers !== undefined &&
+        (!Array.isArray(rawAtAllStreamers) || !rawAtAllStreamers.every((name) => typeof name === "string"))
+      ) {
+        throw new Error(`Invalid atAllStreamers for VTB subscription group ${groupId}`);
+      }
+      const atAllStreamers = rawAtAllStreamers as string[] | undefined;
+      return { start, end, text, streamers, atAllStreamers };
     }
     start = nextStart;
   }
@@ -480,10 +489,17 @@ const replaceSubscriptionBlock = (
   subscription: VtbSubscriptionBlock,
   streamers: readonly string[],
 ) => {
-  const updatedBlock = subscription.text.replace(
+  let updatedBlock = subscription.text.replace(
     /^streamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m,
     `streamers = ${JSON.stringify(streamers)}`,
   );
+  if (subscription.atAllStreamers) {
+    const atAllStreamers = subscription.atAllStreamers.filter((name) => streamers.includes(name));
+    updatedBlock = updatedBlock.replace(
+      /^atAllStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m,
+      `atAllStreamers = ${JSON.stringify(atAllStreamers)}`,
+    );
+  }
   return `${source.slice(0, subscription.start)}${updatedBlock}${source.slice(subscription.end)}`;
 };
 

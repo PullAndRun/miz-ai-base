@@ -5,21 +5,22 @@ const qrcodePlugin: MizPlugin = {
   name: "qrcode",
   commands: ["qrcode", "二维码"],
   description: [
-    "生成或识别二维码。",
+    "把文字做成二维码，或读取图片中的二维码内容。",
     "生成：miz qrcode 需要编码的文本",
     "识别：将 miz qrcode decode 与二维码图片一同发送",
+    "生成内容最多 1000 个字符，识别图片最大 10MB。",
   ].join("\n"),
   async handle({ command, logger, message, reply }) {
     const args = command.args.trim();
     if (!args) {
-      await reply("生成：miz qrcode 需要编码的文本\n识别：将 miz qrcode decode 与二维码图片一同发送。");
+      await reply("二维码有两种用法：\n生成：miz qrcode 要写入的内容\n识别：把 miz qrcode decode 和二维码图片放在同一条消息里");
       return;
     }
 
     if (args.toLowerCase() === "decode" || args === "识别") {
       const imageSource = findImageSource(message.raw.message);
       if (!imageSource) {
-        await reply("没有找到图片。请将 `miz qrcode decode` 和二维码图片放在同一条消息里发送。");
+        await reply("这条消息里没有图片。请把识别命令和二维码图片一起发送。");
         return;
       }
 
@@ -28,7 +29,7 @@ const qrcodePlugin: MizPlugin = {
         await reply(`二维码内容：\n${text}`);
       } catch (error) {
         logger.warn("plugin", "qrcode decode failed", normalizeError(error));
-        await reply("没有识别到二维码。请确认图片清晰、包含完整二维码，且文件不超过 10MB。");
+        await reply("没有识别到完整二维码。请换一张更清晰、四周没有裁切的图片，大小不要超过 10MB。");
       }
       return;
     }
@@ -41,7 +42,7 @@ const qrcodePlugin: MizPlugin = {
       });
     } catch (error) {
       logger.warn("plugin", "qrcode generation failed", normalizeError(error));
-      await reply("二维码没有生成成功：内容不能为空，且最多支持 1000 个字符。");
+      await reply("二维码生成失败。请确认内容不是空白，并且不超过 1000 个字符。");
     }
   },
 };

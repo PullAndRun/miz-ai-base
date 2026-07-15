@@ -22,17 +22,19 @@ const remindPlugin: MizPlugin = {
   name: "remind",
   commands: ["remind", "提醒"],
   description: [
-    "创建、查看和管理群提醒。",
+    "设置一次提醒或循环提醒，也可以指定提醒对象。",
     "创建一次提醒：miz remind 30m 喝水",
     "创建循环提醒：miz remind every 1d 喝水",
     "指定提醒对象：miz remind 30m @QQ号 内容",
     "查看提醒：miz remind list",
     "取消提醒：miz remind cancel 编号",
     "编辑提醒：miz remind edit 编号 2h 新内容",
+    "支持 m（分钟）、h（小时）、d（天），最长 365 天。",
+    "提醒其他成员或管理他人创建的提醒，需要管理员或提醒白名单权限。",
   ].join("\n"),
   async handle({ command, config, logger, message, reply }) {
     if (message.groupId === undefined || message.userId === undefined) {
-      await reply("提醒只能在群聊中创建，这样才能按时提醒到对应成员。");
+      await reply("群提醒需要在对应群聊中创建和管理。");
       return;
     }
 
@@ -60,7 +62,7 @@ const remindPlugin: MizPlugin = {
       const canManage = isReminderManager(message.raw, message.userId, config.reminder.manageWhitelistUserIds);
       const targetId = reminder.targetId ?? String(message.userId);
       if (targetId !== String(message.userId) && !canManage) {
-        await reply("指定其他成员需要群主、群管理员或提醒管理白名单权限。你仍可以为自己创建提醒。");
+        await reply("你可以给自己设置提醒；提醒其他成员需要管理员或提醒白名单权限。");
         return;
       }
 
@@ -82,10 +84,10 @@ const remindPlugin: MizPlugin = {
         remindAt,
         repeatIntervalMinutes: reminder.repeatIntervalMinutes,
       });
-      await reply(`已记下提醒 #${created.id}\n${formatReminderSpec(reminder)}\n提醒内容：${reminder.content}`);
+      await reply(`提醒已创建 · #${created.id}\n${formatReminderSpec(reminder)}\n内容：${reminder.content}`);
     } catch (error) {
       logger.error("plugin", "reminder command failed", error);
-      await reply("提醒没有保存成功，请稍后再试。");
+      await reply("提醒保存失败。请稍后重新发送这条命令。");
     }
   },
 };
@@ -100,15 +102,15 @@ const listReminders = async ({ config, message, reply }: ReminderContext) => {
     canManage ? undefined : message.userId,
   );
   if (reminders.length === 0) {
-    await reply(canManage ? "本群目前没有待处理的提醒。" : "你在本群目前没有待处理的提醒。");
+    await reply(canManage ? "本群目前没有待触发的提醒。" : "你目前没有待触发的提醒。");
     return;
   }
 
   await reply([
-    canManage ? `本群待处理提醒（${reminders.length} 条）：` : `你的待处理提醒（${reminders.length} 条）：`,
+    canManage ? `本群有 ${reminders.length} 条待触发提醒：` : `你有 ${reminders.length} 条待触发提醒：`,
     ...reminders.map((reminder) => [
       `#${reminder.id}`,
-      dayjs(reminder.remindAt).format("YYYY年MM月DD日 HH时mm分"),
+      dayjs(reminder.remindAt).format("YYYY年MM月DD日 HH:mm"),
       reminder.repeatIntervalMinutes ? `每 ${formatMinutes(reminder.repeatIntervalMinutes)}` : "一次",
       `@${reminder.targetId}`,
       reminder.content,
@@ -121,37 +123,37 @@ const cancelReminder = async ({ config, message, reply }: ReminderContext, id: n
   const repository = await getVtbRepository(config);
   const reminder = await repository.findPendingReminder(id, message.groupId!);
   if (!reminder) {
-    await reply("没有找到这个待处理提醒编号。请先用 miz remind list 查看编号。");
+    await reply("没有找到这条待触发提醒。可以先发送 miz remind list 核对编号。");
     return;
   }
 
   const canManage = isReminderManager(message.raw, message.userId, config.reminder.manageWhitelistUserIds);
   if (String(reminder.creatorId) !== String(message.userId) && !canManage) {
-    await reply("你只能取消自己创建的提醒；群主、群管理员和白名单成员可管理本群提醒。");
+    await reply("你只能取消自己创建的提醒；管理他人的提醒需要管理员或提醒白名单权限。");
     return;
   }
 
   const result = await repository.cancelPendingReminder(id, message.groupId!);
-  await reply(result.count === 1 ? `提醒 #${id} 已取消。` : "这个提醒已经处理完毕，无需重复取消。");
+  await reply(result.count === 1 ? `提醒 #${id} 已取消。` : "这条提醒已经触发或取消，无需再次处理。");
 };
 
 const editReminder = async ({ config, message, reply }: ReminderContext, id: number, spec: ReminderSpec) => {
   const repository = await getVtbRepository(config);
   const reminder = await repository.findPendingReminder(id, message.groupId!);
   if (!reminder) {
-    await reply("没有找到这个待处理提醒编号。请先用 miz remind list 查看编号。");
+    await reply("没有找到这条待触发提醒。可以先发送 miz remind list 核对编号。");
     return;
   }
 
   const canManage = isReminderManager(message.raw, message.userId, config.reminder.manageWhitelistUserIds);
   if (String(reminder.creatorId) !== String(message.userId) && !canManage) {
-    await reply("你只能编辑自己创建的提醒；群主、群管理员和白名单成员可管理本群提醒。");
+    await reply("你只能修改自己创建的提醒；管理他人的提醒需要管理员或提醒白名单权限。");
     return;
   }
 
   const targetId = spec.targetId ?? reminder.targetId;
   if (targetId !== String(message.userId) && !canManage) {
-    await reply("指定其他成员需要群主、群管理员或提醒管理白名单权限。");
+    await reply("修改为提醒其他成员，需要管理员或提醒白名单权限。");
     return;
   }
 
@@ -163,7 +165,7 @@ const editReminder = async ({ config, message, reply }: ReminderContext, id: num
     remindAt: new Date(Date.now() + spec.delayMinutes * 60_000),
     repeatIntervalMinutes: spec.repeatIntervalMinutes,
   });
-  await reply(result.count === 1 ? `提醒 #${id} 已更新：\n${formatReminderSpec({ ...spec, targetId })}` : "这个提醒已经处理完毕，无法再编辑。");
+  await reply(result.count === 1 ? `提醒 #${id} 已更新。\n${formatReminderSpec({ ...spec, targetId })}` : "这条提醒已经触发或取消，无法再修改。");
 };
 
 const parseAction = (args: string) => {
@@ -173,11 +175,15 @@ const parseAction = (args: string) => {
   }
   const cancel = /^cancel\s+(\d+)$/.exec(normalized);
   if (cancel) {
-    return { type: "cancel" as const, id: Number(cancel[1]) };
+    const id = Number(cancel[1]);
+    return Number.isSafeInteger(id) && id > 0 ? { type: "cancel" as const, id } : undefined;
   }
   const edit = /^edit\s+(\d+)\s+(.+)$/.exec(normalized);
   const spec = edit ? parseReminderSpec(edit[2]) : undefined;
-  return edit && spec ? { type: "edit" as const, id: Number(edit[1]), spec } : undefined;
+  const id = edit ? Number(edit[1]) : Number.NaN;
+  return edit && spec && Number.isSafeInteger(id) && id > 0
+    ? { type: "edit" as const, id, spec }
+    : undefined;
 };
 
 const parseReminderSpec = (args: string): ReminderSpec | undefined => {
@@ -224,8 +230,12 @@ const isGroupAdministrator = (raw: Record<string, unknown>) => {
   return role === "admin" || role === "owner";
 };
 
-const formatReminderSpec = (spec: ReminderSpec) =>
-  `${spec.repeatIntervalMinutes ? "循环提醒" : "一次性提醒"}：${formatMinutes(spec.delayMinutes)}后${spec.repeatIntervalMinutes ? `，每 ${formatMinutes(spec.repeatIntervalMinutes)}` : ""}${spec.targetId ? `，提醒 @${spec.targetId}` : ""}`;
+const formatReminderSpec = (spec: ReminderSpec) => [
+  spec.repeatIntervalMinutes
+    ? `循环提醒 · 首次在 ${formatMinutes(spec.delayMinutes)}后 · 之后每 ${formatMinutes(spec.repeatIntervalMinutes)}`
+    : `一次提醒 · ${formatMinutes(spec.delayMinutes)}后`,
+  ...(spec.targetId ? [`对象：@${spec.targetId}`] : []),
+].join("\n");
 
 const formatMinutes = (minutes: number) => {
   if (minutes % durationUnitsInMinutes.d === 0) {
@@ -238,9 +248,11 @@ const formatMinutes = (minutes: number) => {
 };
 
 const createUsageMessage = () => [
-  "创建一次提醒：miz remind 30m 提醒内容",
-  "创建循环提醒：miz remind every 1d 提醒内容",
-  "提醒指定成员：miz remind 30m @123456789 提醒内容",
+  "提醒命令：",
+  "一次提醒：miz remind 30m 提醒内容",
+  "循环提醒：miz remind every 1d 提醒内容",
+  "提醒别人：miz remind 30m @123456789 提醒内容",
   "修改提醒：miz remind edit 编号 2h 新内容",
   "查看或取消：miz remind list / miz remind cancel 编号",
+  "时间单位支持 m（分钟）、h（小时）、d（天），最长 365 天。",
 ].join("\n");

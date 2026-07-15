@@ -30,6 +30,8 @@ import {
   type VtbStreamer,
 } from "@/vtb";
 
+const ALL_GROUPS_DELIVERED_MARKER = "*";
+
 export type TaskRuntime = {
   stop(): Promise<void>;
 };
@@ -49,10 +51,33 @@ export const startScheduledTasks = async (
     startedTasks.push(startYtDlpUpdateTask(config, logger));
     startedTasks.push(startVtbNameSyncTask(config, logger));
     startedTasks.push(await startVtbTask(config, gateway, logger));
-    return { stop: () => stopTasks(startedTasks) };
+    return { stop: () => stopTaskRuntime(startedTasks) };
   } catch (error) {
-    await stopTasks(startedTasks);
+    try {
+      await stopTaskRuntime(startedTasks);
+    } catch (stopError) {
+      logger.warn("plugin", "partially started tasks failed to stop cleanly", stopError);
+    }
     throw error;
+  }
+};
+
+const stopTaskRuntime = async (tasks: readonly TaskRuntime[]) => {
+  let failure: unknown;
+  try {
+    await stopTasks(tasks);
+  } catch (error) {
+    failure = error;
+  }
+
+  try {
+    await closeVtbRepository();
+  } catch (error) {
+    failure ??= error;
+  }
+
+  if (failure) {
+    throw failure;
   }
 };
 
@@ -110,7 +135,7 @@ const startScheduleTask = async (config: MizConfig, gateway: Gateway, logger: Lo
             {
               type: "text",
               data: {
-                text: ` 群日程提醒：${event.content}\n开始时间：${dayjs(event.eventAt).format("YYYY年MM月DD日 HH时mm分")}`,
+                text: ` 日程提醒\n${event.content}\n开始时间：${dayjs(event.eventAt).format("YYYY年MM月DD日 HH:mm")}\n快到时间了，记得准备一下。`,
               },
             },
           ]);
@@ -192,7 +217,7 @@ const startReminderTask = async (config: MizConfig, gateway: Gateway, logger: Lo
         try {
           await gateway.sendGroupMessage(reminder.groupId, [
             { type: "at", data: { qq: reminder.targetId } },
-            { type: "text", data: { text: ` 提醒：${reminder.content}` } },
+            { type: "text", data: { text: ` 提醒时间到：${reminder.content}` } },
           ]);
           logger.info("plugin", "reminder sent", { id: reminder.id, groupId: reminder.groupId });
         } catch (error) {
@@ -358,7 +383,6 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
       await currentRun?.catch((error) => {
         logger.warn("plugin", "vtb task ended with an error during shutdown", normalizeError(error));
       });
-      await closeVtbRepository();
     },
   };
 };
@@ -462,21 +486,30 @@ const pollVtbSubscriptions = async (
         const cachedPush =
           pushCache.get(streamer.mid) ??
           Promise.all([
-            Promise.resolve(liveInfos.get(streamer.mid)!),
+            Promise.resolve(liveInfos.get(streamer.mid)),
             Promise.resolve(cardInfos.get(streamer.mid)?.fans),
-          ]).then(([live, fans]) => ({
-            streamer,
-            live,
-            fans,
-          }));
+          ]).then(([live, fans]) => {
+            if (!live) {
+              throw new Error(`Bilibili live API omitted streamer ${streamer.mid}`);
+            }
+            return { streamer, live, fans };
+          });
         pushCache.set(streamer.mid, cachedPush);
         const { live, fans } = await cachedPush;
         const session = await repository.getLiveSession(streamer.mid);
+        const activeSession = session?.endedAt ? undefined : session;
+        const belongsToEndedSession = session?.endedAt !== undefined &&
+          live.liveStartedAt !== undefined &&
+          live.liveStartedAt <= session.endedAt;
         const undeliveredGroupIds = groupIds.filter(
-          (groupId) => !session?.deliveredGroupIds.includes(String(groupId)),
+          (groupId) => !activeSession?.deliveredGroupIds.includes(String(groupId)),
         );
         const isRecentLive = isVtbLiveStartRecent(live.liveStartedAt, config.vtb.cron);
-        if (live.isLive && (!session ? isRecentLive : undeliveredGroupIds.length > 0)) {
+        if (
+          live.isLive &&
+          !belongsToEndedSession &&
+          (!activeSession ? isRecentLive : undeliveredGroupIds.length > 0)
+        ) {
           const message = [
             { type: "text", data: { text: formatLiveMessage(live, fans) } },
             ...(live.coverUrl ? [{ type: "image", data: { file: live.coverUrl } }] : []),
@@ -493,7 +526,7 @@ const pollVtbSubscriptions = async (
             ),
           );
           const deliveredGroupIds = deliveredGroups.map(String);
-          if (session) {
+          if (activeSession) {
             await repository.recordLiveDelivery(streamer.mid, deliveredGroupIds);
           } else {
             // Store an empty list as a pending delivery as well, so a failed
@@ -510,24 +543,40 @@ const pollVtbSubscriptions = async (
               deliveredGroups,
             });
           }
-        } else if (live.isLive && !session) {
+        } else if (live.isLive && !activeSession && !belongsToEndedSession) {
           logger.info("plugin", "vtb live start notification skipped: live is older than the freshness window", {
             streamer: live.name,
             liveStartedAt: live.liveStartedAt,
           });
         } else if (!live.isLive && session) {
-          const endedAt = new Date();
-          await repository.stopLiveSession(streamer.mid, fans, endedAt);
-          const message = formatOfflineMessage(
-            live.name,
-            session.startedAt,
-            endedAt,
-            session.startFans,
-            fans,
-            session.roomId,
-          );
-          const deliveredGroups = await sendVtbGroupMessage(groupIds, message, gateway, logger, "live end", live.name);
-          logger.info("plugin", "vtb live ended notification sent", { streamer: live.name, groupIds: deliveredGroups });
+          const endedAt = session.endedAt ?? new Date();
+          const endFans = session.endFans ?? fans;
+          if (!session.endedAt) {
+            await repository.markLiveSessionEnded(streamer.mid, endFans, endedAt);
+          }
+          const undeliveredEndGroupIds = session.endDeliveredGroupIds.includes(ALL_GROUPS_DELIVERED_MARKER)
+            ? []
+            : groupIds.filter((groupId) => !session.endDeliveredGroupIds.includes(String(groupId)));
+          if (undeliveredEndGroupIds.length > 0) {
+            const message = formatOfflineMessage(
+              live.name,
+              session.startedAt,
+              endedAt,
+              session.startFans,
+              endFans,
+              session.roomId,
+            );
+            const deliveredGroups = await sendVtbGroupMessage(
+              undeliveredEndGroupIds,
+              message,
+              gateway,
+              logger,
+              "live end",
+              live.name,
+            );
+            await repository.recordLiveEndDelivery(streamer.mid, deliveredGroups.map(String));
+            logger.info("plugin", "vtb live ended notification sent", { streamer: live.name, groupIds: deliveredGroups });
+          }
         }
 
         const feed = await dynamicFeeds.get(streamer.mid);
@@ -541,26 +590,45 @@ const pollVtbSubscriptions = async (
           });
           continue;
         }
-        const lastPublishedAt = await repository.getLastDynamicTime(streamer.mid);
-        const isUnseen = !lastPublishedAt || latestDynamic.publishedAt > lastPublishedAt;
+        const dynamicState = await repository.getDynamicDeliveryState(streamer.mid);
+        const isNewDynamic = !dynamicState || latestDynamic.publishedAt > dynamicState.publishedAt;
+        const isCurrentDynamic = dynamicState?.publishedAt.getTime() === latestDynamic.publishedAt.getTime();
         const isRecent = Date.now() - latestDynamic.publishedAt.getTime() < getVtbPollingIntervalMs(config.vtb.cron);
         const isLivePromotion = latestDynamic.description.includes("https://live.bilibili.com");
 
-          if (isUnseen && isRecent && !isLivePromotion) {
+          if ((isNewDynamic || isCurrentDynamic) && isRecent && !isLivePromotion) {
+            const deliveredGroupIds = isCurrentDynamic ? dynamicState.deliveredGroupIds : [];
+            const undeliveredDynamicGroupIds = deliveredGroupIds.includes(ALL_GROUPS_DELIVERED_MARKER)
+              ? []
+              : groupIds.filter((groupId) => !deliveredGroupIds.includes(String(groupId)));
+            if (undeliveredDynamicGroupIds.length === 0) {
+              continue;
+            }
             const message = [
               { type: "text", data: { text: formatDynamicMessage(latestDynamic) } },
               ...(feed.avatarUrl ? [{ type: "image", data: { file: feed.avatarUrl } }] : []),
             ];
-            const deliveredGroups = await sendVtbGroupMessage(groupIds, message, gateway, logger, "dynamic", streamer.name);
-            await repository.setLastDynamicTime(streamer.mid, latestDynamic.publishedAt);
+            const deliveredGroups = await sendVtbGroupMessage(
+              undeliveredDynamicGroupIds,
+              message,
+              gateway,
+              logger,
+              "dynamic",
+              streamer.name,
+            );
+            if (isNewDynamic) {
+              await repository.startDynamicDelivery(streamer.mid, latestDynamic.publishedAt, deliveredGroups.map(String));
+            } else {
+              await repository.recordDynamicDelivery(streamer.mid, deliveredGroups.map(String));
+            }
             logger.info("plugin", "vtb dynamic notification sent", {
               streamer: streamer.name,
               groupIds: deliveredGroups,
               dynamics: 1,
             });
-          } else if (isUnseen) {
+          } else if (isNewDynamic) {
             // Mark stale and live-promotion dynamics as seen so they are never retried.
-            await repository.setLastDynamicTime(streamer.mid, latestDynamic.publishedAt);
+            await repository.startDynamicDelivery(streamer.mid, latestDynamic.publishedAt);
             if (isLivePromotion) {
               logger.info("plugin", "vtb dynamic notification skipped: live promotion", {
                 streamer: streamer.name,
@@ -615,9 +683,9 @@ const sendVtbGroupMessage = async (
 const appendAtAllMention = (message: unknown) => Array.isArray(message)
   ? [
       ...message,
-      { type: "text", data: { text: "\n\n「开播集合」" } },
+      { type: "text", data: { text: "\n\n" } },
       { type: "at", data: { qq: "all" } },
-      { type: "text", data: { text: " 舞台灯光已经亮起，快来用弹幕为 TA 的开场应援吧！" } },
+      { type: "text", data: { text: " 开播啦，想看的来集合。" } },
     ]
   : message;
 
@@ -652,6 +720,7 @@ const startYtDlpUpdateTask = (config: MizConfig, logger: Logger): TaskRuntime =>
   }
 
   let running = false;
+  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
     if (running) {
       logger.warn("plugin", "yt-dlp update task skipped: previous run is still active");
@@ -668,11 +737,21 @@ const startYtDlpUpdateTask = (config: MizConfig, logger: Logger): TaskRuntime =>
   };
 
   const task = cron.schedule(cronExpression, () => {
-    void runTask().catch((error) => logger.error("plugin", "yt-dlp update failed", error));
+    const wasRunning = running;
+    const run = runTask();
+    if (!wasRunning) {
+      currentRun = run;
+    }
+    void run.catch((error) => logger.error("plugin", "yt-dlp update failed", error));
   });
 
   logger.info("plugin", "yt-dlp update task started", { cronExpression });
-  return { stop: async () => task.stop() };
+  return {
+    stop: async () => {
+      task.stop();
+      await currentRun?.catch((error) => logger.warn("plugin", "yt-dlp update ended with an error during shutdown", error));
+    },
+  };
 };
 
 const startNewsTask = (config: MizConfig, gateway: Gateway, logger: Logger): TaskRuntime => {
@@ -698,6 +777,7 @@ const startNewsTask = (config: MizConfig, gateway: Gateway, logger: Logger): Tas
   }
 
   let running = false;
+  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
     if (running) {
       logger.warn("plugin", "news task skipped: previous run is still active");
@@ -713,7 +793,12 @@ const startNewsTask = (config: MizConfig, gateway: Gateway, logger: Logger): Tas
   };
 
   const task = cron.schedule(cronExpression, () => {
-    void runTask().catch((error) => logger.error("plugin", "news task failed", error));
+    const wasRunning = running;
+    const run = runTask();
+    if (!wasRunning) {
+      currentRun = run;
+    }
+    void run.catch((error) => logger.error("plugin", "news task failed", error));
   });
 
   logger.info("plugin", "news task started", {
@@ -721,7 +806,12 @@ const startNewsTask = (config: MizConfig, gateway: Gateway, logger: Logger): Tas
     groups: config.news.groupIds.length,
   });
 
-  return { stop: async () => task.stop() };
+  return {
+    stop: async () => {
+      task.stop();
+      await currentRun?.catch((error) => logger.warn("plugin", "news task ended with an error during shutdown", error));
+    },
+  };
 };
 
 const pushNewsToConfiguredGroups = async (
@@ -793,6 +883,7 @@ const startWallpaperTask = (
   }
 
   let running = false;
+  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
     if (running) {
       logger.warn("plugin", "wallpaper task skipped: previous run is still active");
@@ -808,7 +899,12 @@ const startWallpaperTask = (
   };
 
   const task = cron.schedule(cronExpression, () => {
-    void runTask().catch((error) => {
+    const wasRunning = running;
+    const run = runTask();
+    if (!wasRunning) {
+      currentRun = run;
+    }
+    void run.catch((error) => {
       logger.error("plugin", "wallpaper task failed", error);
     });
   });
@@ -818,6 +914,7 @@ const startWallpaperTask = (
   return {
     stop: async () => {
       task.stop();
+      await currentRun?.catch((error) => logger.warn("plugin", "wallpaper task ended with an error during shutdown", error));
     },
   };
 };
@@ -881,6 +978,7 @@ const startFf14PriceAlertTask = (
   }
 
   let running = false;
+  let currentRun: Promise<void> | undefined;
   const runTask = async () => {
     if (running) {
       logger.warn("plugin", "ff14 price alert task skipped: previous run is still active");
@@ -896,7 +994,12 @@ const startFf14PriceAlertTask = (
   };
 
   const task = cron.schedule(cronExpression, () => {
-    void runTask().catch((error) => {
+    const wasRunning = running;
+    const run = runTask();
+    if (!wasRunning) {
+      currentRun = run;
+    }
+    void run.catch((error) => {
       logger.error("plugin", "ff14 price alert task failed", error);
     });
   });
@@ -909,6 +1012,7 @@ const startFf14PriceAlertTask = (
   return {
     stop: async () => {
       task.stop();
+      await currentRun?.catch((error) => logger.warn("plugin", "ff14 price alert task ended with an error during shutdown", error));
     },
   };
 };
@@ -958,9 +1062,9 @@ const runFf14PriceAlerts = async (
           minimumPrice: alert.minimumPrice,
         }),
         {
-          title: `FF14 价格提醒: ${result.item.Name}`,
+          title: `FF14 价格提醒 · ${result.item.Name}`,
           source: "miz ff14",
-          summary: `${FF14_REGION_NAMES[alert.region]} / ${result.item.Name} <= ${alert.minimumPrice}`,
+          summary: `${FF14_REGION_NAMES[alert.region]} · 已到 ${alert.minimumPrice.toLocaleString("zh-CN")} gil 以内`,
         },
       );
 

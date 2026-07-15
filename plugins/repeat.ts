@@ -1,4 +1,5 @@
 import type { MizPlugin, PluginMessageContext } from "@/plugins";
+import { parseCommandText } from "@/plugin-command";
 
 type RepeatState = {
   signature: string;
@@ -24,7 +25,7 @@ const repeatIfNeeded = async ({ commandPrefix, message, reply }: PluginMessageCo
 
   const groupKey = String(message.groupId);
   const candidate = getRepeatCandidate(message.text, message.raw.message);
-  if (!candidate || message.text.trim().startsWith(commandPrefix)) {
+  if (!candidate || parseCommandText(message.text, commandPrefix) !== undefined) {
     repeatStates.delete(groupKey);
     return;
   }

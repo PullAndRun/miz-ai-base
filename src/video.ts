@@ -6,7 +6,11 @@ import type { VideoConfig } from "@/config";
 
 const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 const TRANSCODE_TIMEOUT_MS = 30 * 60_000;
+const MAX_CAPTURED_PROCESS_OUTPUT_BYTES = 1024 * 1024;
 export const MAX_VIDEO_DURATION_SECONDS = 10 * 60;
+
+export const isVideoDurationAllowed = (durationSeconds: number) =>
+  Number.isFinite(durationSeconds) && durationSeconds > 0 && durationSeconds <= MAX_VIDEO_DURATION_SECONDS;
 
 export const isBilibiliUrl = (value: string) => {
   try {
@@ -44,13 +48,14 @@ export const downloadVideo = async ({
   const downloadDirectory = getDownloadDirectory(config);
   await mkdir(downloadDirectory, { recursive: true });
   const downloadStartedAt = Date.now();
+  const requestId = crypto.randomUUID();
 
   const args = [
     "--no-playlist",
     "--no-progress",
     "--no-warnings",
     "--output",
-    path.join(downloadDirectory, "%(title).180B [%(id)s].%(ext)s"),
+    path.join(downloadDirectory, `%(title).180B [%(id)s] ${requestId}.%(ext)s`),
     "--format",
     "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
     "--merge-output-format",
@@ -163,8 +168,8 @@ const runProcess = (
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
+    const stdout = createCapturedOutput();
+    const stderr = createCapturedOutput();
     let timedOut = false;
     let settled = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -184,15 +189,15 @@ const runProcess = (
       child.kill();
     }, timeoutMs);
 
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stdout.on("data", (chunk: Buffer) => appendCapturedOutput(stdout, chunk));
     // Consume stderr so verbose extractor errors cannot block the child process.
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => appendCapturedOutput(stderr, chunk));
     child.once("error", () => {
       settle(() => reject(new Error(`Unable to start ${processName}`)));
     });
     child.once("close", (code) => {
       if (code === 0) {
-        settle(() => resolve(Buffer.concat(stdout).toString("utf8")));
+        settle(() => resolve(Buffer.concat(stdout.chunks).toString("utf8")));
         return;
       }
 
@@ -201,12 +206,30 @@ const runProcess = (
           new Error(
             timedOut
               ? `${processName} timed out`
-              : `${processName} failed: ${formatProcessError(Buffer.concat(stderr).toString("utf8"))}`,
+              : `${processName} failed: ${formatProcessError(Buffer.concat(stderr.chunks).toString("utf8"))}`,
           ),
         ),
       );
     });
   });
+
+type CapturedOutput = { chunks: Buffer[]; size: number };
+
+const createCapturedOutput = (): CapturedOutput => ({ chunks: [], size: 0 });
+
+const appendCapturedOutput = (output: CapturedOutput, chunk: Buffer) => {
+  output.chunks.push(chunk);
+  output.size += chunk.length;
+  while (output.size > MAX_CAPTURED_PROCESS_OUTPUT_BYTES && output.chunks.length > 0) {
+    const excess = output.size - MAX_CAPTURED_PROCESS_OUTPUT_BYTES;
+    if (output.chunks[0].length <= excess) {
+      output.size -= output.chunks.shift()!.length;
+      continue;
+    }
+    output.chunks[0] = output.chunks[0].subarray(excess);
+    output.size -= excess;
+  }
+};
 
 const getYtDlpPath = (config: VideoConfig) => {
   const executable = process.platform === "win32" ? config.ytDlpWindowsPath : config.ytDlpLinuxPath;

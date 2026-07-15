@@ -109,9 +109,11 @@ Docker 模式会读取普通配置 `config/app.toml`，再将 `config/app.docker
 ## 验证与维护
 
 ```bash
+bun test
 bun run typecheck
 bun run prisma:generate
 bun run prisma:migrate
+bun audit
 ```
 
 日志默认输出到控制台。遇到外部接口失败时，优先检查配置地址、代理、Cookie、容器网络连通性和 NapCat 网关状态。

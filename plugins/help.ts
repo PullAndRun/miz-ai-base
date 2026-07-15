@@ -1,27 +1,45 @@
-import type { MizPlugin } from "@/plugins";
+import type { MizPlugin, PluginInfo } from "@/plugins";
+
+const pluginDisplayNames: Readonly<Record<string, string>> = {
+  broadcast: "群公告",
+  divination: "今日小签",
+  ff14: "FF14 市场",
+  help: "功能菜单",
+  joke: "笑话图",
+  news: "财经快讯",
+  qrcode: "二维码",
+  remind: "群提醒",
+  schedule: "群日程",
+  video: "视频",
+  vtb: "直播与动态",
+  wallpaper: "今日壁纸",
+};
 
 const helpPlugin: MizPlugin = {
   name: "help",
   commands: ["help", "帮助"],
-  description: "查看机器人可用功能与命令",
+  description: "查看当前可用的命令、说明和示例",
   async handle({ commandPrefix, plugins, replyForward }) {
-    const availablePlugins = plugins.filter((plugin) => plugin.commands.length > 0);
-    const lines = availablePlugins.map((plugin) => {
-      const commands = plugin.commands.map((command) => `${commandPrefix} ${command}`).join("\n");
-      const description = formatDescription(plugin.description ?? "暂无介绍");
-      return `【${plugin.name}】\n${description}\n可用命令：\n${commands}`;
-    });
+    const lines = createHelpMessages(commandPrefix, plugins);
 
-    const repeatHelp = "复读为内置功能：群内连续 3 条相同的文本或图片（不含 miz 命令）时，机器人会复读一次。";
-
-    await replyForward(lines.length > 0 ? [...lines, repeatHelp] : ["暂时没有可用命令。"], {
-      title: `${commandPrefix} help`,
+    await replyForward(lines.length > 0 ? lines : ["现在没有可用命令，插件可能还没有加载完成。"], {
+      title: "miz · 功能菜单",
       source: commandPrefix,
-      summary: `共 ${lines.length} 个功能，展开查看完整命令与用法`,
+      summary: `${lines.length} 项可用功能`,
     });
   },
 };
 
 export default helpPlugin;
+
+export const createHelpMessages = (commandPrefix: string, plugins: readonly PluginInfo[]) =>
+  plugins
+    .filter((plugin) => plugin.commands.length > 0)
+    .map((plugin) => {
+      const commands = plugin.commands.map((command) => `${commandPrefix} ${command}`).join("\n");
+      const description = formatDescription(plugin.description ?? "这个功能还没有补充说明。");
+      const displayName = pluginDisplayNames[plugin.name] ?? plugin.name;
+      return `【${displayName}】\n${description}\n命令：\n${commands}`;
+    });
 
 const formatDescription = (description: string) => description.replace(/\s*(用法[：:])/g, "\n$1");

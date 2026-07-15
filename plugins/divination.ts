@@ -1,63 +1,56 @@
 import type { MizPlugin } from "@/plugins";
 
-const fortuneNames = ["大吉", "吉", "小吉", "平", "小凶"];
-const fortuneContexts = [
-  "处理今天的安排时", "面对手头的小事时", "规划接下来的时间时", "回复重要消息时", "做出一个选择时",
-  "开始一份新计划时", "整理脑海里的想法时", "和朋友相处时", "学习新东西时", "感到有些犹豫时",
-  "准备休息之前", "想让自己轻松一点时", "完成一项待办之后", "遇到小小的阻碍时", "想尝试新事物时",
-  "安排生活琐事时", "回顾最近收获时", "准备表达想法时", "觉得节奏有些乱时", "期待一点好运时",
-];
-const fortuneSuggestions = [
-  "先从最简单的一步开始", "给自己留一点余地", "把优先顺序理清再行动", "按自己的节奏推进",
-  "先确认细节再决定", "把想到的内容写下来", "用十分钟做个小整理", "优先完成最关键的一项",
-  "给计划预留一些缓冲", "向可靠的人请教", "暂停片刻再继续", "保留一点好奇心",
-];
-const fortuneClosings = [
-  "慢一点反而会更稳", "不必急着看到结果", "平常心会带来好状态", "耐心能让事情更顺利",
-  "小小的行动也值得肯定", "清晰会比速度更重要", "好消息常藏在细节里", "适合相信自己的判断",
-  "留白能带来新的灵感", "轻松一点会更有收获", "稳住节奏就很好", "今天会比想象中顺利",
-];
-const colorModifiers = [
-  "晨雾", "晴空", "月光", "薄荷", "暖阳", "海盐", "暮云", "微风", "琥珀", "星夜",
-  "雨后", "初雪", "森林", "花瓣", "清泉", "霞光", "奶油", "极光", "砂糖", "静谧",
-];
-const colorBases = [
-  "湖蓝", "暖橙", "松绿", "雾紫", "奶白", "珊瑚粉", "墨黑", "杏黄", "砖红", "银灰", "靛青", "蜜桃色",
-];
-const activityStyles = [
-  "安静地", "轻松地", "认真地", "慢慢地", "趁空档", "带着好奇心", "放下手机后", "喝口水再", "听着喜欢的歌", "给自己一点空间后", "有空时", "心情平静时",
-];
-const activityThemes = [
-  "整理桌面", "完成一个待办", "散步一小段", "读几页书", "写下一个灵感",
-  "给朋友问好", "收拾一个角落", "学一个小技巧", "听一首老歌", "喝一杯热饮",
-  "关闭无关通知", "检查明天的安排", "晒晒太阳", "做一次拉伸", "清理相册",
-  "回顾最近的收获", "准备一顿喜欢的食物", "把烦恼写下来", "完成一件小承诺", "早点休息",
-];
+const fortunes = [
+  { name: "大吉", hint: "今天适合把想了很久的事往前推一步，开头比想象中轻松。" },
+  { name: "大吉", hint: "会遇到一个让心情变好的小插曲，记得接住这份好运。" },
+  { name: "大吉", hint: "今天的直觉很准，犹豫时可以多相信自己的第一反应。" },
+  { name: "吉", hint: "先做最重要的那一件，剩下的事情会自然排好顺序。" },
+  { name: "吉", hint: "适合主动联系许久没说话的人，话题会比预想中自然。" },
+  { name: "吉", hint: "今天的好运藏在细节里，多看一眼就可能发现惊喜。" },
+  { name: "吉", hint: "按自己的节奏走就好，不必为了赶上别人打乱步子。" },
+  { name: "小吉", hint: "手头的小事会一件件解决，别被刚开始的混乱吓到。" },
+  { name: "小吉", hint: "适合给计划留一点空白，临时出现的灵感值得一试。" },
+  { name: "小吉", hint: "今天不需要做得完美，完成比反复修改更重要。" },
+  { name: "小吉", hint: "一句真诚的回应会带来不错的结果，不用想得太复杂。" },
+  { name: "平", hint: "今天适合稳稳推进，不抢速度，也别轻易放弃。" },
+  { name: "平", hint: "遇到拿不准的事先放十分钟，回来时答案会清楚一些。" },
+  { name: "平", hint: "把注意力收回到眼前，做好手边这一步就已经足够。" },
+  { name: "平", hint: "少看一点无关消息，今天会过得轻松不少。" },
+  { name: "小凶", hint: "今天容易因为着急漏掉细节，发出消息前多检查一遍。" },
+  { name: "小凶", hint: "别把所有安排塞得太满，留一点余地会更从容。" },
+  { name: "小凶", hint: "碰到不顺时先停一下，不必在情绪最满的时候做决定。" },
+  { name: "小凶", hint: "今天不适合硬撑，累了就早点收工，明天再继续。" },
+] as const;
 
-// Colors and activities each contain 240 variants (20 × 12). Fortune hints
-// use a complete-sentence template with 2,880 natural combinations.
-const fortunes = createFortunes();
-const luckyColors = combine(colorModifiers, colorBases);
-const luckyActivities = combine(activityStyles, activityThemes);
+const luckyColors = [
+  "雾蓝", "奶油白", "薄荷绿", "琥珀橙", "珊瑚粉", "月光银", "松针绿", "晴空蓝",
+  "葡萄紫", "蜜桃粉", "暖杏色", "海盐蓝", "砖红", "燕麦色", "深靛青", "雨灰色",
+] as const;
+
+const luckyActivities = [
+  "整理一下桌面", "完成一个拖了很久的小待办", "出门走十分钟", "听一首最近喜欢的歌",
+  "给朋友发条消息", "喝一杯热饮", "把明天的安排写下来", "关闭几个无关通知",
+  "读几页书", "收拾一个常被忽略的角落", "早点洗漱休息", "记录一个突然冒出的想法",
+  "晒一会儿太阳", "做一次简单拉伸", "给自己准备一顿喜欢的食物", "清理几张不再需要的照片",
+] as const;
 
 const divinationPlugin: MizPlugin = {
   name: "divination",
   commands: ["占卜", "fortune"],
-  description: "抽取一条随机运势，也可指定想问的主题。\n用法：miz 占卜 [主题]",
+  description: "抽一张今日小签，也可以写下想问的主题。\n用法：miz 占卜 [主题]",
   async handle({ command, reply }) {
     const topic = command.args.trim();
     const fortune = pickRandom(fortunes);
-    const score = randomInteger(55, 100);
 
     await reply(
       [
-        topic ? "┌ 占卜结果 ┐" : "┌ 今日运势 ┐",
-        ...(topic ? [`所问：${topic}`] : []),
-        `${topic ? "结果" : "运势"}：${fortune.name} · ${score}%`,
+        topic ? "┌ 主题小签 ┐" : "┌ 今日小签 ┐",
+        ...(topic ? [`想问：${topic}`] : []),
+        `签面：${fortune.name}`,
         `幸运色：${pickRandom(luckyColors)}`,
-        `幸运行动：${pickRandom(luckyActivities)}`,
-        `提示：${topic ? `关于「${topic}」，${fortune.hint}` : fortune.hint}`,
-        topic ? "└ 仅供娱乐，祝你心想事成 ┘" : "└ 愿你今天顺顺利利 ┘",
+        `适合做：${pickRandom(luckyActivities)}`,
+        `小签说：${topic ? `关于「${topic}」——${fortune.hint}` : fortune.hint}`,
+        "└ 娱乐一下，别让签替你做决定 ┘",
       ].join("\n"),
     );
   },
@@ -73,18 +66,3 @@ const randomInteger = (minimum: number, maximum: number) => {
   crypto.getRandomValues(buffer);
   return minimum + (buffer[0] % range);
 };
-
-function createFortunes() {
-  return fortuneContexts.flatMap((context, contextIndex) =>
-    fortuneSuggestions.flatMap((suggestion, suggestionIndex) =>
-      fortuneClosings.map((closing, closingIndex) => ({
-        name: fortuneNames[(contextIndex + suggestionIndex + closingIndex) % fortuneNames.length],
-        hint: `${context}，${suggestion}，${closing}。`,
-      })),
-    ),
-  );
-}
-
-function combine(left: readonly string[], right: readonly string[]) {
-  return left.flatMap((leftItem) => right.map((rightItem) => `${leftItem}${rightItem}`));
-}

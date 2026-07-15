@@ -4,10 +4,15 @@ import { createWallpaperMessage, getDailyWallpaper } from "@/wallpaper";
 const wallpaperPlugin: MizPlugin = {
   name: "wallpaper",
   commands: ["wallpaper", "壁纸"],
-  description: "获取今日 Bing UHD 壁纸与版权信息。\n用法：miz wallpaper",
+  description: "看看今天的 Bing 高清壁纸，以及标题和版权信息。\n用法：miz wallpaper",
   async handle({ command, config, logger, reply }) {
     if (command.args) {
-      await reply("请这样使用：miz wallpaper\n这个命令不需要附加内容。");
+      await reply("今日壁纸不需要参数，直接发送 miz wallpaper。");
+      return;
+    }
+
+    if (!config.wallpaper.apiUrl || !config.wallpaper.imageBaseUrl) {
+      await reply("今日壁纸还没有接入图片源，请联系管理员完成配置。");
       return;
     }
 
@@ -19,7 +24,7 @@ const wallpaperPlugin: MizPlugin = {
       await reply(createWallpaperMessage(wallpaper));
     } catch (error) {
       logger.error("plugin", "wallpaper request failed", error);
-      await reply("今天的壁纸暂时没能获取到，请稍后再试一次。");
+      await reply("今天这张壁纸暂时没取到，晚点再来看看吧。");
     }
   },
 };

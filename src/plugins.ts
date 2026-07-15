@@ -216,7 +216,7 @@ const listPluginFilesRecursive = async (directory: string): Promise<string[]> =>
     }),
   );
 
-  return files.flat();
+  return files.flat().sort((left, right) => left.localeCompare(right));
 };
 
 const isPluginFile = (filename: string) =>
@@ -291,7 +291,7 @@ const dispatchPluginCommand = async ({
   pluginsByCommand: Map<string, MizPlugin>;
 }) => {
   const commandText = parseCommandText(message.text, config.plugins.commandPrefix);
-  if (!commandText) {
+  if (commandText === undefined) {
     return;
   }
 
@@ -301,8 +301,8 @@ const dispatchPluginCommand = async ({
       gateway,
       message,
       commandText
-        ? `没有找到“${commandText.split(/\s+/, 1)[0]}”这个命令。\n可发送 ${config.plugins.commandPrefix} help 查看可用功能和用法。`
-        : `想查看机器人能做什么？发送 ${config.plugins.commandPrefix} help 即可。`,
+        ? `没找到“${commandText.split(/\s+/, 1)[0]}”这个命令。\n发送 ${config.plugins.commandPrefix} help 查看可用命令。`
+        : `发送 ${config.plugins.commandPrefix} help 查看可用命令。`,
     );
     return;
   }

@@ -56,8 +56,13 @@ export const changeVtbSubscriptions = (
 export const renameVtbSubscriptions = (
   subscriptions: readonly VtbSubscription[],
   renames: ReadonlyMap<string, string>,
-): UpdatedVtbSubscription[] => subscriptions.map((subscription) =>
-  copySubscriptionWithStreamers(subscription, subscription.streamers.map((name) => renames.get(name) ?? name)));
+): UpdatedVtbSubscription[] => subscriptions.map((subscription) => ({
+  groupId: subscription.groupId,
+  streamers: subscription.streamers.map((name) => renames.get(name) ?? name),
+  ...(subscription.atAllStreamers === undefined
+    ? {}
+    : { atAllStreamers: subscription.atAllStreamers.map((name) => renames.get(name) ?? name) }),
+}));
 
 export const partitionVtbSubscriptionsByGroup = (
   subscriptions: readonly VtbSubscription[],
@@ -76,7 +81,9 @@ const copySubscriptionWithStreamers = (
   subscription: VtbSubscription,
   streamers: string[],
 ): UpdatedVtbSubscription => ({
-  ...(subscription.atAllStreamers === undefined ? {} : { atAllStreamers: [...subscription.atAllStreamers] }),
+  ...(subscription.atAllStreamers === undefined
+    ? {}
+    : { atAllStreamers: subscription.atAllStreamers.filter((name) => streamers.includes(name)) }),
   groupId: subscription.groupId,
   streamers,
 });

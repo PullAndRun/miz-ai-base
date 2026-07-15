@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { fetchWithRetry } from "@/http";
+import { fetchWithRetry, readResponseBytes } from "@/http";
 
 const FETCH_TIMEOUT_MS = 20_000;
+const MAX_WALLPAPER_BYTES = 25 * 1024 * 1024;
 
 const bingImageSchema = z.looseObject({
   url: z.string().min(1),
@@ -49,10 +50,8 @@ export const createWallpaperMessage = (wallpaper: Wallpaper) => [
     type: "text",
     data: {
       text: [
-        "╭─「 数字艺术日报 」",
-        "│ 今日的自然画卷，已为你展开",
-        wallpaper.date ? `│ ${formatDate(wallpaper.date)}` : "│ 今日精选壁纸",
-        "╰────────────",
+        "今日壁纸",
+        wallpaper.date ? formatDate(wallpaper.date) : "Bing 今日精选",
       ].join("\n"),
     },
   },
@@ -66,10 +65,10 @@ export const createWallpaperMessage = (wallpaper: Wallpaper) => [
     type: "text",
     data: {
       text: [
-        "「作品信息」",
+        "图片信息",
         ...(wallpaper.title ? [`主题：${wallpaper.title}`] : []),
         `版权：${wallpaper.copyright}`,
-        "愿这一刻的风景，为你留一处安静。",
+        "喜欢的话可以保存下来，换个新背景。",
       ].join("\n"),
     },
   },
@@ -120,7 +119,7 @@ const fetchWallpaperMetadata = async (apiUrl: string) => {
 const fetchImageAsBase64 = async (url: string) => {
   const response = await fetchWithRetry(url, { timeoutMs: FETCH_TIMEOUT_MS });
 
-  return Buffer.from(await response.arrayBuffer()).toString("base64");
+  return (await readResponseBytes(response, MAX_WALLPAPER_BYTES)).toString("base64");
 };
 
 const resolveImageUrl = (url: string, imageBaseUrl: string) =>

@@ -83,10 +83,12 @@ const redactSecrets = <T>(value: T): T => redactValue(value, new WeakSet<object>
 
 const redactValue = <T>(value: T, seen: WeakSet<object>): T => {
   if (typeof value === "string") {
-    return value.replace(
-      /((?:access_)?token|password|cookie|authorization|secret|api[_-]?key|signature)(\s*[:=]\s*)(?:Bearer\s+)?([^&,;\s]+)/gi,
-      "$1$2[redacted]",
-    ) as T;
+    return value
+      .replace(/([a-z][a-z\d+.-]*:\/\/[^:\s/@]+:)[^@\s/]+@/gi, "$1[redacted]@")
+      .replace(
+        /((?:access_)?token|password|cookie|authorization|secret|api[_-]?key|signature)(\s*[:=]\s*)(?:Bearer\s+)?([^&,;\s]+)/gi,
+        "$1$2[redacted]",
+      ) as T;
   }
 
   if (Array.isArray(value)) {

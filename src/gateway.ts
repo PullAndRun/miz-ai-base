@@ -23,6 +23,16 @@ export type ForwardMessageOptions = {
 
 export type MessageHandler = (message: IncomingMessage) => void | Promise<void>;
 
+export class GroupMessageUnavailableError extends Error {
+  readonly groupId: number | string;
+
+  constructor(groupId: number | string) {
+    super(`Group message was not sent because group ${groupId} is muted or its send permission is unavailable`);
+    this.name = "GroupMessageUnavailableError";
+    this.groupId = groupId;
+  }
+}
+
 export type Gateway = {
   connect(): Promise<void>;
   dispose(): void;
@@ -90,13 +100,13 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
     canMentionAllGroupMembers,
     sendGroupMessage: async (groupId, message) => {
       if (!await canSendGroupMessage(groupId)) {
-        return undefined;
+        throw new GroupMessageUnavailableError(groupId);
       }
       return client.sendGroupMessage(groupId, message);
     },
     sendGroupMessageWithoutRetry: async (groupId, message) => {
       if (!await canSendGroupMessage(groupId)) {
-        return undefined;
+        throw new GroupMessageUnavailableError(groupId);
       }
       return callApiWithoutRetry(client, "send_group_msg", { group_id: groupId, message });
     },
@@ -124,13 +134,18 @@ const sendForwardMessage = (
   const forwardMessages = messages.map((message) => createForwardNode(message, options));
 
   if (target.groupId !== undefined) {
-    return canSendGroupMessage(target.groupId).then((allowed) => allowed && client.sendForwardMsg({
-      group_id: target.groupId,
-      messages: forwardMessages,
-      source: options.source,
-      summary: options.summary,
-      prompt: options.title,
-    }));
+    return canSendGroupMessage(target.groupId).then((allowed) => {
+      if (!allowed) {
+        throw new GroupMessageUnavailableError(target.groupId!);
+      }
+      return client.sendForwardMsg({
+        group_id: target.groupId,
+        messages: forwardMessages,
+        source: options.source,
+        summary: options.summary,
+        prompt: options.title,
+      });
+    });
   }
 
   if (target.userId !== undefined) {
@@ -436,7 +451,7 @@ const createWelcomeMessage = (userId: string | number, memberName: string, group
   {
     type: "text",
     data: {
-      text: ` 欢迎加入「${groupName}」！\n很高兴在这里遇见你。先看看群公告和置顶消息，之后就自在聊天吧。`,
+      text: ` 欢迎加入「${groupName}」！\n先看看群公告和置顶消息，熟悉之后就随意聊天。有活动时，也欢迎一起来玩。`,
     },
   },
 ];

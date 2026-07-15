@@ -29,6 +29,7 @@ export const fetchWithRetry = async (url: string | URL, init: RetryRequestInit =
         : signal ?? timeoutSignal;
       const response = await fetch(url, { ...requestInit, signal: requestSignal });
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         throw createHttpRequestError(response.status, response.statusText);
       }
 
@@ -55,6 +56,42 @@ const isRetryableHttpError = (error: unknown) =>
 const isHttpRequestError = (error: unknown): error is HttpRequestError =>
   error instanceof Error &&
   typeof (error as Partial<HttpRequestError>).status === "number";
+
+export const readResponseBytes = async (response: Response, maximumBytes: number) => {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) {
+    throw new RangeError("maximumBytes must be a positive safe integer");
+  }
+
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maximumBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`Response body exceeds ${maximumBytes} bytes`);
+  }
+  if (!response.body) {
+    throw new Error("Response body is missing");
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return Buffer.concat(chunks, size);
+      }
+
+      size += value.byteLength;
+      if (size > maximumBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(`Response body exceeds ${maximumBytes} bytes`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+};
 
 const delay = (milliseconds: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {

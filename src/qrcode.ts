@@ -1,7 +1,7 @@
 import { Jimp } from "jimp";
 import QRCode from "qrcode";
 import QrCodeReader from "qrcode-reader";
-import { fetchWithRetry } from "@/http";
+import { fetchWithRetry, readResponseBytes } from "@/http";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_QR_TEXT_LENGTH = 1_000;
@@ -75,42 +75,11 @@ const readImage = async (source: string) => {
 
   const response = await fetchWithRetry(url, { timeoutMs: FETCH_TIMEOUT_MS });
 
-  const contentLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > MAX_IMAGE_BYTES) {
-    throw new Error("QR code image is too large");
-  }
-
-  const bytes = await readResponseBytes(response);
+  const bytes = await readResponseBytes(response, MAX_IMAGE_BYTES);
   if (bytes.length === 0 || bytes.length > MAX_IMAGE_BYTES) {
     throw new Error("QR code image is empty or too large");
   }
   return bytes;
-};
-
-const readResponseBytes = async (response: Response) => {
-  if (!response.body) {
-    throw new Error("QR code image response has no body");
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        return Buffer.concat(chunks, size);
-      }
-
-      size += value.byteLength;
-      if (size > MAX_IMAGE_BYTES) {
-        throw new Error("QR code image is too large");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
 };
 
 const readLocalImage = async (source: string | URL) => {

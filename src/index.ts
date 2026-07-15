@@ -6,7 +6,7 @@ import { getGroupIds } from "@/group-ids";
 import { createLogger, type Logger } from "@/logger";
 import { createPluginRuntime } from "@/plugins";
 import { startScheduledTasks } from "@/tasks";
-import { partitionAvailableVtbSubscriptions, syncConfiguredVtbStreamers } from "@/vtb";
+import { closeVtbRepository, partitionAvailableVtbSubscriptions, syncConfiguredVtbStreamers } from "@/vtb";
 
 const CONFIG_RELOAD_DELAY_MS = 500;
 
@@ -76,22 +76,31 @@ const createAppRuntime = async (
   gateway: Gateway,
   logger: Logger,
 ): Promise<AppRuntime> => {
-  const config = await prepareVtbSubscriptions(loadedConfig, gateway, logger);
-  await syncConfiguredVtbStreamersOnStartup(config, logger);
-  const plugins = await createPluginRuntime(config, gateway, logger);
-  const detachPluginHandler = gateway.onMessage(plugins.handleMessage);
+  let detachPluginHandler: (() => void) | undefined;
 
   try {
+    const config = await prepareVtbSubscriptions(loadedConfig, gateway, logger);
+    await syncConfiguredVtbStreamersOnStartup(config, logger);
+    const plugins = await createPluginRuntime(config, gateway, logger);
+    const detach = gateway.onMessage(plugins.handleMessage);
+    detachPluginHandler = detach;
     const tasks = await startScheduledTasks(config, gateway, logger);
+    let stopPromise: Promise<void> | undefined;
     return {
       config,
-      stop: async () => {
-        detachPluginHandler();
-        await tasks.stop();
+      stop: () => {
+        stopPromise ??= (async () => {
+          detach();
+          await tasks.stop();
+        })();
+        return stopPromise;
       },
     };
   } catch (error) {
-    detachPluginHandler();
+    detachPluginHandler?.();
+    await closeVtbRepository().catch((closeError) => {
+      logger.warn("plugin", "database connection failed to close after runtime startup error", closeError);
+    });
     throw error;
   }
 };
