@@ -6,10 +6,16 @@
     "paths": {
       "@/*": ["./src/*"]
     },
-    "types": ["bun"],
+    "types": ["bun", "node"],
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "plugins/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]
+  "include": [
+    "prisma.config.ts",
+    "src/**/*.ts",
+    "plugins/**/*.ts",
+    "scripts/**/*.ts",
+    "tests/**/*.ts"
+  ]
 }
