@@ -147,7 +147,7 @@ export const resolveVtbStreamer = async (name: string, config: VtbConfig): Promi
 
   const user = response.data.result.find((item) => item.uname === name);
   return user
-    ? { name: user.uname, mid: String(user.mid), roomId: user.room_id === undefined ? undefined : String(user.room_id) }
+    ? { name: user.uname, mid: String(user.mid), roomId: normalizeRoomId(user.room_id) }
     : undefined;
 };
 
@@ -270,7 +270,11 @@ export const syncVtbSubscriptionNames = async (config: MizConfig) => {
   }
 
   for (const { streamer, card } of matchedStreamers) {
-    const live = liveInfos.get(streamer.mid)!;
+    const live = liveInfos.get(streamer.mid);
+    if (!live) {
+      failed.push({ name: streamer.name, reason: `直播接口未返回 MID ${streamer.mid}` });
+      continue;
+    }
     if (card.name !== streamer.name || (live.roomId && live.roomId !== streamer.roomId)) {
       await repository.upsertStreamer({
         ...streamer,
@@ -356,6 +360,10 @@ export const getVtbLiveInfos = async (streamers: readonly VtbStreamer[], config:
       const live = findLiveInfo(response.data, streamer.mid);
       if (live) {
         results.set(streamer.mid, toVtbLiveInfo(streamer, live));
+      } else if (!normalizeRoomId(streamer.roomId)) {
+        // Bilibili omits users without a live room from this batch endpoint.
+        // That is a normal offline state, not a failed lookup.
+        results.set(streamer.mid, toVtbLiveInfo({ ...streamer, roomId: undefined }, undefined));
       }
     }
   }
@@ -1200,11 +1208,14 @@ export const getDatabaseUrl = (config: MizConfig) => {
 const fromStoredStreamer = (streamer: { name: string; mid: bigint; liveRoom: bigint | null }): VtbStreamer => ({
   name: streamer.name,
   mid: streamer.mid.toString(),
-  roomId: streamer.liveRoom?.toString(),
+  roomId: normalizeRoomId(streamer.liveRoom),
 });
 
 const toMid = (mid: string) => BigInt(mid);
-const toOptionalMid = (value: string | undefined) => (value === undefined ? null : BigInt(value));
+const toOptionalMid = (value: string | undefined) => {
+  const roomId = normalizeRoomId(value);
+  return roomId === undefined ? null : BigInt(roomId);
+};
 
 const fetchJson = async (url: string, headers?: Record<string, string>, init?: RequestInit) => {
   const response = await fetchWithRetry(url, {
@@ -1268,6 +1279,12 @@ const extractCardRecords = (value: unknown): unknown[] => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+const normalizeRoomId = (value: string | number | bigint | null | undefined) => {
+  if (value === undefined || value === null) return undefined;
+  const roomId = String(value);
+  return roomId === "0" ? undefined : roomId;
+};
+
 const findLiveInfo = (value: unknown, mid: string) => {
   if (isRecord(value)) {
     const parsed = liveInfoSchema.safeParse(value[mid]);
@@ -1293,7 +1310,7 @@ const findLiveInfo = (value: unknown, mid: string) => {
 
 const toVtbLiveInfo = (streamer: VtbStreamer, live: z.infer<typeof liveInfoSchema> | undefined): VtbLiveInfo => ({
   title: live?.title?.trim() || "还没有直播标题",
-  roomId: live?.room_id === undefined ? streamer.roomId : String(live.room_id),
+  roomId: live?.room_id === undefined ? normalizeRoomId(streamer.roomId) : normalizeRoomId(live.room_id),
   liveStartedAt: parseDate(live?.live_time),
   isLive: live?.live_status === 1,
   name: live?.uname?.trim() || streamer.name,
