@@ -58,6 +58,26 @@ reminderMinutes = 30
 batchSize = 20
 manageWhitelistUserIds = []
 
+[miz.activity]
+enabled = true
+cron = "* * * * *"
+reminderMinutes = 30
+batchSize = 20
+maxParticipants = 50
+manageWhitelistUserIds = []
+
+[miz.faq]
+maxEntries = 100
+maxAnswerLength = 1000
+manageWhitelistUserIds = []
+
+[miz.todo]
+enabled = true
+cron = "* * * * *"
+reminderMinutes = 30
+batchSize = 20
+manageWhitelistUserIds = []
+
 [miz.broadcast]
 whitelistUserIds = []
 

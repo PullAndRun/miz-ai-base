@@ -80,3 +80,65 @@ model ScheduleEvent {
   @@index([groupId, eventAt])
   @@map("schedule_events")
 }
+
+model Activity {
+  id            Int                    @id @default(autoincrement())
+  groupId       String                 @map("group_id")
+  displayId     Int                    @map("display_id")
+  creatorId     String                 @map("creator_id")
+  content       String
+  eventAt       DateTime               @map("event_at")
+  remindAt      DateTime               @map("remind_at")
+  remindedAt    DateTime?              @map("reminded_at")
+  createdAt     DateTime               @default(now()) @map("created_at")
+  registrations ActivityRegistration[]
+
+  @@unique([groupId, displayId])
+  @@index([remindedAt, remindAt])
+  @@index([groupId, eventAt])
+  @@map("activities")
+}
+
+model ActivityRegistration {
+  activityId Int      @map("activity_id")
+  userId     String   @map("user_id")
+  joinedAt   DateTime @default(now()) @map("joined_at")
+  activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+
+  @@id([activityId, userId])
+  @@map("activity_registrations")
+}
+
+model FaqEntry {
+  id        Int      @id @default(autoincrement())
+  groupId   String   @map("group_id")
+  keyword   String
+  answer    String
+  creatorId String   @map("creator_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([groupId, keyword])
+  @@index([groupId, updatedAt])
+  @@map("faq_entries")
+}
+
+model GroupTodo {
+  id          Int       @id @default(autoincrement())
+  groupId     String    @map("group_id")
+  displayId   Int       @map("display_id")
+  creatorId   String    @map("creator_id")
+  assigneeId  String?   @map("assignee_id")
+  content     String
+  dueAt       DateTime? @map("due_at")
+  remindAt    DateTime? @map("remind_at")
+  remindedAt  DateTime? @map("reminded_at")
+  completedAt DateTime? @map("completed_at")
+  completedBy String?   @map("completed_by")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@unique([groupId, displayId])
+  @@index([groupId, completedAt, dueAt])
+  @@index([completedAt, remindedAt, remindAt])
+  @@map("group_todos")
+}

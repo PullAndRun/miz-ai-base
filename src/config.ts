@@ -97,6 +97,32 @@ const rawMizConfigSchema = z.object({
       manageWhitelistUserIds: z.array(targetIdSchema).optional(),
     })
     .optional(),
+  activity: z
+    .object({
+      enabled: z.boolean().optional(),
+      cron: nonEmptyStringSchema.optional(),
+      reminderMinutes: z.number().int().positive().max(10_080).optional(),
+      batchSize: z.number().int().positive().max(100).optional(),
+      maxParticipants: z.number().int().positive().max(200).optional(),
+      manageWhitelistUserIds: z.array(targetIdSchema).optional(),
+    })
+    .optional(),
+  faq: z
+    .object({
+      maxEntries: z.number().int().positive().max(1_000).optional(),
+      maxAnswerLength: z.number().int().positive().max(4_000).optional(),
+      manageWhitelistUserIds: z.array(targetIdSchema).optional(),
+    })
+    .optional(),
+  todo: z
+    .object({
+      enabled: z.boolean().optional(),
+      cron: nonEmptyStringSchema.optional(),
+      reminderMinutes: z.number().int().positive().max(10_080).optional(),
+      batchSize: z.number().int().positive().max(100).optional(),
+      manageWhitelistUserIds: z.array(targetIdSchema).optional(),
+    })
+    .optional(),
   broadcast: z
     .object({
       whitelistUserIds: z.array(targetIdSchema).optional(),
@@ -197,6 +223,26 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     batchSize: config.schedule?.batchSize ?? 20,
     manageWhitelistUserIds: config.schedule?.manageWhitelistUserIds ?? [],
   },
+  activity: {
+    enabled: config.activity?.enabled ?? true,
+    cron: config.activity?.cron ?? "* * * * *",
+    reminderMinutes: config.activity?.reminderMinutes ?? 30,
+    batchSize: config.activity?.batchSize ?? 20,
+    maxParticipants: config.activity?.maxParticipants ?? 50,
+    manageWhitelistUserIds: config.activity?.manageWhitelistUserIds ?? [],
+  },
+  faq: {
+    maxEntries: config.faq?.maxEntries ?? 100,
+    maxAnswerLength: config.faq?.maxAnswerLength ?? 1_000,
+    manageWhitelistUserIds: config.faq?.manageWhitelistUserIds ?? [],
+  },
+  todo: {
+    enabled: config.todo?.enabled ?? true,
+    cron: config.todo?.cron ?? "* * * * *",
+    reminderMinutes: config.todo?.reminderMinutes ?? 30,
+    batchSize: config.todo?.batchSize ?? 20,
+    manageWhitelistUserIds: config.todo?.manageWhitelistUserIds ?? [],
+  },
   broadcast: {
     whitelistUserIds: config.broadcast?.whitelistUserIds ?? [],
   },
@@ -267,6 +313,29 @@ export type ScheduleConfig = {
   manageWhitelistUserIds: Array<string | number>;
 };
 
+export type ActivityConfig = {
+  enabled: boolean;
+  cron: string;
+  reminderMinutes: number;
+  batchSize: number;
+  maxParticipants: number;
+  manageWhitelistUserIds: Array<string | number>;
+};
+
+export type FaqConfig = {
+  maxEntries: number;
+  maxAnswerLength: number;
+  manageWhitelistUserIds: Array<string | number>;
+};
+
+export type TodoConfig = {
+  enabled: boolean;
+  cron: string;
+  reminderMinutes: number;
+  batchSize: number;
+  manageWhitelistUserIds: Array<string | number>;
+};
+
 export type BroadcastConfig = {
   whitelistUserIds: Array<string | number>;
 };
@@ -324,6 +393,9 @@ export type MizConfig = z.infer<typeof mizConfigSchema> & {
   news: NewsConfig;
   reminder: ReminderConfig;
   schedule: ScheduleConfig;
+  activity: ActivityConfig;
+  faq: FaqConfig;
+  todo: TodoConfig;
   broadcast: BroadcastConfig;
   video: VideoConfig;
   vtb: VtbConfig;

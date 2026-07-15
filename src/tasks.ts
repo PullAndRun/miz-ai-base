@@ -48,6 +48,8 @@ export const startScheduledTasks = async (
     startedTasks.push(startNewsTask(config, gateway, logger));
     startedTasks.push(await startReminderTask(config, gateway, logger));
     startedTasks.push(await startScheduleTask(config, gateway, logger));
+    startedTasks.push(await startActivityTask(config, gateway, logger));
+    startedTasks.push(await startTodoTask(config, gateway, logger));
     startedTasks.push(startYtDlpUpdateTask(config, logger));
     startedTasks.push(startVtbNameSyncTask(config, logger));
     startedTasks.push(await startVtbTask(config, gateway, logger));
@@ -177,6 +179,185 @@ const startScheduleTask = async (config: MizConfig, gateway: Gateway, logger: Lo
     stop: async () => {
       task.stop();
       await currentRun?.catch((error) => logger.warn("plugin", "schedule task ended with an error during shutdown", error));
+    },
+  };
+};
+
+const startActivityTask = async (config: MizConfig, gateway: Gateway, logger: Logger): Promise<TaskRuntime> => {
+  if (!config.activity.enabled) {
+    logger.info("plugin", "activity task disabled: config switch is off");
+    return createNoopTask();
+  }
+
+  const cronExpression = config.activity.cron;
+  if (!cron.validate(cronExpression)) {
+    logger.warn("plugin", "activity task disabled: invalid cron expression", { cronExpression });
+    return createNoopTask();
+  }
+
+  let repository;
+  try {
+    repository = await getVtbRepository(config);
+    await repository.ensureActivityStorage();
+  } catch (error) {
+    logger.error("plugin", "activity task disabled: database initialization failed", error);
+    return createNoopTask();
+  }
+
+  let running = false;
+  let currentRun: Promise<void> | undefined;
+  const runTask = async () => {
+    if (running) {
+      logger.warn("plugin", "activity task skipped: previous run is still active");
+      return;
+    }
+
+    running = true;
+    try {
+      const activities = await repository.claimDueActivities(new Date(), config.activity.batchSize);
+      for (const activity of activities) {
+        try {
+          const participantIds = activity.registrations.length > 0
+            ? activity.registrations.map((registration) => registration.userId)
+            : [activity.creatorId];
+          const mentions = Array.from(new Set(participantIds)).flatMap((userId) => [
+            { type: "at", data: { qq: userId } },
+            { type: "text", data: { text: " " } },
+          ]);
+          await gateway.sendGroupMessage(activity.groupId, [
+            ...mentions,
+            {
+              type: "text",
+              data: {
+                text: `活动快开始了\n#${activity.displayId} · ${activity.content}\n开始时间：${dayjs(activity.eventAt).format("YYYY年M月D日 HH:mm")}\n已经报名的朋友记得准备一下。`,
+              },
+            },
+          ]);
+          logger.info("plugin", "activity reminder sent", {
+            displayId: activity.displayId,
+            groupId: activity.groupId,
+            participantCount: activity.registrations.length,
+          });
+        } catch (error) {
+          try {
+            await repository.releaseActivityClaim(activity);
+          } catch (releaseError) {
+            logger.error("plugin", "activity reminder claim could not be released", {
+              displayId: activity.displayId,
+              groupId: activity.groupId,
+              error: normalizeError(releaseError),
+            });
+          }
+          logger.error("plugin", "activity reminder delivery failed after claiming", {
+            displayId: activity.displayId,
+            groupId: activity.groupId,
+            error: normalizeError(error),
+          });
+        }
+      }
+      await repository.cleanupFinishedActivities();
+    } finally {
+      running = false;
+    }
+  };
+
+  const task = cron.schedule(cronExpression, () => {
+    const wasRunning = running;
+    const run = runTask();
+    if (!wasRunning) currentRun = run;
+    void run.catch((error) => logger.error("plugin", "activity task failed", error));
+  });
+  logger.info("plugin", "activity task started", {
+    cronExpression,
+    reminderMinutes: config.activity.reminderMinutes,
+  });
+  return {
+    stop: async () => {
+      task.stop();
+      await currentRun?.catch((error) => logger.warn("plugin", "activity task ended with an error during shutdown", error));
+    },
+  };
+};
+
+const startTodoTask = async (config: MizConfig, gateway: Gateway, logger: Logger): Promise<TaskRuntime> => {
+  if (!config.todo.enabled) {
+    logger.info("plugin", "todo task disabled: config switch is off");
+    return createNoopTask();
+  }
+
+  const cronExpression = config.todo.cron;
+  if (!cron.validate(cronExpression)) {
+    logger.warn("plugin", "todo task disabled: invalid cron expression", { cronExpression });
+    return createNoopTask();
+  }
+
+  let repository;
+  try {
+    repository = await getVtbRepository(config);
+    await repository.ensureTodoStorage();
+  } catch (error) {
+    logger.error("plugin", "todo task disabled: database initialization failed", error);
+    return createNoopTask();
+  }
+
+  let running = false;
+  let currentRun: Promise<void> | undefined;
+  const runTask = async () => {
+    if (running) {
+      logger.warn("plugin", "todo task skipped: previous run is still active");
+      return;
+    }
+
+    running = true;
+    try {
+      const todos = await repository.claimDueTodos(new Date(), config.todo.batchSize);
+      for (const todo of todos) {
+        try {
+          const targetId = todo.assigneeId ?? todo.creatorId;
+          await gateway.sendGroupMessage(todo.groupId, [
+            { type: "at", data: { qq: targetId } },
+            {
+              type: "text",
+              data: {
+                text: ` 待办快到截止时间了\n#${todo.displayId} · ${todo.content}\n截止：${dayjs(todo.dueAt).format("YYYY年M月D日 HH:mm")}\n忙完记得用 miz todo done ${todo.displayId} 标记完成。`,
+              },
+            },
+          ]);
+          logger.info("plugin", "todo reminder sent", { displayId: todo.displayId, groupId: todo.groupId });
+        } catch (error) {
+          try {
+            await repository.releaseTodoClaim(todo);
+          } catch (releaseError) {
+            logger.error("plugin", "todo reminder claim could not be released", {
+              displayId: todo.displayId,
+              groupId: todo.groupId,
+              error: normalizeError(releaseError),
+            });
+          }
+          logger.error("plugin", "todo reminder delivery failed after claiming", {
+            displayId: todo.displayId,
+            groupId: todo.groupId,
+            error: normalizeError(error),
+          });
+        }
+      }
+      await repository.cleanupFinishedTodos();
+    } finally {
+      running = false;
+    }
+  };
+
+  const task = cron.schedule(cronExpression, () => {
+    const wasRunning = running;
+    const run = runTask();
+    if (!wasRunning) currentRun = run;
+    void run.catch((error) => logger.error("plugin", "todo task failed", error));
+  });
+  logger.info("plugin", "todo task started", { cronExpression, reminderMinutes: config.todo.reminderMinutes });
+  return {
+    stop: async () => {
+      task.stop();
+      await currentRun?.catch((error) => logger.warn("plugin", "todo task ended with an error during shutdown", error));
     },
   };
 };
@@ -685,7 +866,7 @@ const appendAtAllMention = (message: unknown) => Array.isArray(message)
       ...message,
       { type: "text", data: { text: "\n\n" } },
       { type: "at", data: { qq: "all" } },
-      { type: "text", data: { text: " 开播啦，想看的来集合。" } },
+      { type: "text", data: { text: " 主播开播啦，想看的来集合。" } },
     ]
   : message;
 

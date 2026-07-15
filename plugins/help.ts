@@ -1,17 +1,20 @@
 import type { MizPlugin, PluginInfo } from "@/plugins";
 
 const pluginDisplayNames: Readonly<Record<string, string>> = {
+  activity: "活动报名",
   broadcast: "群公告",
   divination: "今日小签",
   ff14: "FF14 市场",
+  faq: "群问答",
   help: "功能菜单",
   joke: "笑话图",
   news: "财经快讯",
   qrcode: "二维码",
   remind: "群提醒",
   schedule: "群日程",
+  todo: "群待办",
   video: "视频",
-  vtb: "直播与动态",
+  vtb: "主播直播与动态",
   wallpaper: "今日壁纸",
 };
 

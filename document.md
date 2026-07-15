@@ -1,12 +1,12 @@
 # miz
 
-基于 Bun、NapLink 与 NapCat 的 QQ 机器人。项目采用插件化命令，并提供新闻、每日壁纸、视频、VTB 订阅、FF14 市场、占卜、复读和米哈游笑话功能。
+基于 Bun、NapLink 与 NapCat 的 QQ 机器人。项目采用插件化命令，并提供活动报名、群问答、群待办、提醒、日程、主播订阅、新闻、每日壁纸、视频、FF14 市场、占卜、复读和米哈游笑话等功能。
 
 ## 前置条件
 
 - Bun
 - NapCat / OneBot 网关
-- PostgreSQL（VTB 功能使用 Prisma）
+- PostgreSQL（持久化功能使用 Prisma）
 - `tools/yt-dlp`、`tools/yt-dlp.exe`
 - `tools/ffmpeg`、`tools/ffmpeg.exe`
 
@@ -25,6 +25,9 @@ Linux/Docker 使用无扩展名的工具文件；Windows 使用 `.exe` 文件。
 - `[miz.plugins]`：命令前缀与插件目录，默认前缀为 `miz`。
 - `[miz.video]`：下载目录、NapCat 媒体目录及不同系统的工具路径。
 - `[miz.vtb]`：B 站用户、卡片、直播和动态接口，以及群订阅列表。每个 `[[miz.vtb.subscriptions]]` 可用 `atAllStreamers = ["主播名"]` 单独指定开播时 @全体成员；仅当机器人是群主或管理员，且 QQ 账号在该群仍有可用的 @全体 次数时生效，否则发送普通开播通知。动态和下播通知不会 @。
+- `[miz.activity]`：活动报名提醒、每次处理数量、人数上限和管理白名单；默认上限 50 人，提前 30 分钟提醒。
+- `[miz.faq]`：群问答词条数量、答案长度和管理白名单；默认最多 100 条。
+- `[miz.todo]`：群待办提醒、每次处理数量和管理白名单；有截止时间时默认提前 30 分钟提醒。
 - `[miz.news]`、`[miz.wallpaper]`、`[miz.ff14]`：各功能的定时任务和接口配置。
 
 除视频白名单、群列表和 VTB/FF14 订阅外，接口地址为空时对应定时任务会自动禁用并记录原因。
@@ -88,6 +91,15 @@ Docker 模式会读取普通配置 `config/app.toml`，再将 `config/app.docker
 | `miz schedule add YYYY-MM-DD HH:mm 内容` | 创建群日程；仅群主、管理员或日程管理白名单可用。 |
 | `miz schedule list` | 查看本群即将开始的日程。 |
 | `miz schedule cancel <编号>` | 取消群日程；仅群主、管理员或日程管理白名单可用。 |
+| `miz activity create YYYY-MM-DD HH:mm 内容` | 发起活动报名；仅群主、管理员或活动管理白名单可用。 |
+| `miz activity list` | 查看正在报名的活动和人数。 |
+| `miz activity join <编号>` / `miz activity leave <编号>` | 参加或退出活动。 |
+| `miz activity cancel <编号>` | 取消活动；仅群主、管理员或活动管理白名单可用。 |
+| `miz faq <关键词>` / `miz faq list` | 查询群问答，或查看已有关键词。 |
+| `miz faq add/edit/delete ...` | 维护群问答；仅群主、管理员或 FAQ 管理白名单可用。 |
+| `miz todo add [YYYY-MM-DD HH:mm] [@QQ号] 内容` | 添加待办；指定其他负责人需要管理权限。 |
+| `miz todo list` | 查看本群未完成待办。 |
+| `miz todo done <编号>` / `miz todo cancel <编号>` | 完成或取消待办。 |
 | `miz vtb live <主播名>` | 查询主播直播信息。 |
 | `miz vtb dynamic <主播名>` | 查询主播最新动态。 |
 | `miz ff14 <区域> <物品名>` | 查询 FF14 市场信息。 |
@@ -103,6 +115,8 @@ Docker 模式会读取普通配置 `config/app.toml`，再将 `config/app.docker
 - FF14：按配置的 Cron 表达式检查价格提醒。
 - yt-dlp：默认每天检查更新。
 - 群日程：默认每分钟检查，到活动前 30 分钟自动提醒一次；可在 `[miz.schedule]` 调整。
+- 活动报名：默认每分钟检查，开始前 30 分钟提醒报名成员；可在 `[miz.activity]` 调整。
+- 群待办：默认每分钟检查，在截止前 30 分钟提醒负责人；可在 `[miz.todo]` 调整。
 
 相同任务不会并发执行；前一次尚未结束时，下一次会跳过并记录日志。
 

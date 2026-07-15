@@ -1,7 +1,14 @@
 import dayjs from "dayjs";
 import { XMLParser } from "fast-xml-parser";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient, type Reminder, type ScheduleEvent } from "@/generated/prisma/client";
+import {
+  PrismaClient,
+  type Activity,
+  type ActivityRegistration,
+  type GroupTodo,
+  type Reminder,
+  type ScheduleEvent,
+} from "@/generated/prisma/client";
 import { z } from "zod";
 import type { MizConfig, VtbConfig } from "@/config";
 import { fetchWithRetry } from "@/http";
@@ -94,6 +101,8 @@ export type VtbDynamicDeliveryState = {
 export type VtbCardInfo = { fans?: number; name?: string };
 type ReminderClaim = Reminder & { claimedAt: Date; nextRemindAt?: Date };
 type ScheduleEventClaim = ScheduleEvent & { claimedAt: Date };
+type ActivityClaim = Activity & { claimedAt: Date; registrations: ActivityRegistration[] };
+type GroupTodoClaim = GroupTodo & { claimedAt: Date };
 
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
@@ -768,6 +777,307 @@ const createVtbRepository = (prisma: PrismaClient) => {
     });
   };
 
+  const ensureActivityStorage = async () => prisma.activity.findFirst({ select: { id: true } });
+
+  const createActivity = async ({
+    groupId,
+    creatorId,
+    content,
+    eventAt,
+    remindAt,
+  }: { groupId: string | number; creatorId: string | number; content: string; eventAt: Date; remindAt: Date }) => {
+    return prisma.$transaction(async (transaction) => {
+      const groupKey = String(groupId);
+      await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`activity:${groupKey}`}))`;
+      await transaction.activity.deleteMany({ where: { groupId: groupKey, eventAt: { lte: new Date() } } });
+      const previous = await transaction.activity.findFirst({
+        where: { groupId: groupKey },
+        orderBy: { displayId: "desc" },
+        select: { displayId: true },
+      });
+
+      return transaction.activity.create({
+        data: {
+          groupId: groupKey,
+          displayId: (previous?.displayId ?? 0) + 1,
+          creatorId: String(creatorId),
+          content,
+          eventAt,
+          remindAt,
+        },
+      });
+    });
+  };
+
+  const listUpcomingActivities = async (groupId: string | number) => {
+    return prisma.activity.findMany({
+      where: { groupId: String(groupId), eventAt: { gt: new Date() } },
+      include: { _count: { select: { registrations: true } } },
+      orderBy: { eventAt: "asc" },
+    });
+  };
+
+  const joinActivity = async (
+    displayId: number,
+    groupId: string | number,
+    userId: string | number,
+    maximumParticipants: number,
+  ) => {
+    return prisma.$transaction(async (transaction) => {
+      const candidate = await transaction.activity.findFirst({
+        where: { displayId, groupId: String(groupId), eventAt: { gt: new Date() } },
+      });
+      if (!candidate) {
+        return { status: "not_found" as const };
+      }
+
+      await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`activity-registration:${candidate.id}`}))`;
+      const activity = await transaction.activity.findFirst({
+        where: { id: candidate.id, eventAt: { gt: new Date() } },
+      });
+      if (!activity) {
+        return { status: "not_found" as const };
+      }
+      const normalizedUserId = String(userId);
+      const existing = await transaction.activityRegistration.findUnique({
+        where: { activityId_userId: { activityId: activity.id, userId: normalizedUserId } },
+      });
+      if (existing) {
+        return { status: "already_joined" as const, activity };
+      }
+
+      const participantCount = await transaction.activityRegistration.count({ where: { activityId: activity.id } });
+      if (participantCount >= maximumParticipants) {
+        return { status: "full" as const, activity, participantCount };
+      }
+
+      await transaction.activityRegistration.create({
+        data: { activityId: activity.id, userId: normalizedUserId },
+      });
+      return { status: "joined" as const, activity, participantCount: participantCount + 1 };
+    });
+  };
+
+  const leaveActivity = async (displayId: number, groupId: string | number, userId: string | number) => {
+    const activity = await prisma.activity.findFirst({
+      where: { displayId, groupId: String(groupId), eventAt: { gt: new Date() } },
+      select: { id: true },
+    });
+    if (!activity) {
+      return { status: "not_found" as const };
+    }
+
+    const result = await prisma.activityRegistration.deleteMany({
+      where: { activityId: activity.id, userId: String(userId) },
+    });
+    return { status: result.count === 1 ? "left" as const : "not_joined" as const };
+  };
+
+  const cancelUpcomingActivity = async (displayId: number, groupId: string | number) => {
+    return prisma.$transaction(async (transaction) => {
+      const activity = await transaction.activity.findFirst({
+        where: { displayId, groupId: String(groupId), eventAt: { gt: new Date() } },
+        select: { id: true },
+      });
+      if (!activity) return { count: 0 };
+      await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`activity-registration:${activity.id}`}))`;
+      return transaction.activity.deleteMany({
+        where: { id: activity.id, eventAt: { gt: new Date() } },
+      });
+    });
+  };
+
+  const claimDueActivities = async (now: Date, maximumCount: number) => {
+    const candidates = await prisma.activity.findMany({
+      where: { remindedAt: null, remindAt: { lte: now }, eventAt: { gt: now } },
+      include: { registrations: { orderBy: { joinedAt: "asc" } } },
+      orderBy: { remindAt: "asc" },
+      take: maximumCount,
+    });
+    const claimed: ActivityClaim[] = [];
+
+    for (const activity of candidates) {
+      const result = await prisma.activity.updateMany({
+        where: { id: activity.id, remindedAt: null },
+        data: { remindedAt: now },
+      });
+      if (result.count === 1) {
+        const registrations = await prisma.activityRegistration.findMany({
+          where: { activityId: activity.id },
+          orderBy: { joinedAt: "asc" },
+        });
+        claimed.push({ ...activity, registrations, claimedAt: now });
+      }
+    }
+
+    return claimed;
+  };
+
+  const releaseActivityClaim = async (activity: ActivityClaim) => {
+    return prisma.activity.updateMany({
+      where: { id: activity.id, remindedAt: activity.claimedAt },
+      data: { remindedAt: null },
+    });
+  };
+
+  const cleanupFinishedActivities = async (now = new Date()) => {
+    return prisma.activity.deleteMany({ where: { eventAt: { lte: now } } });
+  };
+
+  const ensureFaqStorage = async () => prisma.faqEntry.findFirst({ select: { id: true } });
+
+  const listFaqEntries = async (groupId: string | number) => {
+    return prisma.faqEntry.findMany({
+      where: { groupId: String(groupId) },
+      orderBy: { keyword: "asc" },
+    });
+  };
+
+  const findFaqEntry = async (groupId: string | number, keyword: string) => {
+    return prisma.faqEntry.findUnique({
+      where: { groupId_keyword: { groupId: String(groupId), keyword } },
+    });
+  };
+
+  const createFaqEntry = async ({
+    groupId,
+    keyword,
+    answer,
+    creatorId,
+    maximumEntries,
+  }: {
+    groupId: string | number; keyword: string; answer: string; creatorId: string | number; maximumEntries: number;
+  }) => {
+    return prisma.$transaction(async (transaction) => {
+      const groupKey = String(groupId);
+      await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`faq:${groupKey}`}))`;
+      const existing = await transaction.faqEntry.findUnique({
+        where: { groupId_keyword: { groupId: groupKey, keyword } },
+      });
+      if (existing) {
+        return { status: "exists" as const, entry: existing };
+      }
+
+      const entryCount = await transaction.faqEntry.count({ where: { groupId: groupKey } });
+      if (entryCount >= maximumEntries) {
+        return { status: "full" as const, entryCount };
+      }
+
+      const entry = await transaction.faqEntry.create({
+        data: { groupId: groupKey, keyword, answer, creatorId: String(creatorId) },
+      });
+      return { status: "created" as const, entry };
+    });
+  };
+
+  const updateFaqEntry = async (groupId: string | number, keyword: string, answer: string) => {
+    return prisma.faqEntry.updateMany({
+      where: { groupId: String(groupId), keyword },
+      data: { answer },
+    });
+  };
+
+  const deleteFaqEntry = async (groupId: string | number, keyword: string) => {
+    return prisma.faqEntry.deleteMany({ where: { groupId: String(groupId), keyword } });
+  };
+
+  const ensureTodoStorage = async () => prisma.groupTodo.findFirst({ select: { id: true } });
+
+  const createTodo = async ({
+    groupId,
+    creatorId,
+    assigneeId,
+    content,
+    dueAt,
+    remindAt,
+  }: {
+    groupId: string | number; creatorId: string | number; assigneeId?: string | number; content: string;
+    dueAt?: Date; remindAt?: Date;
+  }) => {
+    return prisma.$transaction(async (transaction) => {
+      const groupKey = String(groupId);
+      await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`todo:${groupKey}`}))`;
+      const previous = await transaction.groupTodo.findFirst({
+        where: { groupId: groupKey },
+        orderBy: { displayId: "desc" },
+        select: { displayId: true },
+      });
+      return transaction.groupTodo.create({
+        data: {
+          groupId: groupKey,
+          displayId: (previous?.displayId ?? 0) + 1,
+          creatorId: String(creatorId),
+          assigneeId: assigneeId === undefined ? null : String(assigneeId),
+          content,
+          dueAt: dueAt ?? null,
+          remindAt: remindAt ?? null,
+        },
+      });
+    });
+  };
+
+  const listPendingTodos = async (groupId: string | number) => {
+    const todos = await prisma.groupTodo.findMany({
+      where: { groupId: String(groupId), completedAt: null },
+    });
+    return todos.sort((left, right) => {
+      if (left.dueAt && right.dueAt) return left.dueAt.getTime() - right.dueAt.getTime();
+      if (left.dueAt) return -1;
+      if (right.dueAt) return 1;
+      return left.createdAt.getTime() - right.createdAt.getTime();
+    });
+  };
+
+  const findPendingTodo = async (displayId: number, groupId: string | number) => {
+    return prisma.groupTodo.findFirst({
+      where: { displayId, groupId: String(groupId), completedAt: null },
+    });
+  };
+
+  const completeTodo = async (displayId: number, groupId: string | number, completedBy: string | number) => {
+    return prisma.groupTodo.updateMany({
+      where: { displayId, groupId: String(groupId), completedAt: null },
+      data: { completedAt: new Date(), completedBy: String(completedBy) },
+    });
+  };
+
+  const cancelTodo = async (displayId: number, groupId: string | number) => {
+    return prisma.groupTodo.deleteMany({
+      where: { displayId, groupId: String(groupId), completedAt: null },
+    });
+  };
+
+  const claimDueTodos = async (now: Date, maximumCount: number) => {
+    const candidates = await prisma.groupTodo.findMany({
+      where: { completedAt: null, remindedAt: null, remindAt: { lte: now } },
+      orderBy: { remindAt: "asc" },
+      take: maximumCount,
+    });
+    const claimed: GroupTodoClaim[] = [];
+    for (const todo of candidates) {
+      const result = await prisma.groupTodo.updateMany({
+        where: { id: todo.id, completedAt: null, remindedAt: null },
+        data: { remindedAt: now },
+      });
+      if (result.count === 1) {
+        claimed.push({ ...todo, claimedAt: now });
+      }
+    }
+    return claimed;
+  };
+
+  const releaseTodoClaim = async (todo: GroupTodoClaim) => {
+    return prisma.groupTodo.updateMany({
+      where: { id: todo.id, completedAt: null, remindedAt: todo.claimedAt },
+      data: { remindedAt: null },
+    });
+  };
+
+  const cleanupFinishedTodos = async (now = new Date()) => {
+    const cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60_000);
+    return prisma.groupTodo.deleteMany({ where: { completedAt: { lte: cutoff } } });
+  };
+
   const close = () => prisma.$disconnect();
 
   return {
@@ -778,6 +1088,11 @@ const createVtbRepository = (prisma: PrismaClient) => {
     releaseReminderClaim, listPendingReminders, findPendingReminder, cancelPendingReminder, editPendingReminder,
     ensureScheduleStorage, createScheduleEvent, listUpcomingScheduleEvents, cancelUpcomingScheduleEvent,
     claimDueScheduleEvents, releaseScheduleEventClaim, cleanupFinishedScheduleEvents, close,
+    ensureActivityStorage, createActivity, listUpcomingActivities, joinActivity, leaveActivity,
+    cancelUpcomingActivity, claimDueActivities, releaseActivityClaim, cleanupFinishedActivities,
+    ensureFaqStorage, listFaqEntries, findFaqEntry, createFaqEntry, updateFaqEntry, deleteFaqEntry,
+    ensureTodoStorage, createTodo, listPendingTodos, findPendingTodo, completeTodo, cancelTodo,
+    claimDueTodos, releaseTodoClaim, cleanupFinishedTodos,
   };
 };
 
@@ -791,13 +1106,13 @@ const formatSyncFailure = (error: unknown) =>
   error instanceof Error ? error.message.replace(/\s+/g, " ").trim().slice(0, 200) : "没有返回具体原因";
 
 export const formatLiveMessage = (live: VtbLiveInfo, fans?: number) => [
-  "直播间亮灯了",
+  "开播提醒",
   `${live.name} 开播了`,
   `标题：${live.title}`,
   ...(live.liveStartedAt ? [`开播：${dayjs(live.liveStartedAt).format("YYYY年MM月DD日 HH:mm")}`] : []),
   ...(fans === undefined ? [] : [`粉丝：${fans.toLocaleString("zh-CN")}`]),
   ...(live.roomId ? [`直播间：${formatLiveRoomUrl(live.roomId)}`] : []),
-  "有空就来一起看吧。",
+  "直播已经开始，想看的来集合吧。",
 ].join("\n");
 
 export const formatLiveQueryMessage = (live: VtbLiveInfo, fans?: number) => [
@@ -807,7 +1122,7 @@ export const formatLiveQueryMessage = (live: VtbLiveInfo, fans?: number) => [
   ...(live.liveStartedAt ? [`开播：${dayjs(live.liveStartedAt).format("YYYY年MM月DD日 HH:mm")}`] : []),
   ...(fans === undefined ? [] : [`粉丝：${fans.toLocaleString("zh-CN")}`]),
   ...(live.roomId ? [`直播间：${formatLiveRoomUrl(live.roomId)}`] : []),
-  live.isLive ? "直播间正在营业。" : "等下一次亮灯。",
+  live.isLive ? "直播正在进行中。" : "目前没有直播，等下次开播。",
 ].join("\n");
 
 export const formatOfflineMessage = (
@@ -821,13 +1136,13 @@ export const formatOfflineMessage = (
   const fanChange = startFans === undefined || endFans === undefined ? undefined : endFans - startFans;
   const durationMinutes = Math.max(1, Math.floor((endedAt.getTime() - startedAt.getTime()) / 60_000));
   return [
-    "本场直播结束",
-    `${name} 下播了`,
+    "下播提醒",
+    `${name} 下播了，辛苦啦`,
     `下播：${dayjs(endedAt).format("YYYY年MM月DD日 HH:mm")}`,
     `直播时长：${durationMinutes.toLocaleString("zh-CN")} 分钟`,
     ...(fanChange && fanChange > 0 ? [`新增粉丝：+${fanChange.toLocaleString("zh-CN")}`] : []),
     ...(roomId ? [`直播间：${formatLiveRoomUrl(roomId)}`] : []),
-    "辛苦了，也谢谢这一场的陪伴。",
+    "感谢陪伴，下次直播见。",
   ].join("\n");
 };
 
@@ -839,8 +1154,8 @@ export const formatDynamicMessage = (dynamic: VtbDynamic) => {
     dynamic.description.includes(dynamicUrl);
 
   return [
-    "动态更新",
-    `${dynamic.author} 发了新动态`,
+    "主播动态",
+    `${dynamic.author} 发布了新动态`,
     `时间：${dayjs(dynamic.publishedAt).format("YYYY年MM月DD日 HH:mm")}`,
     `标题：${dynamic.title}`,
     ...(dynamic.description ? ["", ...dynamic.description.split("\n")] : ["", "这条动态没有文字内容。"]),

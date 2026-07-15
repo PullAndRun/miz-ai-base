@@ -7,22 +7,22 @@ import divinationPlugin from "../plugins/divination";
 describe("user-facing copy", () => {
   test("live notifications are clear and avoid canned AI wording", () => {
     const message = formatLiveMessage({
-      name: "示例账号",
+      name: "示例主播",
       title: "今晚一起聊天",
       isLive: true,
       roomId: "123",
       liveStartedAt: new Date("2030-08-01T20:00:00+08:00"),
     }, 12_345);
 
-    expect(message).toContain("直播间亮灯了");
-    expect(message).toContain("示例账号 开播了");
-    expect(message).toContain("有空就来一起看吧");
-    expect(message).not.toMatch(/TA|传送门|快来集合|舞台进行中/);
+    expect(message).toContain("开播提醒");
+    expect(message).toContain("示例主播 开播了");
+    expect(message).toContain("直播已经开始");
+    expect(message).not.toMatch(/亮灯|营业|TA|传送门|舞台进行中/);
   });
 
   test("offline and dynamic messages keep a light live atmosphere", () => {
     const offline = formatOfflineMessage(
-      "示例账号",
+      "示例主播",
       new Date("2030-08-01T20:00:00+08:00"),
       new Date("2030-08-01T21:00:00+08:00"),
       100,
@@ -30,7 +30,7 @@ describe("user-facing copy", () => {
       "123",
     );
     const dynamic = formatDynamicMessage({
-      author: "示例账号",
+      author: "示例主播",
       title: "新的安排",
       description: "今晚见。",
       containsDynamicUrl: false,
@@ -38,8 +38,8 @@ describe("user-facing copy", () => {
       link: "https://t.bilibili.com/123",
     });
 
-    expect(offline).toContain("谢谢这一场的陪伴");
-    expect(dynamic).toContain("发了新动态");
+    expect(offline).toContain("感谢陪伴，下次直播见");
+    expect(dynamic).toContain("发布了新动态");
     expect(dynamic).not.toMatch(/小作文|TA/);
   });
 
