@@ -121,10 +121,10 @@ export const formatFf14MarketMessages = ({
   if (market.hasData === false || listings.length === 0) {
     return [
       [
-        `道具：${item.Name}（${item.ID}）`,
-        `分区：${regionName}`,
-        ...(minimumPrice === undefined ? [] : [`提醒价格：${formatGil(minimumPrice)}`]),
-        "当前没有挂单，可能暂时没人卖，也可能是市场数据还没更新。",
+        `🪙 ${item.Name} · ${regionName}`,
+        `道具 ID · ${item.ID}`,
+        ...(minimumPrice === undefined ? [] : [`提醒线 · ${formatGil(minimumPrice)}`]),
+        "市场板现在空空的，可能暂时没人出售，也可能数据还在赶来。",
       ].join("\n"),
     ];
   }
@@ -190,7 +190,7 @@ const formatListingMessages = (listings: GroupedListing[]) => {
   for (const groupedListing of listings) {
     if (groupedListing.quality !== currentQuality) {
       currentQuality = groupedListing.quality;
-      messages.push(`${currentQuality} 低价挂单`);
+      messages.push(`✨ ${currentQuality} 低价挂单`);
     }
 
     groupIndexes[groupedListing.quality] += 1;
@@ -209,43 +209,43 @@ const formatSummary = ({
   minimumPrice?: number;
 }) =>
   [
-    `道具：${item.Name}（${item.ID}）`,
-    `分区：${regionName}`,
-    ...(minimumPrice === undefined ? [] : [`提醒价格：${formatGil(minimumPrice)}`]),
-    `最低单价：${formatGil(market.minPrice)}`,
-    `最低 NQ：${formatGil(market.minPriceNQ)}`,
-    `最低 HQ：${formatGil(market.minPriceHQ)}`,
-    `平均单价：${formatGil(market.averagePrice)}`,
-    `平均 NQ：${formatGil(market.averagePriceNQ)}`,
-    `平均 HQ：${formatGil(market.averagePriceHQ)}`,
-    `挂单数量：${formatCount(market.listingsCount)}`,
-    `在售件数：${formatCount(market.unitsForSale)}`,
-    `近期成交：${formatCount(market.recentHistoryCount)}`,
-    `更新时间：${formatUploadTime(market.lastUploadTime)}`,
+    `🪙 ${item.Name} · ${regionName}`,
+    `道具 ID · ${item.ID}`,
+    ...(minimumPrice === undefined ? [] : [`提醒线 · ${formatGil(minimumPrice)}`]),
+    "",
+    `💰 最低单价 · ${formatGil(market.minPrice)}`,
+    `NQ 最低 · ${formatGil(market.minPriceNQ)}`,
+    `HQ 最低 · ${formatGil(market.minPriceHQ)}`,
+    `平均单价 · ${formatGil(market.averagePrice)}`,
+    `NQ 平均 · ${formatGil(market.averagePriceNQ)}`,
+    `HQ 平均 · ${formatGil(market.averagePriceHQ)}`,
+    "",
+    `📦 挂单 ${formatCount(market.listingsCount)} · 在售 ${formatCount(market.unitsForSale)} · 近期成交 ${formatCount(market.recentHistoryCount)}`,
+    `🕒 更新于 ${formatUploadTime(market.lastUploadTime)}`,
   ].join("\n");
 
 const formatListing = (listing: Listing, index: number) =>
   [
     `#${index} · ${listing.worldName ?? "未知服务器"}`,
-    `单价：${formatGil(listing.pricePerUnit)}`,
-    `数量：${listing.quantity.toLocaleString("zh-CN")} · 总价：${formatGil(listing.total)}`,
-    `最近复查：${formatReviewTime(listing.lastReviewTime)}`,
+    `💰 ${formatGil(listing.pricePerUnit)} / 件`,
+    `📦 ${listing.quantity.toLocaleString("zh-CN")} 件 · 合计 ${formatGil(listing.total)}`,
+    `🕒 最近复查 ${formatReviewTime(listing.lastReviewTime)}`,
   ].join("\n");
 
 const formatGil = (value: number | undefined) => {
   if (typeof value !== "number" || value <= 0) {
-    return "暂无报价";
+    return "还没有报价";
   }
 
   return `${Math.round(value).toLocaleString("zh-CN")} gil`;
 };
 
 const formatCount = (value: number | undefined) =>
-  typeof value === "number" ? value.toLocaleString("zh-CN") : "暂无数据";
+  typeof value === "number" ? value.toLocaleString("zh-CN") : "还没有数据";
 
 const formatUploadTime = (value: number | undefined) => {
   if (typeof value !== "number" || value <= 0) {
-    return "暂无数据";
+    return "还没有数据";
   }
 
   return dayjs(value).format("YYYY年MM月DD日 HH:mm");
@@ -253,7 +253,7 @@ const formatUploadTime = (value: number | undefined) => {
 
 const formatReviewTime = (value: number | undefined) => {
   if (typeof value !== "number" || value <= 0) {
-    return "暂无数据";
+    return "还没有数据";
   }
 
   return dayjs.unix(value).format("YYYY年MM月DD日 HH:mm");

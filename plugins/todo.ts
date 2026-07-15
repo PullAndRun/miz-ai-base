@@ -14,7 +14,7 @@ const todoPlugin: MizPlugin = {
   name: "todo",
   commands: ["todo", "待办"],
   description: [
-    "把群里的事情记成待办，可以指定负责人和截止时间；快到期时会提醒。",
+    "把群里的事情放进待办清单，可以指定负责人和截止时间，快到期时会来敲一下。",
     "添加待办：miz todo add 待办内容",
     "添加截止时间：miz todo add 2030-08-01 20:00 待办内容",
     "指定负责人：miz todo add 2030-08-01 20:00 @QQ号 待办内容",
@@ -24,7 +24,7 @@ const todoPlugin: MizPlugin = {
   ].join("\n"),
   async handle({ command, config, logger, message, reply }) {
     if (message.groupId === undefined || message.userId === undefined) {
-      await reply("群待办按群保存，请回到对应群里创建或处理。");
+      await reply("待办清单跟着群聊走，回到对应群里创建或处理吧。");
       return;
     }
 
@@ -39,13 +39,13 @@ const todoPlugin: MizPlugin = {
       if (action.type === "list") {
         const todos = await repository.listPendingTodos(message.groupId);
         await reply(todos.length === 0
-          ? "现在没有待办，事情都处理完了。"
+          ? "✅ 待办清单空空的，事情都处理完啦！"
           : [
-              `还有 ${todos.length} 项待办：`,
+              `🗒️ 清单里还有 ${todos.length} 项待办：`,
               ...todos.map((todo) => [
                 `#${todo.displayId}`,
-                todo.dueAt ? `截止 ${dayjs(todo.dueAt).format("M月D日 HH:mm")}` : "不设截止时间",
-                todo.assigneeId ? `负责人 @${todo.assigneeId}` : `创建者 @${todo.creatorId}`,
+                todo.dueAt ? `⏰ ${dayjs(todo.dueAt).format("M月D日 HH:mm")} 前` : "⏰ 不设截止时间",
+                todo.assigneeId ? `👤 @${todo.assigneeId}` : `👤 创建者 @${todo.creatorId}`,
                 todo.content,
               ].join(" · ")),
             ].join("\n"));
@@ -56,7 +56,7 @@ const todoPlugin: MizPlugin = {
       if (action.type === "done" || action.type === "cancel") {
         const todo = await repository.findPendingTodo(action.id, message.groupId);
         if (!todo) {
-          await reply(`没找到未完成的待办 #${action.id}。先发 miz todo list 看看编号吧。`);
+          await reply(`没找到还没完成的待办 #${action.id}。发 miz todo list 看看当前清单吧。`);
           return;
         }
 
@@ -64,25 +64,25 @@ const todoPlugin: MizPlugin = {
         const isAssignee = todo.assigneeId === String(message.userId);
         if (action.type === "done") {
           if (!isCreator && !isAssignee && !canManage) {
-            await reply("这项待办可以由创建者、负责人或群管理标记完成。");
+            await reply("这项待办需要创建者、负责人或群管理来打勾。");
             return;
           }
           const result = await repository.completeTodo(action.id, message.groupId, message.userId);
-          await reply(result.count === 1 ? `待办 #${action.id} 已完成，辛苦了。` : "这项待办已经处理过了，不用重复操作。");
+          await reply(result.count === 1 ? `✅ 待办 #${action.id} 打勾啦，辛苦了！` : "这项待办已经处理过啦，不用重复操作。");
           return;
         }
 
         if (!isCreator && !canManage) {
-          await reply("取消待办需要创建者、群管理或待办白名单权限。");
+          await reply("想把这项待办划掉，需要创建者、群管理或待办白名单权限。");
           return;
         }
         const result = await repository.cancelTodo(action.id, message.groupId);
-        await reply(result.count === 1 ? `待办 #${action.id} 已取消。` : "这项待办已经处理过了，不用重复操作。");
+        await reply(result.count === 1 ? `待办 #${action.id} 已从清单里划掉。` : "这项待办已经处理过啦，不用重复操作。");
         return;
       }
 
       if (action.assigneeId && action.assigneeId !== String(message.userId) && !canManage) {
-        await reply("你可以给自己记待办；指定其他负责人需要群管理或待办白名单权限。");
+        await reply("给自己记待办可以直接用；想指定其他负责人，需要群管理或待办白名单权限。");
         return;
       }
 
@@ -104,16 +104,17 @@ const todoPlugin: MizPlugin = {
         assigneeId: action.assigneeId,
       });
       await reply([
-        `待办记好了 · #${todo.displayId}`,
-        `内容：${action.content}`,
-        action.assigneeId ? `负责人：@${action.assigneeId}` : "负责人：你自己",
+        `🗒️ 新待办记下啦 · #${todo.displayId}`,
+        "",
+        `「${action.content}」`,
+        action.assigneeId ? `👤 交给 @${action.assigneeId}` : "👤 由你来完成",
         action.dueAt
-          ? `截止：${dayjs(action.dueAt).format("YYYY年M月D日 HH:mm")}，到期前会提醒`
-          : "截止：未设置，完成后手动标记即可",
+          ? `⏰ ${dayjs(action.dueAt).format("YYYY年M月D日 HH:mm")} 前完成，到期前会提醒`
+          : "⏰ 不设截止时间，完成后记得手动打勾",
       ].join("\n"));
     } catch (error) {
       logger.error("plugin", "todo command failed", error);
-      await reply("待办刚才没记上，稍后再试一次吧。");
+      await reply("待办刚才没能写进清单，稍后再试一次吧。");
     }
   },
 };
@@ -168,7 +169,7 @@ const parseLocalDateTime = (date: string, time: string) => {
 };
 
 const createTodoUsage = () => [
-  "群待办支持这些操作：",
+  "🗒️ 群待办清单这样用：",
   "添加：miz todo add 待办内容",
   "带截止时间：miz todo add 2030-08-01 20:00 待办内容",
   "指定负责人：miz todo add 2030-08-01 20:00 @123456789 待办内容",

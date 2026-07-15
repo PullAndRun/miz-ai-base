@@ -78,24 +78,24 @@ export const deliverUnsentNews = async (
 };
 
 export const formatNewsMessages = (news: readonly News[]) => [
-  `财经快讯 · ${news.length} 条新消息`,
+  `📰 财经快讯送达 · ${news.length} 条新消息`,
   ...formatNewsItems(news),
-  "财经信息变化很快，别只凭这些消息做决定。",
+  "消息跑得很快，做决定前记得再确认一下。",
 ];
 
 export const formatNewsItems = (news: readonly News[]) => news.map(formatNews);
 
 export const formatScheduledNewsItems = (news: readonly News[]) =>
   [
-    `财经快讯 · ${news.length} 条新消息`,
+    `📰 财经快讯送达 · ${news.length} 条新消息`,
     ...news.map((item, index) => [
       ...(news.length > 1 ? [`#${index + 1}`] : []),
       formatNews(item),
     ].join("\n")),
-    "财经信息变化很快，别只凭这些消息做决定。",
+    "消息跑得很快，做决定前记得再确认一下。",
   ];
 
-export const createNoNewsMessage = () => "暂时没有新的财经快讯。";
+export const createNoNewsMessage = () => "📰 暂时没有新快讯，消息栏现在很安静。";
 
 export const fetchFinanceNews = async (apiUrl: string): Promise<News[]> => {
   const response = await fetchWithRetry(apiUrl, {

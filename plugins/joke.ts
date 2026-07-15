@@ -10,15 +10,15 @@ let jokeImagesPromise: Promise<readonly string[]> | undefined;
 const jokePlugin: MizPlugin = {
   name: "joke",
   commands: ["joke"],
-  description: "随机来一组米哈游笑话图，每次 10 张且不重复。\n用法：miz joke",
+  description: "随机抽一组米哈游笑话图，每次十连，张张不重复。\n用法：miz joke",
   async handle({ command, logger, message, reply, replyForward }) {
     if (command.args) {
-      await reply("不用加内容，直接发 miz joke 就能抽一组。");
+      await reply("🎲 十连不需要追加内容，直接发 miz joke 就能开抽。");
       return;
     }
 
     if (message.groupId === undefined) {
-      await reply("笑话图十连只在群聊里开放，回群里再抽吧。");
+      await reply("这份笑话图十连要和群友一起看，回群里再抽吧。");
       return;
     }
 
@@ -41,14 +41,14 @@ const jokePlugin: MizPlugin = {
           ]),
         ),
         {
-          title: "米游笑话图 · 十连",
+          title: "🎲 米游笑话图 · 十连",
           source: "miz joke",
-          summary: "本次 10 张",
+          summary: "十连已送达",
         },
       );
     } catch (error) {
       logger.error("plugin", "joke images failed to send", error);
-      await reply("图库刚才没加载出来，晚点再抽一次吧。");
+      await reply("图库刚才卡了一下，这次十连先欠着，晚点再抽吧。");
     }
   },
 };

@@ -95,7 +95,11 @@ updateCron = "0 0 * * *"
 [miz.vtb]
 enabled = true
 cron = "*/3 * * * *"
-1
+# 动态按主播轮转检查；默认约 15 分钟覆盖全部订阅主播。
+dynamicPollMinutes = 15
+dynamicConcurrency = 2
+# 粉丝数不需要随直播状态频繁刷新，默认缓存 30 分钟。
+cardCacheMinutes = 30
 userApiUrl = ""
 cardApiUrl = ""
 liveApiUrl = ""

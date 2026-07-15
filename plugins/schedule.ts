@@ -8,7 +8,7 @@ const schedulePlugin: MizPlugin = {
   name: "schedule",
   commands: ["schedule", "日程"],
   description: [
-    "把群里的活动安排记下来，开始前会在群里提醒。",
+    "把群里的重要安排放进日程表，临近开始时会来提醒大家。",
     "添加日程：miz schedule add 2030-08-01 20:00 活动内容",
     "查看日程：miz schedule list",
     "取消日程：miz schedule cancel 编号",
@@ -16,13 +16,13 @@ const schedulePlugin: MizPlugin = {
   ].join("\n"),
   async handle({ command, config, logger, message, reply }) {
     if (message.groupId === undefined || message.userId === undefined) {
-      await reply("群日程按群保存，请回到对应群里创建或查看。");
+      await reply("日程表跟着群聊走，回到对应群里创建或查看吧。");
       return;
     }
 
     const action = parseScheduleAction(command.args);
     if (!action) {
-      await reply("群日程支持这些操作：\n添加：miz schedule add 2030-08-01 20:00 活动内容\n查看：miz schedule list\n取消：miz schedule cancel 编号\n时间请写成 YYYY-MM-DD HH:mm，并且要晚于现在。");
+      await reply("📅 群日程可以这样安排：\n添加：miz schedule add 2030-08-01 20:00 活动内容\n查看：miz schedule list\n取消：miz schedule cancel 编号\n时间请写成 YYYY-MM-DD HH:mm，并且要晚于现在。");
       return;
     }
 
@@ -32,23 +32,23 @@ const schedulePlugin: MizPlugin = {
         const events = await repository.listUpcomingScheduleEvents(message.groupId);
         await reply(
           events.length === 0
-            ? "这个群接下来没有已安排的日程。"
+            ? "📅 日程表现在很清爽，接下来还没有安排。"
             : [
-                `接下来有 ${events.length} 项日程：`,
-                ...events.map((event) => `#${event.displayId} · ${dayjs(event.eventAt).format("YYYY年MM月DD日 HH:mm")} · ${event.content}`),
+                `📅 接下来有 ${events.length} 项安排：`,
+                ...events.map((event) => `#${event.displayId} · ⏰ ${dayjs(event.eventAt).format("M月D日 HH:mm")} · ${event.content}`),
               ].join("\n"),
         );
         return;
       }
 
       if (!isScheduleManager(message.raw, message.userId, config.schedule.manageWhitelistUserIds)) {
-        await reply("查看日程可以直接用；添加或取消日程需要群主、群管理员或日程白名单权限。");
+        await reply("翻日程表可以直接用；添加或取消安排需要群主、群管理员或日程白名单权限。");
         return;
       }
 
       if (action.type === "cancel") {
         const result = await repository.cancelUpcomingScheduleEvent(action.id, message.groupId);
-        await reply(result.count === 1 ? `日程 #${action.id} 已取消。` : `没找到待开始的日程 #${action.id}。先发 miz schedule list 看看编号吧。`);
+        await reply(result.count === 1 ? `日程 #${action.id} 已从安排里划掉。` : `没找到还没开始的日程 #${action.id}。发 miz schedule list 看看当前安排吧。`);
         return;
       }
 
@@ -67,10 +67,10 @@ const schedulePlugin: MizPlugin = {
         creatorId: message.userId,
         eventAt: action.eventAt,
       });
-      await reply(`日程记好了 · #${event.displayId}\n时间：${dayjs(action.eventAt).format("YYYY年MM月DD日 HH:mm")}\n安排：${action.content}\n开始前会在群里提醒。`);
+      await reply(`📅 新日程排好啦 · #${event.displayId}\n\n「${action.content}」\n⏰ ${dayjs(action.eventAt).format("YYYY年MM月DD日 HH:mm")}\n\n临近开始时会来提醒大家。`);
     } catch (error) {
       logger.error("plugin", "schedule command failed", error);
-      await reply("日程刚才没记上，稍后再试一次吧。");
+      await reply("日程刚才没能排进去，稍后再试一次吧。");
     }
   },
 };

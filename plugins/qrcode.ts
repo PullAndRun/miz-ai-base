@@ -5,7 +5,7 @@ const qrcodePlugin: MizPlugin = {
   name: "qrcode",
   commands: ["qrcode", "二维码"],
   description: [
-    "把文字生成二维码，也可以读取图片里的二维码内容。",
+    "文字可以变成二维码，图片里的二维码也能帮你读出来。",
     "生成：miz qrcode 需要编码的文本",
     "识别：将 miz qrcode decode 与二维码图片一同发送",
     "生成内容最多 1000 个字符，识别图片最大 10MB。",
@@ -13,23 +13,23 @@ const qrcodePlugin: MizPlugin = {
   async handle({ command, logger, message, reply }) {
     const args = command.args.trim();
     if (!args) {
-      await reply("二维码支持两种操作：\n生成：miz qrcode 要写入的内容\n识别：把 miz qrcode decode 和二维码图片放在同一条消息里");
+      await reply("🔳 二维码工具有两种玩法：\n生成：miz qrcode 要写入的内容\n识别：把 miz qrcode decode 和二维码图片放在同一条消息里");
       return;
     }
 
     if (args.toLowerCase() === "decode" || args === "识别") {
       const imageSource = findImageSource(message.raw.message);
       if (!imageSource) {
-        await reply("这条消息里没看到图片。请把识别命令和二维码图片一起发送。");
+        await reply("图片还没跟上来。把识别命令和二维码图片放在同一条消息里再试吧。");
         return;
       }
 
       try {
         const text = await decodeQrCode(imageSource);
-        await reply(`识别到的内容：\n${text}`);
+        await reply(`🔍 二维码读出来啦\n\n${text}`);
       } catch (error) {
         logger.warn("plugin", "qrcode decode failed", normalizeError(error));
-        await reply("这个二维码没读出来。换一张更清晰、四周没有裁切的图片试试，大小不要超过 10MB。");
+        await reply("这个二维码有点看不清。换一张更清晰、四周完整的图片再试吧，大小不要超过 10MB。");
       }
       return;
     }
@@ -42,7 +42,7 @@ const qrcodePlugin: MizPlugin = {
       });
     } catch (error) {
       logger.warn("plugin", "qrcode generation failed", normalizeError(error));
-      await reply("二维码没生成成功。请确认内容不是空白，并且不超过 1000 个字符。");
+      await reply("二维码这次没画出来。确认内容不是空白、长度不超过 1000 个字符，再试一次吧。");
     }
   },
 };

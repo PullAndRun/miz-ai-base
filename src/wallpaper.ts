@@ -50,8 +50,8 @@ export const createWallpaperMessage = (wallpaper: Wallpaper) => [
     type: "text",
     data: {
       text: [
-        `每日一图 · ${wallpaper.date ? formatDate(wallpaper.date) : "Bing 今日精选"}`,
-        "早上好，今天想和大家分享这片风景。",
+        `🌄 今日风景 · ${wallpaper.date ? formatDate(wallpaper.date) : "Bing 今日精选"}`,
+        "新的一天，先把这片风景送到你眼前。",
       ].join("\n"),
     },
   },
@@ -66,8 +66,8 @@ export const createWallpaperMessage = (wallpaper: Wallpaper) => [
     data: {
       text: [
         ...(wallpaper.title ? [`「${wallpaper.title}」`] : []),
-        `图片版权：${wallpaper.copyright}`,
-        "希望它能给你带来一点好心情。",
+        `📷 图片版权 · ${wallpaper.copyright}`,
+        "愿它给今天添上一点好心情。",
       ].join("\n"),
     },
   },

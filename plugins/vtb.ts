@@ -1,10 +1,12 @@
 import type { MizPlugin } from "@/plugins";
 import {
+  createVtbNotificationMessage,
   formatDynamicMessage,
   formatLiveQueryMessage,
+  getVtbCardInfo,
   getVtbRepository,
   getVtbDynamics,
-  getVtbFanCount,
+  getVtbImageFile,
   getVtbLiveInfo,
   resolveTrackedVtbStreamer,
   syncVtbSubscriptionNames,
@@ -21,7 +23,7 @@ const vtbPlugin: MizPlugin = {
   name: "vtb",
   commands: ["vtb"],
   description: [
-    "查询 B 站主播的直播和动态，也可以管理本群的主播订阅。",
+    "追踪 B 站主播的直播和动态，也能管理本群的关注名单。",
     "查询直播：miz vtb live 主播昵称",
     "查询动态：miz vtb dynamic 主播昵称",
     "查看订阅：miz vtb list",
@@ -38,7 +40,7 @@ const vtbPlugin: MizPlugin = {
       ((type === "live" || type === "dynamic" || type === "subscribe" || type === "unsubscribe") && !streamerName)
     ) {
       await reply([
-        "B 站主播功能这样用：",
+        "📺 B 站主播功能这样用：",
         "直播状态：miz vtb live 主播昵称",
         "最新动态：miz vtb dynamic 主播昵称",
         "订阅列表：miz vtb list",
@@ -50,7 +52,7 @@ const vtbPlugin: MizPlugin = {
     }
 
     if (!config.vtb.enabled) {
-      await reply("B 站主播功能还没启用，请联系管理员处理。");
+      await reply("主播追踪频道还没开启，喊管理员来接通一下吧。");
       return;
     }
 
@@ -61,21 +63,21 @@ const vtbPlugin: MizPlugin = {
     const missingSyncApi = type === "sync" &&
       (!config.vtb.userApiUrl || !config.vtb.cardApiUrl || !config.vtb.liveApiUrl);
     if (missingLiveApi || missingDynamicApi || missingSyncApi) {
-      await reply("需要的 B 站接口还没配置完整，请联系管理员处理。");
+      await reply("主播追踪需要的接口还没接完整，请联系管理员完成配置。");
       return;
     }
 
     try {
       if (type === "list" || type === "subscribe" || type === "unsubscribe") {
         if (message.groupId === undefined) {
-          await reply("主播订阅按群管理，请回到目标群里操作。私聊仍然可以查询直播和动态。");
+          await reply("主播关注名单跟着群聊走，回到目标群里管理吧。私聊仍然可以查询直播和动态。");
           return;
         }
         if (!isGroupAdministrator(message.raw) && !isSubscriptionWhitelisted(
           message.userId,
           config.vtb.subscriptionWhitelistUserIds,
         )) {
-          await reply("查询直播和动态可以直接用；管理本群订阅需要管理员或主播订阅白名单权限。");
+          await reply("查询直播和动态可以直接用；调整本群关注名单需要管理员或主播订阅白名单权限。");
           return;
         }
 
@@ -83,8 +85,8 @@ const vtbPlugin: MizPlugin = {
           const subscription = findVtbSubscription(config.vtb.subscriptions, message.groupId);
           await reply(
             subscription?.streamers.length
-              ? [`这个群订阅了 ${subscription.streamers.length} 位主播：`, ...subscription.streamers.map((name) => `· ${name}`)].join("\n")
-              : "这个群还没订阅主播。\n添加：miz vtb subscribe 主播昵称",
+              ? [`📺 这个群正在关注 ${subscription.streamers.length} 位主播：`, ...subscription.streamers.map((name) => `· ${name}`)].join("\n")
+              : "📺 关注名单还是空的。\n添加：miz vtb subscribe 主播昵称",
           );
           return;
         }
@@ -93,7 +95,7 @@ const vtbPlugin: MizPlugin = {
           ? await addVtbSubscription(message.groupId, streamerName)
           : await removeVtbSubscription(message.groupId, streamerName);
         if (!result.changed) {
-          await reply(type === "subscribe" ? `已经订阅 ${streamerName} 了。` : `订阅列表里没有 ${streamerName}。`);
+          await reply(type === "subscribe" ? `${streamerName} 已经在关注名单里啦。` : `关注名单里没有 ${streamerName}。`);
           return;
         }
 
@@ -143,15 +145,15 @@ const vtbPlugin: MizPlugin = {
         });
         await reply(type === "subscribe"
           ? databaseSynchronized
-            ? `已订阅 ${streamerName}。\n之后的开播和新动态会发到这个群。`
-            : `已订阅 ${streamerName}。\n资料暂时没同步好，后台会继续重试。`
-          : `已取消订阅 ${streamerName}。`);
+            ? `📺 已关注 ${streamerName}！\n之后的开播和新动态会来到这个群。`
+            : `📺 已把 ${streamerName} 加入关注名单。\n资料还在同步，后台会继续追上。`
+          : `已经取消关注 ${streamerName}。`);
         return;
       }
 
       if (type === "sync") {
         if (!isSyncWhitelisted(message.userId, config.vtb.syncWhitelistUserIds)) {
-          await reply("资料同步只对同步白名单成员开放。");
+          await reply("资料同步通道只对同步白名单成员开放。");
           return;
         }
 
@@ -170,17 +172,17 @@ const vtbPlugin: MizPlugin = {
         });
         await reply(
           [
-            `资料同步完成：新增 ${databaseSync.added.length} 位，移除 ${databaseSync.removed.length} 位，没找到 ${databaseSync.skipped.length} 位。`,
+            `🔄 资料同步跑完啦：新增 ${databaseSync.added.length} 位，移除 ${databaseSync.removed.length} 位，没找到 ${databaseSync.skipped.length} 位。`,
             renamed.length > 0
               ? [
-                  `已根据 MID 更新 ${renamed.length} 位主播的昵称：`,
+                  `✏️ 根据 MID 更新了 ${renamed.length} 位主播的昵称：`,
                   ...renamed.map((item) => `- ${item.previousName} → ${item.name}（MID：${item.mid}）`),
                 ].join("\n")
-              : "主播昵称与 B 站资料一致。",
-            ...(roomUpdated.length > 0 ? [`更新了 ${roomUpdated.length} 个直播间 ID。`] : []),
+              : "主播昵称都和 B 站资料对上啦。",
+            ...(roomUpdated.length > 0 ? [`🏠 对上了 ${roomUpdated.length} 个直播间 ID。`] : []),
             ...(failed.length > 0
               ? [
-                  `${failed.length} 位主播同步失败：`,
+                  `⚠️ ${failed.length} 位主播暂时没同步上：`,
                   ...failed.slice(0, 10).map((item) => `- ${item.name}：${item.reason}`),
                   ...(failed.length > 10 ? ["其余结果可以到日志里查看。"] : []),
                 ]
@@ -193,46 +195,41 @@ const vtbPlugin: MizPlugin = {
       const repository = await getVtbRepository(config);
       const streamer = await resolveTrackedVtbStreamer(streamerName, config.vtb, repository);
       if (!streamer) {
-        await reply(`没找到“${streamerName}”。请试试主播当前使用的完整 B 站昵称。`);
+        await reply(`没找到“${streamerName}”。换成主播当前使用的完整 B 站昵称再试试吧。`);
         return;
       }
 
       if (type === "live") {
-        const [live, fans] = await Promise.all([
+        const [live, card] = await Promise.all([
           getVtbLiveInfo(streamer, config.vtb),
-          getVtbFanCount(streamer.mid, config.vtb),
+          getVtbCardInfo(streamer.mid, config.vtb),
         ]);
-        await reply([
-          {
-            type: "text",
-            data: {
-              text: [
-                formatLiveQueryMessage(live, fans),
-              ].join("\n"),
-            },
-          },
-          ...(live.coverUrl
-            ? [
-                {
-                  type: "image",
-                  data: { file: live.coverUrl },
-                },
-              ]
-            : []),
-        ]);
+        let imageFile: string | undefined;
+        try {
+          imageFile = await getVtbImageFile(live.coverUrl ?? card.avatarUrl, config.vtb);
+        } catch (error) {
+          logger.warn("plugin", "vtb query image unavailable; sending text only", { streamerName, error });
+        }
+        await reply(createVtbNotificationMessage(formatLiveQueryMessage(live, card.fans), imageFile));
         return;
       }
 
       const feed = await getVtbDynamics(streamer, config.vtb);
       const latestDynamic = feed.items[0];
       if (!latestDynamic) {
-        await reply("这位主播现在没有可展示的动态。");
+        await reply("这位主播最近还没有可以展示的新动态。");
         return;
       }
-      await reply(formatDynamicMessage(latestDynamic));
+      let imageFile: string | undefined;
+      try {
+        imageFile = await getVtbImageFile(feed.avatarUrl, config.vtb);
+      } catch (error) {
+        logger.warn("plugin", "vtb query image unavailable; sending text only", { streamerName, error });
+      }
+      await reply(createVtbNotificationMessage(formatDynamicMessage(latestDynamic), imageFile));
     } catch (error) {
       logger.error("plugin", "vtb query failed", error);
-      await reply("B 站数据刚才没响应，过一会儿再查吧。");
+      await reply("B 站数据刚才在路上卡了一下，过一会儿再查吧。");
     }
   },
 };

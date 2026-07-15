@@ -451,7 +451,7 @@ const createWelcomeMessage = (userId: string | number, memberName: string, group
   {
     type: "text",
     data: {
-      text: ` 欢迎加入「${groupName}」！\n可以先看看群公告和置顶，了解一下群里的基本信息。熟悉之后随意聊，有活动也欢迎一起参加。`,
+      text: ` 欢迎来到「${groupName}」！🎉\n先逛逛群公告和置顶，熟悉之后就自在聊天吧。有活动时，也欢迎一起加入热闹。`,
     },
   },
 ];
@@ -578,7 +578,7 @@ const createAtAllPermissionChecker = (client: NapLink, logger: Logger) => {
 
       try {
         const remaining = await client.getGroupAtAllRemain(groupId);
-        const allowed = remaining > 0;
+        const allowed = isGroupAtAllAvailable(remaining);
         if (!allowed) {
           logger.info("gateway", "@all unavailable: group quota exhausted", { groupId, role, remaining });
         }
@@ -597,6 +597,36 @@ const createAtAllPermissionChecker = (client: NapLink, logger: Logger) => {
       return false;
     }
   };
+};
+
+export const isGroupAtAllAvailable = (value: unknown) => {
+  if (typeof value === "number") {
+    return value > 0;
+  }
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  const canAtAll = getOptionalBooleanValue(record, ["can_at_all", "canAtAll"]);
+  const groupRemaining = getNumberValue(record, [
+    "remain_at_all_count_for_group",
+    "remainAtAllCountForGroup",
+  ]);
+  const accountRemaining = getNumberValue(record, [
+    "remain_at_all_count_for_uin",
+    "remainAtAllCountForUin",
+  ]);
+  if (canAtAll !== undefined) {
+    if (!canAtAll) {
+      return false;
+    }
+    return groupRemaining !== 0 && accountRemaining !== 0;
+  }
+  if (groupRemaining === undefined && accountRemaining === undefined) {
+    return false;
+  }
+  return (groupRemaining ?? 0) > 0 && (accountRemaining ?? 0) > 0;
 };
 
 const getIdValue = (value: unknown, keys: readonly string[]) => {
@@ -618,6 +648,20 @@ const getStringValue = (value: unknown, keys: readonly string[]) => {
 const getBooleanValue = (value: unknown, keys: readonly string[]) => {
   const raw = getValue(value, keys);
   return typeof raw === "boolean" ? raw : raw === 1 || raw === "1" || raw === "true";
+};
+
+const getOptionalBooleanValue = (value: unknown, keys: readonly string[]) => {
+  const raw = getValue(value, keys);
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  if (raw === 1 || raw === "1" || raw === "true") {
+    return true;
+  }
+  if (raw === 0 || raw === "0" || raw === "false") {
+    return false;
+  }
+  return undefined;
 };
 
 const getValue = (value: unknown, keys: readonly string[], seen = new Set<object>()): unknown => {

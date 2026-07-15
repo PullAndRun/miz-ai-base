@@ -16,13 +16,16 @@ import { deliverUnsentNews, fetchFinanceNews, formatScheduledNewsItems } from "@
 import { updateYtDlp } from "@/video";
 import {
   closeVtbRepository,
+  createVtbNotificationMessage,
   formatDynamicMessage,
   formatLiveMessage,
   formatOfflineMessage,
   getVtbRepository,
   getVtbCardInfos,
   getVtbDynamics,
+  getVtbImageFile,
   getVtbLiveInfos,
+  prependVtbAtAllMention,
   resolveTrackedVtbStreamer,
   syncVtbSubscriptionNames,
   type VtbDynamicFeed,
@@ -34,7 +37,7 @@ const ALL_GROUPS_DELIVERED_MARKER = "*";
 
 type VtbPollState = {
   dynamicCursor: number;
-  cardInfos: Map<string, { fans?: number; expiresAt: number }>;
+  cardInfos: Map<string, { fans?: number; avatarUrl?: string; expiresAt: number }>;
 };
 
 export type TaskRuntime = {
@@ -142,7 +145,7 @@ const startScheduleTask = async (config: MizConfig, gateway: Gateway, logger: Lo
             {
               type: "text",
               data: {
-                text: ` 日程快开始了\n安排：${event.content}\n时间：${dayjs(event.eventAt).format("YYYY年MM月DD日 HH:mm")}\n记得提前准备。`,
+                text: ` 📅 日程要开场啦\n「${event.content}」\n⏰ ${dayjs(event.eventAt).format("YYYY年MM月DD日 HH:mm")}\n准备一下，别错过时间。`,
               },
             },
           ]);
@@ -234,7 +237,7 @@ const startActivityTask = async (config: MizConfig, gateway: Gateway, logger: Lo
             {
               type: "text",
               data: {
-                text: `活动快开始了\n#${activity.displayId} · ${activity.content}\n时间：${dayjs(activity.eventAt).format("YYYY年M月D日 HH:mm")}\n报过名的朋友记得准备。`,
+                text: `🎊 活动快开场啦\n#${activity.displayId} · 「${activity.content}」\n⏰ ${dayjs(activity.eventAt).format("YYYY年M月D日 HH:mm")}\n报过名的朋友，准备集合！`,
               },
             },
           ]);
@@ -324,7 +327,7 @@ const startTodoTask = async (config: MizConfig, gateway: Gateway, logger: Logger
             {
               type: "text",
               data: {
-                text: ` 待办快到期了\n#${todo.displayId} · ${todo.content}\n截止：${dayjs(todo.dueAt).format("YYYY年M月D日 HH:mm")}\n完成后发 miz todo done ${todo.displayId} 标记一下。`,
+                text: ` ⏰ 待办快到点啦\n#${todo.displayId} · 「${todo.content}」\n截止于 ${dayjs(todo.dueAt).format("YYYY年M月D日 HH:mm")}\n完成后发 miz todo done ${todo.displayId} 打个勾吧。`,
               },
             },
           ]);
@@ -403,7 +406,7 @@ const startReminderTask = async (config: MizConfig, gateway: Gateway, logger: Lo
         try {
           await gateway.sendGroupMessage(reminder.groupId, [
             { type: "at", data: { qq: reminder.targetId } },
-            { type: "text", data: { text: ` 提醒你一下：${reminder.content}` } },
+            { type: "text", data: { text: ` 🔔 时间到啦：${reminder.content}` } },
           ]);
           logger.info("plugin", "reminder sent", { id: reminder.id, groupId: reminder.groupId });
         } catch (error) {
@@ -607,6 +610,7 @@ const pollVtbSubscriptions = async (
       streamer: VtbStreamer;
       live: VtbLiveInfo;
       fans?: number;
+      avatarUrl?: string;
     }>
   >();
 
@@ -655,6 +659,7 @@ const pollVtbSubscriptions = async (
         for (const mid of cardRefreshMids) {
           pollState.cardInfos.set(mid, {
             fans: refreshedCards.get(mid)?.fans,
+            avatarUrl: refreshedCards.get(mid)?.avatarUrl,
             expiresAt: now + cardCacheMs,
           });
         }
@@ -663,7 +668,10 @@ const pollVtbSubscriptions = async (
       }
     }
     const cardInfos = new Map(
-      streamerMids.map((mid) => [mid, { fans: pollState.cardInfos.get(mid)?.fans }]),
+      streamerMids.map((mid) => [mid, {
+        fans: pollState.cardInfos.get(mid)?.fans,
+        avatarUrl: pollState.cardInfos.get(mid)?.avatarUrl,
+      }]),
     );
 
     const uniqueDynamicSubscriptions = Array.from(
@@ -700,15 +708,15 @@ const pollVtbSubscriptions = async (
           pushCache.get(streamer.mid) ??
           Promise.all([
             Promise.resolve(liveInfos.get(streamer.mid)),
-            Promise.resolve(cardInfos.get(streamer.mid)?.fans),
-          ]).then(([live, fans]) => {
+            Promise.resolve(cardInfos.get(streamer.mid)),
+          ]).then(([live, card]) => {
             if (!live) {
               throw new Error(`Bilibili live API omitted streamer ${streamer.mid}`);
             }
-            return { streamer, live, fans };
+            return { streamer, live, fans: card?.fans, avatarUrl: card?.avatarUrl };
           });
         pushCache.set(streamer.mid, cachedPush);
-        const { live, fans } = await cachedPush;
+        const { live, fans, avatarUrl } = await cachedPush;
         const session = await repository.getLiveSession(streamer.mid);
         const activeSession = session?.endedAt ? undefined : session;
         const belongsToEndedSession = session?.endedAt !== undefined &&
@@ -723,10 +731,14 @@ const pollVtbSubscriptions = async (
           !belongsToEndedSession &&
           (!activeSession ? isRecentLive : undeliveredGroupIds.length > 0)
         ) {
-          const message = [
-            { type: "text", data: { text: formatLiveMessage(live, fans) } },
-            ...(live.coverUrl ? [{ type: "image", data: { file: live.coverUrl } }] : []),
-          ];
+          const imageFile = await resolveVtbNotificationImage(
+            live.coverUrl ?? avatarUrl,
+            config,
+            logger,
+            "live start",
+            live.name,
+          );
+          const message = createVtbNotificationMessage(formatLiveMessage(live, fans), imageFile);
           const deliveredGroups = await sendVtbGroupMessage(
             undeliveredGroupIds,
             message,
@@ -771,13 +783,15 @@ const pollVtbSubscriptions = async (
             ? []
             : groupIds.filter((groupId) => !session.endDeliveredGroupIds.includes(String(groupId)));
           if (undeliveredEndGroupIds.length > 0) {
-            const message = formatOfflineMessage(
-              live.name,
-              session.startedAt,
-              endedAt,
-              session.startFans,
-              endFans,
-              session.roomId,
+            const message = createVtbNotificationMessage(
+              formatOfflineMessage(
+                live.name,
+                session.startedAt,
+                endedAt,
+                session.startFans,
+                endFans,
+                session.roomId,
+              ),
             );
             const deliveredGroups = await sendVtbGroupMessage(
               undeliveredEndGroupIds,
@@ -818,10 +832,14 @@ const pollVtbSubscriptions = async (
             if (undeliveredDynamicGroupIds.length === 0) {
               continue;
             }
-            const message = [
-              { type: "text", data: { text: formatDynamicMessage(latestDynamic) } },
-              ...(feed.avatarUrl ? [{ type: "image", data: { file: feed.avatarUrl } }] : []),
-            ];
+            const imageFile = await resolveVtbNotificationImage(
+              feed.avatarUrl,
+              config,
+              logger,
+              "dynamic",
+              streamer.name,
+            );
+            const message = createVtbNotificationMessage(formatDynamicMessage(latestDynamic), imageFile);
             const deliveredGroups = await sendVtbGroupMessage(
               undeliveredDynamicGroupIds,
               message,
@@ -892,7 +910,7 @@ const sendVtbGroupMessage = async (
     async (groupId) => {
       const shouldMentionAll =
         atAllGroupIds.has(String(groupId)) && await gateway.canMentionAllGroupMembers(groupId);
-      return gateway.sendGroupMessage(groupId, shouldMentionAll ? appendAtAllMention(message) : message);
+      return gateway.sendGroupMessage(groupId, shouldMentionAll ? prependVtbAtAllMention(message) : message);
     },
   );
   const deliveredGroups: Array<string | number> = [];
@@ -913,14 +931,24 @@ const sendVtbGroupMessage = async (
   return deliveredGroups;
 };
 
-const appendAtAllMention = (message: unknown) => Array.isArray(message)
-  ? [
-      ...message,
-      { type: "text", data: { text: "\n\n" } },
-      { type: "at", data: { qq: "all" } },
-      { type: "text", data: { text: " 主播开播了，想看的可以去直播间。" } },
-    ]
-  : message;
+const resolveVtbNotificationImage = async (
+  imageUrl: string | undefined,
+  config: MizConfig,
+  logger: Logger,
+  kind: "live start" | "dynamic",
+  streamer: string,
+) => {
+  try {
+    return await getVtbImageFile(imageUrl, config.vtb);
+  } catch (error) {
+    logger.warn("plugin", "vtb notification image unavailable; sending text only", {
+      kind,
+      streamer,
+      error: normalizeError(error),
+    });
+    return undefined;
+  }
+};
 
 const getVtbPollingIntervalMs = (cronExpression: string) => {
   const minuteInterval = /^\*\/(\d+) \* \* \* \*$/.exec(cronExpression)?.[1];
@@ -1295,9 +1323,9 @@ const runFf14PriceAlerts = async (
           minimumPrice: alert.minimumPrice,
         }),
         {
-          title: `FF14 价格提醒 · ${result.item.Name}`,
+          title: `🪙 FF14 低价提醒 · ${result.item.Name}`,
           source: "miz ff14",
-          summary: `${FF14_REGION_NAMES[alert.region]} · 价格已到 ${alert.minimumPrice.toLocaleString("zh-CN")} gil 以下`,
+          summary: `${FF14_REGION_NAMES[alert.region]} · 好价出现，已到 ${alert.minimumPrice.toLocaleString("zh-CN")} gil 以下`,
         },
       );
 

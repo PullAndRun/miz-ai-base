@@ -21,14 +21,14 @@ const pluginDisplayNames: Readonly<Record<string, string>> = {
 const helpPlugin: MizPlugin = {
   name: "help",
   commands: ["help", "帮助"],
-  description: "看看 miz 能做什么，以及每个命令怎么用。",
+  description: "想找功能或忘了命令？来这里翻翻 miz 的功能图鉴。",
   async handle({ commandPrefix, plugins, replyForward }) {
     const lines = createHelpMessages(commandPrefix, plugins);
 
-    await replyForward(lines.length > 0 ? lines : ["暂时没有可用功能，可能还在加载。"], {
-      title: "miz · 功能菜单",
+    await replyForward(lines.length > 0 ? lines : ["功能还在赶来的路上，稍后再打开菜单看看吧。"], {
+      title: "✨ miz · 功能图鉴",
       source: commandPrefix,
-      summary: `${lines.length} 项可用功能`,
+      summary: `${lines.length} 项功能等你来用`,
     });
   },
 };
@@ -40,9 +40,9 @@ export const createHelpMessages = (commandPrefix: string, plugins: readonly Plug
     .filter((plugin) => plugin.commands.length > 0)
     .map((plugin) => {
       const commands = plugin.commands.map((command) => `${commandPrefix} ${command}`).join("\n");
-      const description = formatDescription(plugin.description ?? "这个功能还没写说明。");
+      const description = formatDescription(plugin.description ?? "这个功能还在准备说明，先记住它的名字吧。");
       const displayName = pluginDisplayNames[plugin.name] ?? plugin.name;
-      return `【${displayName}】\n${description}\n可用命令：\n${commands}`;
+      return `✦ ${displayName}\n${description}\n\n指令入口：\n${commands}`;
     });
 
 const formatDescription = (description: string) => description.replace(/\s*(用法[：:])/g, "\n$1");

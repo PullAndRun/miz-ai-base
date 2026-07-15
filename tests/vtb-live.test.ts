@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { VtbConfig } from "@/config";
-import { getVtbLiveInfo, getVtbLiveInfos, resolveVtbStreamer } from "@/vtb";
+import {
+  createVtbNotificationMessage,
+  getVtbCardInfo,
+  getVtbImageFile,
+  getVtbLiveInfo,
+  getVtbLiveInfos,
+  prependVtbAtAllMention,
+  resolveVtbStreamer,
+} from "@/vtb";
 
 const originalFetch = globalThis.fetch;
 const config = {
@@ -89,5 +97,61 @@ describe("Bilibili live lookup", () => {
       name: "VtbCooldownError",
     });
     expect(calls).toBe(1);
+  });
+
+  test("uses alternative live cover fields when the primary cover is absent", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      code: 0,
+      data: [{
+        uid: "123",
+        live_status: 1,
+        cover_from_user: "",
+        keyframe: "//i0.hdslb.com/live-cover.jpg",
+      }],
+    }))) as unknown as typeof fetch;
+    const coverConfig = {
+      ...config,
+      liveApiUrl: "https://cover.example.test/live",
+    };
+
+    await expect(getVtbLiveInfo({ name: "示例主播", mid: "123" }, coverConfig)).resolves.toMatchObject({
+      coverUrl: "https://i0.hdslb.com/live-cover.jpg",
+    });
+  });
+
+  test("keeps the streamer avatar as an image fallback", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      code: 0,
+      data: { "123": { fans: 10, name: "示例主播", face: "//i0.hdslb.com/avatar.jpg" } },
+    }))) as unknown as typeof fetch;
+    const cardConfig = {
+      ...config,
+      cardApiUrl: "https://card-avatar.example.test/cards?uids=",
+      cardCacheMinutes: 30,
+    };
+
+    await expect(getVtbCardInfo("123", cardConfig)).resolves.toMatchObject({
+      avatarUrl: "https://i0.hdslb.com/avatar.jpg",
+    });
+  });
+
+  test("downloads notification images once and sends them as base64", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } });
+    }) as unknown as typeof fetch;
+    const imageUrl = "https://notification-image.example.test/cover.png";
+
+    const first = await getVtbImageFile(imageUrl, config);
+    const second = await getVtbImageFile(imageUrl, config);
+    expect(first).toBe("base64://AQID");
+    expect(second).toBe(first);
+    expect(calls).toBe(1);
+
+    const message = createVtbNotificationMessage("开播消息", first);
+    const mentioned = prependVtbAtAllMention(message) as Array<{ type: string; data: Record<string, unknown> }>;
+    expect(mentioned[0]).toEqual({ type: "at", data: { qq: "all" } });
+    expect(mentioned.some((segment) => segment.type === "image" && segment.data.file === first)).toBeTrue();
   });
 });

@@ -14,10 +14,11 @@ describe("user-facing copy", () => {
       liveStartedAt: new Date("2030-08-01T20:00:00+08:00"),
     }, 12_345);
 
-    expect(message).toContain("开播提醒");
-    expect(message).toContain("示例主播 开播啦");
-    expect(message).toContain("想看的可以去直播间");
-    expect(message).not.toMatch(/亮灯|营业|TA|传送门|舞台进行中/);
+    expect(message).toContain("🔴 示例主播 的直播间开门啦！");
+    expect(message).toContain("今天播的是——");
+    expect(message).toContain("「今晚一起聊天」");
+    expect(message).toContain("来得正好，一起去看看吧！");
+    expect(message).not.toMatch(/开播时间：|当前粉丝：|亮灯|营业|TA|传送门|舞台进行中/);
   });
 
   test("offline and dynamic messages keep a light live atmosphere", () => {
@@ -38,9 +39,12 @@ describe("user-facing copy", () => {
       link: "https://t.bilibili.com/123",
     });
 
-    expect(offline).toContain("这场直播结束了，下次见");
-    expect(dynamic).toContain("发布了新动态");
-    expect(dynamic).not.toMatch(/小作文|TA/);
+    expect(offline).toContain("🌙 示例主播 今天收工啦");
+    expect(offline).toContain("这次和大家一起度过了 1 小时");
+    expect(offline).toContain("充好电，我们下次见");
+    expect(dynamic).toContain("📮 示例主播 发来一条新动态");
+    expect(dynamic).toContain("「新的安排」");
+    expect(`${offline}\n${dynamic}`).not.toMatch(/下播时间：|本场新增粉丝：|发布时间：|查看原文：|小作文|TA/);
   });
 
   test("general content stays natural without forcing live terminology", () => {
@@ -54,11 +58,11 @@ describe("user-facing copy", () => {
     }));
 
     expect(news).toContain("财经快讯");
-    expect(news).toContain("别只凭这些消息做决定");
-    expect(wallpaper).toContain("每日一图 · 2030年08月01日");
-    expect(wallpaper).toContain("早上好，今天想和大家分享这片风景");
+    expect(news).toContain("消息跑得很快");
+    expect(wallpaper).toContain("🌄 今日风景 · 2030年08月01日");
+    expect(wallpaper).toContain("新的一天，先把这片风景送到你眼前");
     expect(wallpaper).toContain("「山间晨雾」");
-    expect(wallpaper).toContain("希望它能给你带来一点好心情");
+    expect(wallpaper).toContain("愿它给今天添上一点好心情");
     expect(wallpaper).not.toMatch(/壁纸|保存|换上/);
     expect(`${news}\n${wallpaper}`).not.toMatch(/舞台|应援|主播/);
   });

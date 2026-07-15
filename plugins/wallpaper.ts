@@ -4,15 +4,15 @@ import { createWallpaperMessage, getDailyWallpaper } from "@/wallpaper";
 const wallpaperPlugin: MizPlugin = {
   name: "wallpaper",
   commands: ["wallpaper", "壁纸"],
-  description: "每天和大家分享一张 Bing 精选风景图。\n用法：miz wallpaper",
+  description: "每天从 Bing 精选里捎来一张风景，给屏幕换换心情。\n用法：miz wallpaper",
   async handle({ command, config, logger, reply }) {
     if (command.args) {
-      await reply("不用加内容，直接发 miz wallpaper 就能看今天这张图。");
+      await reply("🌄 不用追加内容，直接发 miz wallpaper 就能打开今天的风景。");
       return;
     }
 
     if (!config.wallpaper.apiUrl || !config.wallpaper.imageBaseUrl) {
-      await reply("每日一图还没配置好，请联系管理员处理。");
+      await reply("每日一图的取景通道还没接好，请联系管理员完成配置。");
       return;
     }
 
@@ -24,7 +24,7 @@ const wallpaperPlugin: MizPlugin = {
       await reply(createWallpaperMessage(wallpaper));
     } catch (error) {
       logger.error("plugin", "wallpaper request failed", error);
-      await reply("今天这张图暂时没取到，晚点再来看看吧。");
+      await reply("今天的风景还在路上，晚点再来看看吧。");
     }
   },
 };

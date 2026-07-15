@@ -11,7 +11,7 @@ import {
 } from "@/generated/prisma/client";
 import { z } from "zod";
 import type { MizConfig, VtbConfig } from "@/config";
-import { fetchWithRetry } from "@/http";
+import { fetchWithRetry, readResponseBytes } from "@/http";
 import { partitionVtbSubscriptionsByGroup } from "@/vtb-subscriptions";
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -22,6 +22,9 @@ const VTB_TRANSIENT_FAILURE_THRESHOLD = 3;
 const VTB_JSON_REQUEST_INTERVAL_MS = 250;
 const VTB_DYNAMIC_REQUEST_INTERVAL_MS = 750;
 const VTB_LIVE_QUERY_CACHE_MS = 60_000;
+const VTB_IMAGE_CACHE_MS = 10 * 60_000;
+const MAX_VTB_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_VTB_IMAGE_CACHE_ENTRIES = 16;
 const VTB_RISK_CODES = new Set([-352, -412, -509, -799]);
 const textValueSchema = z.union([z.string(), z.number(), z.boolean()]);
 
@@ -42,6 +45,9 @@ const cardSchema = z.looseObject({
   mid: z.union([z.string(), z.number()]),
   fans: z.union([z.string(), z.number()]).optional(),
   name: z.string().min(1).optional(),
+  face: z.string().nullish(),
+  avatar: z.string().nullish(),
+  avatar_url: z.string().nullish(),
 });
 const liveInfoSchema = z.looseObject({
   title: z.string().optional(),
@@ -49,7 +55,10 @@ const liveInfoSchema = z.looseObject({
   live_time: z.union([z.string(), z.number()]).optional(),
   live_status: z.number().int().optional(),
   uname: z.string().optional(),
-  cover_from_user: z.string().optional(),
+  cover_from_user: z.string().nullish(),
+  keyframe: z.string().nullish(),
+  user_cover: z.string().nullish(),
+  cover: z.string().nullish(),
 });
 const liveResponseSchema = z.looseObject({
   code: z.number(),
@@ -105,7 +114,7 @@ export type VtbDynamicDeliveryState = {
   publishedAt: Date;
   deliveredGroupIds: string[];
 };
-export type VtbCardInfo = { fans?: number; name?: string };
+export type VtbCardInfo = { fans?: number; name?: string; avatarUrl?: string };
 type ReminderClaim = Reminder & { claimedAt: Date; nextRemindAt?: Date };
 type ScheduleEventClaim = ScheduleEvent & { claimedAt: Date };
 type ActivityClaim = Activity & { claimedAt: Date; registrations: ActivityRegistration[] };
@@ -129,6 +138,7 @@ const vtbInFlightRequests = new Map<string, Promise<unknown>>();
 const vtbLiveQueryCache = new Map<string, { live: VtbLiveInfo; expiresAt: number }>();
 const vtbCardQueryCache = new Map<string, { card: VtbCardInfo; expiresAt: number }>();
 const vtbDynamicQueryCache = new Map<string, { feed: VtbDynamicFeed; expiresAt: number }>();
+const vtbImageCache = new Map<string, { file: string; expiresAt: number }>();
 
 export const getVtbRepository = async (config: MizConfig) => {
   if (!repositoryPromise) {
@@ -349,6 +359,11 @@ export const getVtbCardInfos = async (mids: readonly string[], config: VtbConfig
       cards.set(String(parsedCard.data.mid), {
         fans: Number.isFinite(fans) ? fans : undefined,
         name: parsedCard.data.name?.trim() || undefined,
+        avatarUrl: pickImageUrl(
+          parsedCard.data.face,
+          parsedCard.data.avatar,
+          parsedCard.data.avatar_url,
+        ),
       });
     }
     const expiresAt = Date.now() + (config.cardCacheMinutes ?? 30) * 60_000;
@@ -447,6 +462,61 @@ export const getVtbDynamics = async (
     expiresAt: Date.now() + getVtbDynamicQueryCacheMs(config),
   });
   return feed;
+};
+
+export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbConfig) => {
+  const url = cleanImageUrl(imageUrl);
+  if (!url) {
+    return undefined;
+  }
+
+  const cached = vtbImageCache.get(url);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.file;
+  }
+  if (cached) {
+    vtbImageCache.delete(url);
+  }
+
+  const file = await runProtectedVtbRequest(
+    url,
+    undefined,
+    VTB_JSON_REQUEST_INTERVAL_MS,
+    async () => {
+      const response = await fetchWithRetry(url, {
+        headers: {
+          "user-agent": "Mozilla/5.0",
+          referer: "https://www.bilibili.com/",
+          ...(config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : {}),
+        },
+        timeoutMs: FETCH_TIMEOUT_MS,
+        retryCount: 1,
+        retryDelayMs: 2_000,
+        retryJitterMs: 2_000,
+        retryRateLimited: false,
+      });
+      const contentType = response.headers.get("content-type")?.toLowerCase();
+      if (contentType && !contentType.startsWith("image/") && contentType !== "application/octet-stream") {
+        await response.body?.cancel().catch(() => undefined);
+        throw new Error(`VTB image response has unsupported content type: ${contentType}`);
+      }
+      const bytes = await readResponseBytes(response, MAX_VTB_IMAGE_BYTES);
+      if (bytes.length === 0) {
+        throw new Error("VTB image response is empty");
+      }
+      return `base64://${bytes.toString("base64")}`;
+    },
+  );
+  recordVtbRequestSuccess(url);
+  while (vtbImageCache.size >= MAX_VTB_IMAGE_CACHE_ENTRIES) {
+    const oldestKey = vtbImageCache.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    vtbImageCache.delete(oldestKey);
+  }
+  vtbImageCache.set(url, { file, expiresAt: Date.now() + VTB_IMAGE_CACHE_MS });
+  return file;
 };
 
 export type VtbRepository = ReturnType<typeof createVtbRepository>;
@@ -1165,23 +1235,28 @@ const formatSyncFailure = (error: unknown) =>
   error instanceof Error ? error.message.replace(/\s+/g, " ").trim().slice(0, 200) : "没有返回具体原因";
 
 export const formatLiveMessage = (live: VtbLiveInfo, fans?: number) => [
-  "开播提醒",
-  `${live.name} 开播啦`,
-  `直播标题：${live.title}`,
-  ...(live.liveStartedAt ? [`开播时间：${dayjs(live.liveStartedAt).format("YYYY年MM月DD日 HH:mm")}`] : []),
-  ...(fans === undefined ? [] : [`粉丝：${fans.toLocaleString("zh-CN")}`]),
-  ...(live.roomId ? [`直播间：${formatLiveRoomUrl(live.roomId)}`] : []),
-  "现在正在播，想看的可以去直播间。",
+  `🔴 ${live.name} 的直播间开门啦！`,
+  "",
+  "今天播的是——",
+  `「${live.title}」`,
+  "",
+  ...(live.liveStartedAt ? [`⏰ ${dayjs(live.liveStartedAt).format("MM月DD日 HH:mm")} 开播`] : []),
+  ...(fans === undefined ? [] : [`✨ ${fans.toLocaleString("zh-CN")} 位粉丝`]),
+  ...(live.roomId ? [`🔗 ${formatLiveRoomUrl(live.roomId)}`] : []),
+  "",
+  "来得正好，一起去看看吧！",
 ].join("\n");
 
 export const formatLiveQueryMessage = (live: VtbLiveInfo, fans?: number) => [
-  `直播状态 · ${live.name}`,
-  live.isLive ? "现在正在直播" : "现在没有开播",
-  `直播标题：${live.title}`,
-  ...(live.liveStartedAt ? [`开播时间：${dayjs(live.liveStartedAt).format("YYYY年MM月DD日 HH:mm")}`] : []),
-  ...(fans === undefined ? [] : [`粉丝：${fans.toLocaleString("zh-CN")}`]),
-  ...(live.roomId ? [`直播间：${formatLiveRoomUrl(live.roomId)}`] : []),
-  live.isLive ? "想看的话，现在就可以去直播间。" : "等下次开播吧。",
+  `📺 ${live.name} 的直播小窗`,
+  live.isLive ? "🔴 现在正在直播" : "🌙 现在还没开播",
+  "",
+  `「${live.title}」`,
+  ...(live.liveStartedAt ? ["", `⏰ ${dayjs(live.liveStartedAt).format("MM月DD日 HH:mm")} 开播`] : []),
+  ...(fans === undefined ? [] : [`✨ ${fans.toLocaleString("zh-CN")} 位粉丝`]),
+  ...(live.roomId ? [`🔗 ${formatLiveRoomUrl(live.roomId)}`] : []),
+  "",
+  live.isLive ? "直播间正热闹，来得及的话就去看看吧！" : "今天还在蓄力，等下次开播再见。",
 ].join("\n");
 
 export const formatOfflineMessage = (
@@ -1195,12 +1270,14 @@ export const formatOfflineMessage = (
   const fanChange = startFans === undefined || endFans === undefined ? undefined : endFans - startFans;
   const durationMinutes = Math.max(1, Math.floor((endedAt.getTime() - startedAt.getTime()) / 60_000));
   return [
-    `直播结束 · ${name}`,
-    `下播时间：${dayjs(endedAt).format("YYYY年MM月DD日 HH:mm")}`,
-    `直播时长：${durationMinutes.toLocaleString("zh-CN")} 分钟`,
-    ...(fanChange && fanChange > 0 ? [`新增粉丝：+${fanChange.toLocaleString("zh-CN")}`] : []),
-    ...(roomId ? [`直播间：${formatLiveRoomUrl(roomId)}`] : []),
-    "这场直播结束了，下次见。",
+    `🌙 ${name} 今天收工啦`,
+    "",
+    `这次和大家一起度过了 ${formatLiveDuration(durationMinutes)}`,
+    `⏰ ${dayjs(endedAt).format("MM月DD日 HH:mm")} 结束`,
+    ...(fanChange && fanChange > 0 ? [`✨ 本场新关注 +${fanChange.toLocaleString("zh-CN")}`] : []),
+    ...(roomId ? [`🔗 ${formatLiveRoomUrl(roomId)}`] : []),
+    "",
+    "辛苦啦，也谢谢大家一路陪到下播。充好电，我们下次见！",
   ].join("\n");
 };
 
@@ -1212,12 +1289,39 @@ export const formatDynamicMessage = (dynamic: VtbDynamic) => {
     dynamic.description.includes(dynamicUrl);
 
   return [
-    `${dynamic.author} 发布了新动态`,
-    `发布时间：${dayjs(dynamic.publishedAt).format("YYYY年MM月DD日 HH:mm")}`,
-    `标题：${dynamic.title}`,
-    ...(dynamic.description ? ["", ...dynamic.description.split("\n")] : ["", "这条动态没有文字内容。"]),
-    ...(hasDynamicUrlInDescription ? [] : ["", `查看动态：${dynamicUrl}`]),
+    `📮 ${dynamic.author} 发来一条新动态`,
+    "",
+    `「${dynamic.title}」`,
+    ...(dynamic.description ? ["", ...dynamic.description.split("\n")] : ["", "只留下了标题，点进原文看看吧。"]),
+    "",
+    `⏰ ${dayjs(dynamic.publishedAt).format("MM月DD日 HH:mm")} 发布`,
+    ...(hasDynamicUrlInDescription ? [] : [`🔗 完整动态 · ${dynamicUrl}`]),
   ].join("\n");
+};
+
+export const createVtbNotificationMessage = (text: string, imageFile?: string) => [
+  { type: "text", data: { text } },
+  ...(imageFile ? [{ type: "image", data: { file: imageFile } }] : []),
+];
+
+export const prependVtbAtAllMention = (message: unknown) => Array.isArray(message)
+  ? [
+      { type: "at", data: { qq: "all" } },
+      { type: "text", data: { text: "\n\n" } },
+      ...message,
+    ]
+  : message;
+
+const formatLiveDuration = (durationMinutes: number) => {
+  if (durationMinutes < 60) {
+    return `${durationMinutes.toLocaleString("zh-CN")} 分钟`;
+  }
+
+  const hours = Math.floor(durationMinutes / 60);
+  const minutes = durationMinutes % 60;
+  return minutes === 0
+    ? `${hours.toLocaleString("zh-CN")} 小时`
+    : `${hours.toLocaleString("zh-CN")} 小时 ${minutes.toLocaleString("zh-CN")} 分钟`;
 };
 
 export const formatLiveRoomUrl = (roomId: string) => `https://live.bilibili.com/${roomId}`;
@@ -1557,8 +1661,26 @@ const toVtbLiveInfo = (streamer: VtbStreamer, live: z.infer<typeof liveInfoSchem
   liveStartedAt: parseDate(live?.live_time),
   isLive: live?.live_status === 1,
   name: live?.uname?.trim() || streamer.name,
-  coverUrl: live?.cover_from_user?.trim() || undefined,
+  coverUrl: pickImageUrl(live?.cover_from_user, live?.keyframe, live?.user_cover, live?.cover),
 });
+
+const pickImageUrl = (...values: Array<string | null | undefined>) => {
+  for (const value of values) {
+    const url = cleanImageUrl(value);
+    if (url) {
+      return url;
+    }
+  }
+  return undefined;
+};
+
+const cleanImageUrl = (value: string | null | undefined) => {
+  const url = value?.trim();
+  if (!url) {
+    return undefined;
+  }
+  return url.startsWith("//") ? `https:${url}` : url;
+};
 
 const parseDate = (value: string | number | undefined) => {
   if (!value || value === "0000-00-00 00:00:00") return undefined;

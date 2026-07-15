@@ -9,7 +9,8 @@ describe("help menu coverage", () => {
     ]);
 
     expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain("【视频】");
+    expect(messages[0]).toContain("✦ 视频");
+    expect(messages[0]).toContain("指令入口：");
     expect(messages[0]).toContain("miz video");
     expect(messages[0]).toContain("miz 视频");
     expect(messages.join("\n")).not.toContain("复读");
@@ -23,8 +24,8 @@ describe("help menu coverage", () => {
     ]);
 
     expect(messages).toHaveLength(3);
-    expect(messages.join("\n")).toContain("【活动报名】");
-    expect(messages.join("\n")).toContain("【群问答】");
-    expect(messages.join("\n")).toContain("【群待办】");
+    expect(messages.join("\n")).toContain("✦ 活动报名");
+    expect(messages.join("\n")).toContain("✦ 群问答");
+    expect(messages.join("\n")).toContain("✦ 群待办");
   });
 });

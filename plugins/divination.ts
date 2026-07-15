@@ -37,19 +37,22 @@ const luckyActivities = [
 const divinationPlugin: MizPlugin = {
   name: "divination",
   commands: ["占卜", "fortune"],
-  description: "随手抽一张今日小签，也可以带上想问的事情。\n用法：miz 占卜 [想问的事情]",
+  description: "轻轻摇一摇今日签筒，也可以带上想问的事情。\n用法：miz 占卜 [想问的事情]",
   async handle({ command, reply }) {
     const topic = command.args.trim();
     const fortune = pickRandom(fortunes);
 
     await reply(
       [
-        `${topic ? "主题小签" : "今日小签"} · ${fortune.name}`,
-        ...(topic ? [`你问的是：${topic}`] : []),
-        `幸运色：${pickRandom(luckyColors)}`,
-        `今天适合：${pickRandom(luckyActivities)}`,
+        `🔮 ${topic ? "主题小签" : "今日小签"} · ${fortune.name}`,
+        ...(topic ? [`想问的事 · ${topic}`] : []),
+        "",
+        `🎨 幸运色 · ${pickRandom(luckyColors)}`,
+        `✨ 今日宜 · ${pickRandom(luckyActivities)}`,
+        "",
         topic ? `关于「${topic}」：${fortune.hint}` : fortune.hint,
-        "随手抽一签就好，重要的事还是听自己的。",
+        "",
+        "签纸给你一点灵感，重要的事还是听自己的。",
       ].join("\n"),
     );
   },
