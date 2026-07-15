@@ -18,14 +18,15 @@ const repeatPlugin: MizPlugin = {
 
 export default repeatPlugin;
 
-const repeatIfNeeded = async ({ commandPrefix, message, reply }: PluginMessageContext) => {
+const repeatIfNeeded = async ({ commandPrefix, message, plugins, reply }: PluginMessageContext) => {
   if (message.groupId === undefined) {
     return;
   }
 
   const groupKey = String(message.groupId);
   const candidate = getRepeatCandidate(message.text, message.raw.message);
-  if (!candidate || parseCommandText(message.text, commandPrefix) !== undefined) {
+  const commandNames = plugins.flatMap((plugin) => plugin.commands);
+  if (!candidate || parseCommandText(message.text, commandPrefix, commandNames) !== undefined) {
     repeatStates.delete(groupKey);
     return;
   }

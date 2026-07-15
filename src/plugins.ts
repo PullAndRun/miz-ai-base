@@ -290,12 +290,13 @@ const dispatchPluginCommand = async ({
   pluginInfo: readonly PluginInfo[];
   pluginsByCommand: Map<string, MizPlugin>;
 }) => {
-  const commandText = parseCommandText(message.text, config.plugins.commandPrefix);
+  const commandNames = [...pluginsByCommand.keys()];
+  const commandText = parseCommandText(message.text, config.plugins.commandPrefix, commandNames);
   if (commandText === undefined) {
     return;
   }
 
-  const command = findPluginCommand(commandText, [...pluginsByCommand.keys()]);
+  const command = findPluginCommand(commandText, commandNames);
   if (!command) {
     await replyToMessage(
       gateway,

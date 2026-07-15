@@ -2,11 +2,17 @@ import { describe, expect, test } from "bun:test";
 import { findPluginCommand, parseCommandText } from "@/plugin-command";
 
 describe("command parsing", () => {
-  test("requires a real prefix boundary", () => {
-    expect(parseCommandText(" miz help ", "miz")).toBe("help");
-    expect(parseCommandText("miz", "miz")).toBe("");
-    expect(parseCommandText("mizuki help", "miz")).toBeUndefined();
-    expect(parseCommandText("miz占卜", "miz")).toBeUndefined();
+  test("allows an optional gap between the prefix and every command", () => {
+    const commands = ["help", "video", "占卜"];
+
+    expect(parseCommandText(" miz help ", "miz", commands)).toBe("help");
+    expect(parseCommandText("mizhelp", "miz", commands)).toBe("help");
+    expect(parseCommandText("mizvideo https://example.com/a.mp4", "miz", commands))
+      .toBe("video https://example.com/a.mp4");
+    expect(parseCommandText("miz占卜", "miz", commands)).toBe("占卜");
+    expect(parseCommandText("miz占卜明天", "miz", commands)).toBe("占卜明天");
+    expect(parseCommandText("miz", "miz", commands)).toBe("");
+    expect(parseCommandText("mizuki help", "miz", commands)).toBeUndefined();
   });
 
   test("does not treat an English word prefix as a command", () => {
