@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatNewsMessages } from "@/news";
+import { formatNewsMessages, formatScheduledNewsItems } from "@/news";
 import { formatDynamicMessage, formatLiveMessage, formatOfflineMessage } from "@/vtb";
 import { createWallpaperMessage } from "@/wallpaper";
 import divinationPlugin from "../plugins/divination";
@@ -49,6 +49,13 @@ describe("user-facing copy", () => {
 
   test("general content stays natural without forcing live terminology", () => {
     const news = formatNewsMessages([{ id: "1", title: "市场更新", detail: "详情内容" }]).join("\n");
+    const scheduledNews = formatScheduledNewsItems([
+      { id: "1", title: "市场更新", detail: "详情内容" },
+      { id: "2", title: "市场更新二" },
+    ]).join("\n\n");
+    const singleScheduledNews = formatScheduledNewsItems([
+      { id: "1", title: "单条市场更新" },
+    ]).join("\n\n");
     const wallpaper = JSON.stringify(createWallpaperMessage({
       id: "wallpaper",
       date: "20300801",
@@ -57,8 +64,11 @@ describe("user-facing copy", () => {
       imageBase64: "AA==",
     }));
 
-    expect(news).toContain("财经快讯");
-    expect(news).toContain("消息跑得很快");
+    expect(news).toContain("财经快讯送达 · 1 条新消息");
+    expect(news).toContain("消息跑得很快，做决定前记得再确认一下。");
+    expect(scheduledNews).toContain("#1\n• 市场更新");
+    expect(singleScheduledNews).toBe("• 单条市场更新");
+    expect(scheduledNews).not.toMatch(/财经快讯送达|条新消息|消息跑得很快|做决定前记得再确认一下/);
     expect(wallpaper).toContain("🌄 今日风景 · 2030年08月01日");
     expect(wallpaper).toContain("新的一天，先把这片风景送到你眼前");
     expect(wallpaper).toContain("「山间晨雾」");

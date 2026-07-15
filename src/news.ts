@@ -98,14 +98,10 @@ export const formatNewsMessages = (news: readonly News[]) => [
 export const formatNewsItems = (news: readonly News[]) => news.map(formatNews);
 
 export const formatScheduledNewsItems = (news: readonly News[]) =>
-  [
-    `📰 财经快讯送达 · ${news.length} 条新消息`,
-    ...news.map((item, index) => [
-      ...(news.length > 1 ? [`#${index + 1}`] : []),
-      formatNews(item),
-    ].join("\n")),
-    "消息跑得很快，做决定前记得再确认一下。",
-  ];
+  news.map((item, index) => [
+    ...(news.length > 1 ? [`#${index + 1}`] : []),
+    formatNews(item),
+  ].join("\n"));
 
 export const createNoNewsMessage = () => "📰 暂时没有新快讯，消息栏现在很安静。";
 
