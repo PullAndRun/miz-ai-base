@@ -32,6 +32,11 @@ import {
 
 const ALL_GROUPS_DELIVERED_MARKER = "*";
 
+type VtbPollState = {
+  dynamicCursor: number;
+  cardInfos: Map<string, { fans?: number; expiresAt: number }>;
+};
+
 export type TaskRuntime = {
   stop(): Promise<void>;
 };
@@ -537,13 +542,17 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
 
   let running = false;
   let currentRun: Promise<void> | undefined;
+  const pollState: VtbPollState = {
+    dynamicCursor: 0,
+    cardInfos: new Map(),
+  };
   const runTask = async () => {
     if (running) {
       return;
     }
 
     running = true;
-    currentRun = pollVtbSubscriptions(config, gateway, logger, repository).finally(() => {
+    currentRun = pollVtbSubscriptions(config, gateway, logger, repository, pollState).finally(() => {
       running = false;
     });
     await currentRun;
@@ -556,6 +565,9 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
   logger.info("plugin", "vtb task started", {
     cronExpression,
     subscriptions: config.vtb.subscriptions.length,
+    dynamicPollMinutes: config.vtb.dynamicPollMinutes,
+    dynamicConcurrency: config.vtb.dynamicConcurrency,
+    cardCacheMinutes: config.vtb.cardCacheMinutes,
   });
 
   return {
@@ -573,6 +585,7 @@ const pollVtbSubscriptions = async (
   gateway: Gateway,
   logger: Logger,
   repository: Awaited<ReturnType<typeof getVtbRepository>>,
+  pollState: VtbPollState,
 ) => {
   const streamerGroups = new Map<string, Map<string, { groupId: string | number; atAll: boolean }>>();
   for (const subscription of config.vtb.subscriptions) {
@@ -616,16 +629,6 @@ const pollVtbSubscriptions = async (
       }
     }
 
-    let cardInfos = new Map<string, { fans?: number }>();
-    try {
-      cardInfos = await getVtbCardInfos(
-        resolvedSubscriptions.map((subscription) => subscription.streamer.mid),
-        config.vtb,
-      );
-    } catch (error) {
-      logger.warn("plugin", "vtb batch card request failed; fan counts will be omitted", normalizeError(error));
-    }
-
     let liveInfos: Map<string, VtbLiveInfo>;
     try {
       liveInfos = await getVtbLiveInfos(
@@ -637,13 +640,42 @@ const pollVtbSubscriptions = async (
       return;
     }
 
-    // Start dynamic queries together instead of waiting for each streamer in
-    // sequence. This prevents retry delays from stretching a poll past the
-    // next scheduled run, while each streamer is still requested only once.
+    const streamerMids = Array.from(new Set(
+      resolvedSubscriptions.map((subscription) => subscription.streamer.mid),
+    ));
+    const now = Date.now();
+    const cardCacheMs = config.vtb.cardCacheMinutes * 60_000;
+    const cardRefreshMids = streamerMids.filter((mid) => {
+      const cached = pollState.cardInfos.get(mid);
+      return !cached || cached.expiresAt <= now;
+    });
+    if (cardRefreshMids.length > 0) {
+      try {
+        const refreshedCards = await getVtbCardInfos(cardRefreshMids, config.vtb);
+        for (const mid of cardRefreshMids) {
+          pollState.cardInfos.set(mid, {
+            fans: refreshedCards.get(mid)?.fans,
+            expiresAt: now + cardCacheMs,
+          });
+        }
+      } catch (error) {
+        logger.warn("plugin", "vtb batch card request failed; cached fan counts will be reused", normalizeError(error));
+      }
+    }
+    const cardInfos = new Map(
+      streamerMids.map((mid) => [mid, { fans: pollState.cardInfos.get(mid)?.fans }]),
+    );
+
     const uniqueDynamicSubscriptions = Array.from(
       new Map(resolvedSubscriptions.map((subscription) => [subscription.streamer.mid, subscription])).values(),
     );
-    const dynamicTasks = startWithConcurrency(uniqueDynamicSubscriptions, 8, async (subscription) => {
+    const dynamicSubscriptions = selectVtbDynamicPollBatch(
+      uniqueDynamicSubscriptions,
+      pollState,
+      getVtbPollingIntervalMs(config.vtb.cron),
+      config.vtb.dynamicPollMinutes * 60_000,
+    );
+    const dynamicTasks = startWithConcurrency(dynamicSubscriptions, config.vtb.dynamicConcurrency, async (subscription) => {
       try {
         return await getVtbDynamics(subscription.streamer, config.vtb);
       } catch {
@@ -653,7 +685,7 @@ const pollVtbSubscriptions = async (
       }
     });
     const dynamicFeeds = new Map(
-      uniqueDynamicSubscriptions.map((subscription, index) => [subscription.streamer.mid, dynamicTasks[index]]),
+      dynamicSubscriptions.map((subscription, index) => [subscription.streamer.mid, dynamicTasks[index]]),
     );
 
     for (const { streamerName, groups, streamer } of resolvedSubscriptions) {
@@ -774,10 +806,11 @@ const pollVtbSubscriptions = async (
         const dynamicState = await repository.getDynamicDeliveryState(streamer.mid);
         const isNewDynamic = !dynamicState || latestDynamic.publishedAt > dynamicState.publishedAt;
         const isCurrentDynamic = dynamicState?.publishedAt.getTime() === latestDynamic.publishedAt.getTime();
-        const isRecent = Date.now() - latestDynamic.publishedAt.getTime() < getVtbPollingIntervalMs(config.vtb.cron);
+        const isRecent = Date.now() - latestDynamic.publishedAt.getTime() <
+          config.vtb.dynamicPollMinutes * 60_000 + getVtbPollingIntervalMs(config.vtb.cron);
         const isLivePromotion = latestDynamic.description.includes("https://live.bilibili.com");
 
-          if ((isNewDynamic || isCurrentDynamic) && isRecent && !isLivePromotion) {
+        if ((isNewDynamic || isCurrentDynamic) && isRecent && !isLivePromotion) {
             const deliveredGroupIds = isCurrentDynamic ? dynamicState.deliveredGroupIds : [];
             const undeliveredDynamicGroupIds = deliveredGroupIds.includes(ALL_GROUPS_DELIVERED_MARKER)
               ? []
@@ -823,6 +856,25 @@ const pollVtbSubscriptions = async (
   } finally {
     pushCache.clear();
   }
+};
+
+const selectVtbDynamicPollBatch = <T>(
+  subscriptions: readonly T[],
+  pollState: VtbPollState,
+  livePollIntervalMs: number,
+  dynamicPollIntervalMs: number,
+) => {
+  if (subscriptions.length === 0) {
+    pollState.dynamicCursor = 0;
+    return [];
+  }
+
+  const pollsPerCycle = Math.max(1, Math.ceil(dynamicPollIntervalMs / livePollIntervalMs));
+  const batchSize = Math.max(1, Math.ceil(subscriptions.length / pollsPerCycle));
+  const cursor = pollState.dynamicCursor % subscriptions.length;
+  const batch = subscriptions.slice(cursor, cursor + batchSize);
+  pollState.dynamicCursor = (cursor + batch.length) % subscriptions.length;
+  return batch;
 };
 
 const sendVtbGroupMessage = async (

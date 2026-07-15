@@ -145,6 +145,9 @@ const rawMizConfigSchema = z.object({
     .object({
       enabled: z.boolean().optional(),
       cron: nonEmptyStringSchema.optional(),
+      dynamicPollMinutes: z.number().int().positive().max(1_440).optional(),
+      dynamicConcurrency: z.number().int().positive().max(8).optional(),
+      cardCacheMinutes: z.number().int().positive().max(1_440).optional(),
       userApiUrl: nonEmptyStringSchema.optional(),
       cardApiUrl: nonEmptyStringSchema.optional(),
       liveApiUrl: nonEmptyStringSchema.optional(),
@@ -263,6 +266,9 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
   vtb: {
     enabled: config.vtb?.enabled ?? true,
     cron: config.vtb?.cron ?? "*/3 * * * *",
+    dynamicPollMinutes: config.vtb?.dynamicPollMinutes ?? 15,
+    dynamicConcurrency: config.vtb?.dynamicConcurrency ?? 2,
+    cardCacheMinutes: config.vtb?.cardCacheMinutes ?? 30,
     userApiUrl: config.vtb?.userApiUrl ?? "",
     cardApiUrl: config.vtb?.cardApiUrl ?? "",
     liveApiUrl: config.vtb?.liveApiUrl ?? "",
@@ -366,6 +372,9 @@ export type VideoConfig = {
 export type VtbConfig = {
   enabled: boolean;
   cron: string;
+  dynamicPollMinutes: number;
+  dynamicConcurrency: number;
+  cardCacheMinutes: number;
   userApiUrl: string;
   cardApiUrl: string;
   liveApiUrl: string;

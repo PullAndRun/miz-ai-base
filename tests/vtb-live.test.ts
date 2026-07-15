@@ -48,4 +48,46 @@ describe("Bilibili live lookup", () => {
     const lives = await getVtbLiveInfos([{ name: "示例主播", mid: "123", roomId: "456" }], config);
     expect(lives.has("123")).toBeFalse();
   });
+
+  test("reuses an in-flight live request for the same streamer", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({
+        code: 0,
+        data: [{ uid: "123", live_status: 0 }],
+      }));
+    }) as unknown as typeof fetch;
+    const singleFlightConfig = {
+      ...config,
+      liveApiUrl: "https://single-flight.example.test/live",
+    };
+
+    await Promise.all([
+      getVtbLiveInfo({ name: "示例主播", mid: "123" }, singleFlightConfig),
+      getVtbLiveInfo({ name: "示例主播", mid: "123" }, singleFlightConfig),
+    ]);
+    await getVtbLiveInfo({ name: "示例主播", mid: "123" }, singleFlightConfig);
+    expect(calls).toBe(1);
+  });
+
+  test("opens a cooldown after a rate-limit response", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response("busy", { status: 429 });
+    }) as unknown as typeof fetch;
+    const rateLimitedConfig = {
+      ...config,
+      liveApiUrl: "https://rate-limit.example.test/live",
+    };
+
+    await expect(getVtbLiveInfo({ name: "示例主播", mid: "123" }, rateLimitedConfig)).rejects.toMatchObject({
+      status: 429,
+    });
+    await expect(getVtbLiveInfo({ name: "示例主播", mid: "123" }, rateLimitedConfig)).rejects.toMatchObject({
+      name: "VtbCooldownError",
+    });
+    expect(calls).toBe(1);
+  });
 });

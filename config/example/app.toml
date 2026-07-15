@@ -95,6 +95,7 @@ updateCron = "0 0 * * *"
 [miz.vtb]
 enabled = true
 cron = "*/3 * * * *"
+1
 userApiUrl = ""
 cardApiUrl = ""
 liveApiUrl = ""

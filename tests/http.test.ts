@@ -19,6 +19,20 @@ describe("HTTP helpers", () => {
     expect(calls).toBe(1);
   });
 
+  test("allows callers to disable retries for rate-limited upstreams", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response("busy", { status: 429, headers: { "retry-after": "120" } });
+    }) as unknown as typeof fetch;
+
+    await expect(fetchWithRetry("https://example.invalid", {
+      retryCount: 0,
+      retryRateLimited: false,
+    })).rejects.toMatchObject({ status: 429, retryAfterMs: 120_000 });
+    expect(calls).toBe(1);
+  });
+
   test("reads a bounded streaming response", async () => {
     const response = new Response(new ReadableStream({
       start(controller) {

@@ -16,6 +16,13 @@ import { partitionVtbSubscriptionsByGroup } from "@/vtb-subscriptions";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_DYNAMIC_DESCRIPTION_LENGTH = 1_800;
+const VTB_RISK_COOLDOWN_MS = 30 * 60_000;
+const VTB_TRANSIENT_COOLDOWN_MS = 15 * 60_000;
+const VTB_TRANSIENT_FAILURE_THRESHOLD = 3;
+const VTB_JSON_REQUEST_INTERVAL_MS = 250;
+const VTB_DYNAMIC_REQUEST_INTERVAL_MS = 750;
+const VTB_LIVE_QUERY_CACHE_MS = 60_000;
+const VTB_RISK_CODES = new Set([-352, -412, -509, -799]);
 const textValueSchema = z.union([z.string(), z.number(), z.boolean()]);
 
 const userSchema = z.looseObject({
@@ -112,6 +119,16 @@ const xmlParser = new XMLParser({
 });
 
 let repositoryPromise: Promise<VtbRepository> | undefined;
+const vtbRequestStates = new Map<string, {
+  consecutiveFailures: number;
+  cooldownUntil: number;
+  lastRequestAt: number;
+  queue: Promise<void>;
+}>();
+const vtbInFlightRequests = new Map<string, Promise<unknown>>();
+const vtbLiveQueryCache = new Map<string, { live: VtbLiveInfo; expiresAt: number }>();
+const vtbCardQueryCache = new Map<string, { card: VtbCardInfo; expiresAt: number }>();
+const vtbDynamicQueryCache = new Map<string, { feed: VtbDynamicFeed; expiresAt: number }>();
 
 export const getVtbRepository = async (config: MizConfig) => {
   if (!repositoryPromise) {
@@ -135,15 +152,14 @@ export const closeVtbRepository = async () => {
 };
 
 export const resolveVtbStreamer = async (name: string, config: VtbConfig): Promise<VtbStreamer | undefined> => {
+  const url = `${config.userApiUrl}${encodeURIComponent(name)}`;
   const response = userResponseSchema.parse(
     await fetchJson(
-      `${config.userApiUrl}${encodeURIComponent(name)}`,
+      url,
       config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined,
     ),
   );
-  if (response.code !== 0) {
-    throw new Error(`Bilibili user API failed: code ${response.code}`);
-  }
+  assertVtbApiSuccess(url, "user", response.code);
 
   const user = response.data.result.find((item) => item.uname === name);
   return user
@@ -295,6 +311,10 @@ export const getVtbFanCount = async (mid: string, config: VtbConfig) => {
 };
 
 export const getVtbCardInfo = async (mid: string, config: VtbConfig): Promise<VtbCardInfo> => {
+  const cached = vtbCardQueryCache.get(getVtbCardCacheKey(config, mid));
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.card;
+  }
   return (await getVtbCardInfos([mid], config)).get(mid) ?? {};
 };
 
@@ -302,19 +322,22 @@ export const getVtbCardInfos = async (mids: readonly string[], config: VtbConfig
   const uniqueMids = Array.from(new Set(mids));
   const cards = new Map<string, VtbCardInfo>();
   for (const batch of chunk(uniqueMids, 50)) {
+    const url = createCardApiUrl(config.cardApiUrl, batch);
     const response = cardResponseSchema.parse(
       await fetchJson(
-        createCardApiUrl(config.cardApiUrl, batch),
+        url,
         config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined,
       ),
     );
     if (response.code !== 0) {
+      recordVtbBusinessFailure(url, response.code);
       throw new Error(
         response.code === -101
           ? "Bilibili card API rejected the configured cookie: code -101"
           : `Bilibili card API failed: code ${response.code}`,
       );
     }
+    recordVtbRequestSuccess(url);
 
     for (const rawCard of extractCardRecords(response.data)) {
       const parsedCard = cardSchema.safeParse(rawCard);
@@ -328,12 +351,23 @@ export const getVtbCardInfos = async (mids: readonly string[], config: VtbConfig
         name: parsedCard.data.name?.trim() || undefined,
       });
     }
+    const expiresAt = Date.now() + (config.cardCacheMinutes ?? 30) * 60_000;
+    for (const mid of batch) {
+      vtbCardQueryCache.set(getVtbCardCacheKey(config, mid), {
+        card: cards.get(mid) ?? {},
+        expiresAt,
+      });
+    }
   }
 
   return cards;
 };
 
 export const getVtbLiveInfo = async (streamer: VtbStreamer, config: VtbConfig): Promise<VtbLiveInfo> => {
+  const cached = vtbLiveQueryCache.get(getVtbLiveCacheKey(config, streamer.mid));
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.live;
+  }
   const live = (await getVtbLiveInfos([streamer], config)).get(streamer.mid);
   if (!live) {
     throw new Error(`Bilibili live API omitted streamer ${streamer.mid}`);
@@ -347,14 +381,15 @@ export const getVtbLiveInfos = async (streamers: readonly VtbStreamer[], config:
     new Map(streamers.map((streamer) => [streamer.mid, streamer])).values(),
   );
   for (const batch of chunk(uniqueStreamers, 50)) {
+    const url = config.liveApiUrl;
     const response = liveResponseSchema.parse(
-      await fetchJson(config.liveApiUrl, config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined, {
+      await fetchJson(url, config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ uids: batch.map((streamer) => streamer.mid) }),
       }),
     );
-    if (response.code !== 0) throw new Error(`Bilibili live API failed: code ${response.code}`);
+    assertVtbApiSuccess(url, "live", response.code);
 
     for (const streamer of batch) {
       const live = findLiveInfo(response.data, streamer.mid);
@@ -364,6 +399,13 @@ export const getVtbLiveInfos = async (streamers: readonly VtbStreamer[], config:
         // Bilibili omits users without a live room from this batch endpoint.
         // That is a normal offline state, not a failed lookup.
         results.set(streamer.mid, toVtbLiveInfo({ ...streamer, roomId: undefined }, undefined));
+      }
+      const result = results.get(streamer.mid);
+      if (result) {
+        vtbLiveQueryCache.set(getVtbLiveCacheKey(config, streamer.mid), {
+          live: result,
+          expiresAt: Date.now() + VTB_LIVE_QUERY_CACHE_MS,
+        });
       }
     }
   }
@@ -377,8 +419,12 @@ export const getVtbDynamics = async (
   retryCount = 0,
 ): Promise<VtbDynamicFeed> => {
   const dynamicUrl = `${config.dynamicApiUrl}${encodeURIComponent(streamer.mid)}`;
+  const cached = vtbDynamicQueryCache.get(dynamicUrl);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.feed;
+  }
   const channel = dynamicSchema.parse(xmlParser.parse(await fetchDynamicText(dynamicUrl, retryCount))).rss.channel;
-  return {
+  const feed = {
     avatarUrl: channel.image.url,
     items: channel.item
       .map((item) => {
@@ -396,6 +442,11 @@ export const getVtbDynamics = async (
       .filter((item): item is VtbDynamic => item.publishedAt !== undefined)
       .sort((left, right) => right.publishedAt.getTime() - left.publishedAt.getTime()),
   };
+  vtbDynamicQueryCache.set(dynamicUrl, {
+    feed,
+    expiresAt: Date.now() + getVtbDynamicQueryCacheMs(config),
+  });
+  return feed;
 };
 
 export type VtbRepository = ReturnType<typeof createVtbRepository>;
@@ -1216,25 +1267,219 @@ const toOptionalMid = (value: string | undefined) => {
 };
 
 const fetchJson = async (url: string, headers?: Record<string, string>, init?: RequestInit) => {
-  const response = await fetchWithRetry(url, {
-    ...init,
-    headers: {
-      "user-agent": "Mozilla/5.0",
-      referer: "https://www.bilibili.com/",
-      ...(headers ?? {}),
-      ...(init?.headers ?? {}),
+  return runProtectedVtbRequest(
+    url,
+    init,
+    VTB_JSON_REQUEST_INTERVAL_MS,
+    async () => {
+      const response = await fetchWithRetry(url, {
+        ...init,
+        headers: {
+          "user-agent": "Mozilla/5.0",
+          referer: "https://www.bilibili.com/",
+          ...(headers ?? {}),
+          ...(init?.headers ?? {}),
+        },
+        timeoutMs: FETCH_TIMEOUT_MS,
+        retryCount: 1,
+        retryDelayMs: 2_000,
+        retryJitterMs: 3_000,
+        retryRateLimited: false,
+      });
+      return response.json();
     },
-    timeoutMs: FETCH_TIMEOUT_MS,
-  });
-  return response.json();
+  );
 };
 
 const fetchText = async (url: string) => {
-  const response = await fetchWithRetry(url, { timeoutMs: FETCH_TIMEOUT_MS });
-  return response.text();
+  const text = await runProtectedVtbRequest(
+    url,
+    undefined,
+    VTB_DYNAMIC_REQUEST_INTERVAL_MS,
+    async () => {
+      const response = await fetchWithRetry(url, {
+        timeoutMs: FETCH_TIMEOUT_MS,
+        retryCount: 0,
+        retryRateLimited: false,
+      });
+      return response.text();
+    },
+  );
+  recordVtbRequestSuccess(url);
+  return text;
 };
 
 const fetchDynamicText = async (url: string, _retryCount: number) => fetchText(url);
+
+const runProtectedVtbRequest = async <T>(
+  url: string,
+  init: RequestInit | undefined,
+  minimumIntervalMs: number,
+  request: () => Promise<T>,
+): Promise<T> => {
+  const requestKey = [
+    init?.method?.toUpperCase() ?? "GET",
+    url,
+    typeof init?.body === "string" ? init.body : "",
+  ].join("\n");
+  const existingRequest = vtbInFlightRequests.get(requestKey);
+  if (existingRequest) {
+    return existingRequest as Promise<T>;
+  }
+
+  const pendingRequest = (async () => {
+    const host = getVtbRequestHost(url);
+    assertVtbRequestAvailable(host);
+    await reserveVtbRequestSlot(host, minimumIntervalMs);
+    assertVtbRequestAvailable(host);
+    try {
+      return await request();
+    } catch (error) {
+      recordVtbTransportFailure(host, error);
+      throw error;
+    }
+  })();
+  vtbInFlightRequests.set(requestKey, pendingRequest);
+  try {
+    return await pendingRequest;
+  } finally {
+    if (vtbInFlightRequests.get(requestKey) === pendingRequest) {
+      vtbInFlightRequests.delete(requestKey);
+    }
+  }
+};
+
+const reserveVtbRequestSlot = async (host: string, minimumIntervalMs: number) => {
+  const state = getVtbRequestState(host);
+  const queued = state.queue.catch(() => undefined).then(async () => {
+    assertVtbRequestAvailable(host);
+    const jitterMs = minimumIntervalMs > 0 ? Math.random() * minimumIntervalMs : 0;
+    const waitMs = state.lastRequestAt + minimumIntervalMs + jitterMs - Date.now();
+    if (waitMs > 0) {
+      await waitForVtbRequest(waitMs);
+    }
+    assertVtbRequestAvailable(host);
+    state.lastRequestAt = Date.now();
+  });
+  state.queue = queued.catch(() => undefined);
+  await queued;
+};
+
+const assertVtbApiSuccess = (url: string, apiName: string, code: number) => {
+  if (code === 0) {
+    recordVtbRequestSuccess(url);
+    return;
+  }
+
+  recordVtbBusinessFailure(url, code);
+  throw new Error(`Bilibili ${apiName} API failed: code ${code}`);
+};
+
+const recordVtbRequestSuccess = (url: string) => {
+  const state = getVtbRequestState(getVtbRequestHost(url));
+  state.consecutiveFailures = 0;
+};
+
+const recordVtbBusinessFailure = (url: string, code: number) => {
+  const host = getVtbRequestHost(url);
+  const state = getVtbRequestState(host);
+  state.consecutiveFailures += 1;
+  if (VTB_RISK_CODES.has(code)) {
+    state.cooldownUntil = Math.max(state.cooldownUntil, Date.now() + VTB_RISK_COOLDOWN_MS);
+  } else if (state.consecutiveFailures >= VTB_TRANSIENT_FAILURE_THRESHOLD) {
+    state.cooldownUntil = Math.max(state.cooldownUntil, Date.now() + VTB_TRANSIENT_COOLDOWN_MS);
+  }
+};
+
+const recordVtbTransportFailure = (host: string, error: unknown) => {
+  if (isVtbCooldownError(error)) {
+    return;
+  }
+
+  const state = getVtbRequestState(host);
+  const status = getHttpErrorStatus(error);
+  if (status === 412 || status === 429) {
+    const retryAfterMs = getHttpRetryAfterMs(error);
+    state.consecutiveFailures += 1;
+    state.cooldownUntil = Math.max(
+      state.cooldownUntil,
+      Date.now() + Math.max(VTB_RISK_COOLDOWN_MS, retryAfterMs ?? 0),
+    );
+    return;
+  }
+
+  if (status === undefined || status === 408 || status >= 500) {
+    state.consecutiveFailures += 1;
+    if (state.consecutiveFailures >= VTB_TRANSIENT_FAILURE_THRESHOLD) {
+      state.cooldownUntil = Math.max(state.cooldownUntil, Date.now() + VTB_TRANSIENT_COOLDOWN_MS);
+    }
+  }
+};
+
+const assertVtbRequestAvailable = (host: string) => {
+  const cooldownUntil = getVtbRequestState(host).cooldownUntil;
+  if (cooldownUntil <= Date.now()) {
+    return;
+  }
+
+  throw Object.assign(
+    new Error(`VTB upstream ${host} is cooling down until ${new Date(cooldownUntil).toISOString()}`),
+    { name: "VtbCooldownError", cooldownUntil },
+  );
+};
+
+const getVtbRequestState = (host: string) => {
+  const existing = vtbRequestStates.get(host);
+  if (existing) {
+    return existing;
+  }
+
+  const state = {
+    consecutiveFailures: 0,
+    cooldownUntil: 0,
+    lastRequestAt: 0,
+    queue: Promise.resolve(),
+  };
+  vtbRequestStates.set(host, state);
+  return state;
+};
+
+const getVtbRequestHost = (url: string) => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+};
+
+const getHttpErrorStatus = (error: unknown) => {
+  const status = error instanceof Error
+    ? (error as Error & { status?: unknown }).status
+    : undefined;
+  return typeof status === "number" ? status : undefined;
+};
+
+const getHttpRetryAfterMs = (error: unknown) => {
+  const retryAfterMs = error instanceof Error
+    ? (error as Error & { retryAfterMs?: unknown }).retryAfterMs
+    : undefined;
+  return typeof retryAfterMs === "number" ? retryAfterMs : undefined;
+};
+
+const isVtbCooldownError = (error: unknown) =>
+  error instanceof Error && error.name === "VtbCooldownError";
+
+const waitForVtbRequest = (milliseconds: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
+const getVtbLiveCacheKey = (config: VtbConfig, mid: string) =>
+  `${config.liveApiUrl}\n${mid}`;
+
+const getVtbCardCacheKey = (config: VtbConfig, mid: string) =>
+  `${config.cardApiUrl}\n${mid}`;
+
+const getVtbDynamicQueryCacheMs = (config: VtbConfig) =>
+  Math.max(60_000, Math.min(10 * 60_000, (config.dynamicPollMinutes ?? 15) * 30_000));
 
 const createCardApiUrl = (apiUrl: string, mids: readonly string[]) => {
   const url = new URL(apiUrl);
