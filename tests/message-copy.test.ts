@@ -12,7 +12,7 @@ describe("user-facing copy", () => {
       isLive: true,
       roomId: "123",
       liveStartedAt: new Date("2030-08-01T20:00:00+08:00"),
-    }, 12_345);
+    }, 12_345, "https://live.example.test");
 
     expect(message).toContain("🔴 示例主播 的直播间开门啦！");
     expect(message).toContain("今天播的是——");
@@ -29,6 +29,7 @@ describe("user-facing copy", () => {
       100,
       110,
       "123",
+      "https://live.example.test",
     );
     const dynamic = formatDynamicMessage({
       author: "示例主播",
@@ -37,7 +38,7 @@ describe("user-facing copy", () => {
       containsDynamicUrl: false,
       publishedAt: new Date("2030-08-01T19:00:00+08:00"),
       link: "https://t.bilibili.com/123",
-    });
+    }, "https://www.example.test");
 
     expect(offline).toContain("🌙 示例主播 今天收工啦");
     expect(offline).toContain("这次和大家一起度过了 1 小时");

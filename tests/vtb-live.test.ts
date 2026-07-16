@@ -14,6 +14,8 @@ const originalFetch = globalThis.fetch;
 const config = {
   userApiUrl: "https://example.test/users?name=",
   liveApiUrl: "https://example.test/live",
+  webUrl: "https://www.example.test",
+  liveWebUrl: "https://live.example.test",
   bilibiliCookie: "",
 } as VtbConfig;
 
@@ -23,16 +25,21 @@ afterEach(() => {
 
 describe("Bilibili live lookup", () => {
   test("normalizes search result room_id 0 as no live room", async () => {
-    globalThis.fetch = (async () => new Response(JSON.stringify({
-      code: 0,
-      data: { result: [{ uname: "示例主播", mid: "123", room_id: 0 }] },
-    }))) as unknown as typeof fetch;
+    const referers: Array<string | null> = [];
+    globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      referers.push(new Headers(init?.headers).get("referer"));
+      return new Response(JSON.stringify({
+        code: 0,
+        data: { result: [{ uname: "示例主播", mid: "123", room_id: 0 }] },
+      }));
+    }) as unknown as typeof fetch;
 
     await expect(resolveVtbStreamer("示例主播", config)).resolves.toEqual({
       name: "示例主播",
       mid: "123",
       roomId: undefined,
     });
+    expect(referers).toEqual(["https://www.example.test/"]);
   });
 
   test("treats an omitted user without a live room as offline", async () => {

@@ -12,7 +12,7 @@ const wallpaperPlugin: MizPlugin = {
     }
 
     if (!config.wallpaper.apiUrl || !config.wallpaper.imageBaseUrl) {
-      await reply("每日一图的取景通道还没接好，请联系管理员完成配置。");
+      await reply("每日一图的 Bing 官方接口还没配置，请联系管理员检查 app.toml。");
       return;
     }
 

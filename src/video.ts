@@ -14,13 +14,14 @@ export const MAX_VIDEO_DURATION_SECONDS = 10 * 60;
 export const isVideoDurationAllowed = (durationSeconds: number) =>
   Number.isFinite(durationSeconds) && durationSeconds > 0 && durationSeconds <= MAX_VIDEO_DURATION_SECONDS;
 
-export const isBilibiliUrl = (value: string) => {
+export const isBilibiliUrl = (value: string, allowedHosts: readonly string[]) => {
   try {
     const hostname = new URL(value).hostname.toLowerCase();
-    return hostname === "bilibili.com" ||
-      hostname.endsWith(".bilibili.com") ||
-      hostname === "b23.tv" ||
-      hostname.endsWith(".b23.tv");
+    return allowedHosts.some((allowedHost) => {
+      const normalizedHost = allowedHost.trim().toLowerCase().replace(/^\.+/, "");
+      return normalizedHost !== "" &&
+        (hostname === normalizedHost || hostname.endsWith(`.${normalizedHost}`));
+    });
   } catch {
     return false;
   }
@@ -152,7 +153,7 @@ export const updateYtDlp = async (config: VideoConfig) => {
 
 const createRequestArgs = (url: string, config: VideoConfig) => [
   ...(config.proxyUrl ? ["--proxy", config.proxyUrl] : []),
-  ...(isBilibiliUrl(url) && config.bilibiliCookie
+  ...(isBilibiliUrl(url, config.bilibiliHosts) && config.bilibiliCookie
     ? ["--add-header", `Cookie:${config.bilibiliCookie}`]
     : []),
   url,

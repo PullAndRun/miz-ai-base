@@ -36,6 +36,9 @@ import {
 } from "@/vtb";
 
 const ALL_GROUPS_DELIVERED_MARKER = "*";
+const SCHEDULED_DELIVERY_CONCURRENCY = 5;
+const WALLPAPER_DELIVERY_CONCURRENCY = 3;
+const WALLPAPER_SEND_INTERVAL_MS = 2_000;
 
 type VtbPollState = {
   dynamicCursor: number;
@@ -122,9 +125,9 @@ const startScheduleTask = async (config: MizConfig, gateway: Gateway, logger: Lo
 
   const runTask = async () => {
     const events = await repository.claimDueScheduleEvents(new Date(), config.schedule.batchSize);
-      for (const event of events) {
+    await settleWithConcurrency(events, SCHEDULED_DELIVERY_CONCURRENCY, async (event) => {
         try {
-          await gateway.sendGroupMessage(event.groupId, [
+          await gateway.sendGroupMessageWithoutRetry(event.groupId, [
             { type: "at", data: { qq: event.creatorId } },
             {
               type: "text",
@@ -150,7 +153,7 @@ const startScheduleTask = async (config: MizConfig, gateway: Gateway, logger: Lo
             error: normalizeError(error),
           });
         }
-      }
+    });
 
     await repository.cleanupFinishedScheduleEvents();
   };
@@ -189,7 +192,7 @@ const startActivityTask = async (config: MizConfig, gateway: Gateway, logger: Lo
 
   const runTask = async () => {
     const activities = await repository.claimDueActivities(new Date(), config.activity.batchSize);
-      for (const activity of activities) {
+    await settleWithConcurrency(activities, SCHEDULED_DELIVERY_CONCURRENCY, async (activity) => {
         try {
           const participantIds = activity.registrations.length > 0
             ? activity.registrations.map((registration) => registration.userId)
@@ -198,7 +201,7 @@ const startActivityTask = async (config: MizConfig, gateway: Gateway, logger: Lo
             { type: "at", data: { qq: userId } },
             { type: "text", data: { text: " " } },
           ]);
-          await gateway.sendGroupMessage(activity.groupId, [
+          await gateway.sendGroupMessageWithoutRetry(activity.groupId, [
             ...mentions,
             {
               type: "text",
@@ -228,7 +231,7 @@ const startActivityTask = async (config: MizConfig, gateway: Gateway, logger: Lo
             error: normalizeError(error),
           });
         }
-      }
+    });
     await repository.cleanupFinishedActivities();
   };
 
@@ -269,10 +272,10 @@ const startTodoTask = async (config: MizConfig, gateway: Gateway, logger: Logger
 
   const runTask = async () => {
     const todos = await repository.claimDueTodos(new Date(), config.todo.batchSize);
-      for (const todo of todos) {
+    await settleWithConcurrency(todos, SCHEDULED_DELIVERY_CONCURRENCY, async (todo) => {
         try {
           const targetId = todo.assigneeId ?? todo.creatorId;
-          await gateway.sendGroupMessage(todo.groupId, [
+          await gateway.sendGroupMessageWithoutRetry(todo.groupId, [
             { type: "at", data: { qq: targetId } },
             {
               type: "text",
@@ -298,7 +301,7 @@ const startTodoTask = async (config: MizConfig, gateway: Gateway, logger: Logger
             error: normalizeError(error),
           });
         }
-      }
+    });
     await repository.cleanupFinishedTodos();
   };
 
@@ -336,9 +339,9 @@ const startReminderTask = async (config: MizConfig, gateway: Gateway, logger: Lo
 
   const runTask = async () => {
     const reminders = await repository.claimDueReminders(new Date(), config.reminder.batchSize);
-      for (const reminder of reminders) {
+    await settleWithConcurrency(reminders, SCHEDULED_DELIVERY_CONCURRENCY, async (reminder) => {
         try {
-          await gateway.sendGroupMessage(reminder.groupId, [
+          await gateway.sendGroupMessageWithoutRetry(reminder.groupId, [
             { type: "at", data: { qq: reminder.targetId } },
             { type: "text", data: { text: ` 🔔 时间到啦：${reminder.content}` } },
           ]);
@@ -359,7 +362,7 @@ const startReminderTask = async (config: MizConfig, gateway: Gateway, logger: Lo
             error: normalizeError(error),
           });
         }
-      }
+    });
   };
 
   logger.info("plugin", "reminder task started", { cronExpression });
@@ -628,7 +631,10 @@ const pollVtbSubscriptions = async (
             "live start",
             live.name,
           );
-          const message = createVtbNotificationMessage(formatLiveMessage(live, fans), imageFile);
+          const message = createVtbNotificationMessage(
+            formatLiveMessage(live, fans, config.vtb.liveWebUrl),
+            imageFile,
+          );
           const deliveredGroups = await sendVtbGroupMessage(
             undeliveredGroupIds,
             message,
@@ -681,6 +687,7 @@ const pollVtbSubscriptions = async (
                 session.startFans,
                 endFans,
                 session.roomId,
+                config.vtb.liveWebUrl,
               ),
             );
             const deliveredGroups = await sendVtbGroupMessage(
@@ -712,7 +719,7 @@ const pollVtbSubscriptions = async (
         const isCurrentDynamic = dynamicState?.publishedAt.getTime() === latestDynamic.publishedAt.getTime();
         const isRecent = now - latestDynamic.publishedAt.getTime() <
           config.vtb.dynamicPollMinutes * 60_000 + getVtbPollingIntervalMs(config.vtb.cron);
-        const isLivePromotion = latestDynamic.description.includes("https://live.bilibili.com");
+        const isLivePromotion = latestDynamic.description.includes(config.vtb.liveWebUrl);
 
         if ((isNewDynamic || isCurrentDynamic) && isRecent && !isLivePromotion) {
             const deliveredGroupIds = isCurrentDynamic ? dynamicState.deliveredGroupIds : [];
@@ -729,7 +736,10 @@ const pollVtbSubscriptions = async (
               "dynamic",
               streamer.name,
             );
-            const message = createVtbNotificationMessage(formatDynamicMessage(latestDynamic), imageFile);
+            const message = createVtbNotificationMessage(
+              formatDynamicMessage(latestDynamic, config.vtb.webUrl),
+              imageFile,
+            );
             const deliveredGroups = await sendVtbGroupMessage(
               undeliveredDynamicGroupIds,
               message,
@@ -800,7 +810,10 @@ const sendVtbGroupMessage = async (
     async (groupId) => {
       const shouldMentionAll =
         atAllGroupIds.has(String(groupId)) && await gateway.canMentionAllGroupMembers(groupId);
-      return gateway.sendGroupMessage(groupId, shouldMentionAll ? prependVtbAtAllMention(message) : message);
+      return gateway.sendGroupMessageWithoutRetry(
+        groupId,
+        shouldMentionAll ? prependVtbAtAllMention(message) : message,
+      );
     },
   );
   const deliveredGroups: Array<string | number> = [];
@@ -946,7 +959,7 @@ const pushNewsToConfiguredGroups = async (
       config.news.apiUrl,
       `group:${groupId}`,
       async (items) => {
-        await gateway.sendGroupMessage(groupId, formatScheduledNewsItems(items).join("\n\n"));
+        await gateway.sendGroupMessageWithoutRetry(groupId, formatScheduledNewsItems(items).join("\n\n"));
       },
       latestNews,
     );
@@ -1003,6 +1016,13 @@ const startWallpaperTask = (
     await sendDailyWallpaper(config, gateway, logger);
   };
 
+  void getDailyWallpaper(config.wallpaper.apiUrl, config.wallpaper.imageBaseUrl).catch((error) => {
+    logger.warn("plugin", "wallpaper cache warmup failed; scheduled task will retry", normalizeError(error));
+  });
+  void gateway.getGroupList().catch((error) => {
+    logger.warn("plugin", "wallpaper group list warmup failed; scheduled task will retry", normalizeError(error));
+  });
+
   logger.info("plugin", "wallpaper task started", { cronExpression });
 
   return createExclusiveCronTask({
@@ -1027,21 +1047,36 @@ const sendDailyWallpaper = async (config: MizConfig, gateway: Gateway, logger: L
     return;
   }
 
-  for (const [index, groupId] of groupIds.entries()) {
-    if (index > 0) {
-      await wait(2_000);
+  const waitForSendSlot = createIntervalGate(WALLPAPER_SEND_INTERVAL_MS);
+  const results = await settleWithConcurrency(
+    groupIds,
+    WALLPAPER_DELIVERY_CONCURRENCY,
+    async (groupId) => {
+      await waitForSendSlot();
+      await gateway.sendGroupMessageWithoutRetry(groupId, createWallpaperMessage(wallpaper));
+    },
+  );
+  let sentCount = 0;
+  for (const [index, result] of results.entries()) {
+    const groupId = groupIds[index];
+    if (result.status === "fulfilled") {
+      sentCount += 1;
+      logger.info("plugin", "daily wallpaper sent", { groupId, wallpaperId: wallpaper.id });
+      continue;
     }
 
-    try {
-      await gateway.sendGroupMessage(groupId, createWallpaperMessage(wallpaper));
-      logger.info("plugin", "daily wallpaper sent", { groupId, wallpaperId: wallpaper.id });
-    } catch (error) {
-      logger.error("plugin", "daily wallpaper delivery failed", {
-        groupId,
-        error: normalizeError(error),
-      });
-    }
+    logger.error("plugin", "daily wallpaper delivery failed", {
+      groupId,
+      error: normalizeError(result.reason),
+    });
   }
+
+  logger.info("plugin", "wallpaper task delivery completed", {
+    groups: groupIds.length,
+    sent: sentCount,
+    failed: groupIds.length - sentCount,
+    wallpaperId: wallpaper.id,
+  });
 };
 
 const startFf14PriceAlertTask = (
@@ -1162,7 +1197,23 @@ const createNoopTask = (): TaskRuntime => ({
 
 const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
+const createIntervalGate = (intervalMilliseconds: number) => {
+  let nextStartAt = Date.now();
+  return async () => {
+    const startAt = nextStartAt;
+    nextStartAt += intervalMilliseconds;
+    await wait(Math.max(0, startAt - Date.now()));
+  };
+};
+
 const hasVtbApiEndpoints = (config: MizConfig["vtb"]) =>
-  Boolean(config.userApiUrl && config.cardApiUrl && config.liveApiUrl && config.dynamicApiUrl);
+  Boolean(
+    config.userApiUrl &&
+    config.cardApiUrl &&
+    config.liveApiUrl &&
+    config.dynamicApiUrl &&
+    config.webUrl &&
+    config.liveWebUrl
+  );
 
 const normalizeError = serializeError;

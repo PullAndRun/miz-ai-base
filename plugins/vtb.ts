@@ -59,11 +59,12 @@ const vtbPlugin: MizPlugin = {
     }
 
     const missingLiveApi = type === "live" &&
-      (!config.vtb.userApiUrl || !config.vtb.cardApiUrl || !config.vtb.liveApiUrl);
+      (!config.vtb.userApiUrl || !config.vtb.cardApiUrl || !config.vtb.liveApiUrl ||
+        !config.vtb.webUrl || !config.vtb.liveWebUrl);
     const missingDynamicApi = type === "dynamic" &&
-      (!config.vtb.userApiUrl || !config.vtb.dynamicApiUrl);
+      (!config.vtb.userApiUrl || !config.vtb.dynamicApiUrl || !config.vtb.webUrl);
     const missingSyncApi = type === "sync" &&
-      (!config.vtb.userApiUrl || !config.vtb.cardApiUrl || !config.vtb.liveApiUrl);
+      (!config.vtb.userApiUrl || !config.vtb.cardApiUrl || !config.vtb.liveApiUrl || !config.vtb.webUrl);
     if (missingLiveApi || missingDynamicApi || missingSyncApi) {
       await reply("主播追踪需要的接口还没接完整，请联系管理员完成配置。");
       return;
@@ -212,7 +213,10 @@ const vtbPlugin: MizPlugin = {
         } catch (error) {
           logger.warn("plugin", "vtb query image unavailable; sending text only", { streamerName, error });
         }
-        await reply(createVtbNotificationMessage(formatLiveQueryMessage(live, card.fans), imageFile));
+        await reply(createVtbNotificationMessage(
+          formatLiveQueryMessage(live, card.fans, config.vtb.liveWebUrl),
+          imageFile,
+        ));
         return;
       }
 
@@ -228,7 +232,10 @@ const vtbPlugin: MizPlugin = {
       } catch (error) {
         logger.warn("plugin", "vtb query image unavailable; sending text only", { streamerName, error });
       }
-      await reply(createVtbNotificationMessage(formatDynamicMessage(latestDynamic), imageFile));
+      await reply(createVtbNotificationMessage(
+        formatDynamicMessage(latestDynamic, config.vtb.webUrl),
+        imageFile,
+      ));
     } catch (error) {
       logger.error("plugin", "vtb query failed", error);
       await reply("B 站数据刚才在路上卡了一下，过一会儿再查吧。");

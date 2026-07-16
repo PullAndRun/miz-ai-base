@@ -132,6 +132,7 @@ const rawMizConfigSchema = z.object({
     .object({
       enabled: z.boolean().optional(),
       whitelistUserIds: z.array(targetIdSchema).optional(),
+      bilibiliHosts: z.array(nonEmptyStringSchema).min(1).optional(),
       downloadDirectory: nonEmptyStringSchema.optional(),
       napcatMediaDirectory: nonEmptyStringSchema.optional(),
       ytDlpLinuxPath: nonEmptyStringSchema.optional(),
@@ -152,6 +153,8 @@ const rawMizConfigSchema = z.object({
       cardApiUrl: nonEmptyStringSchema.optional(),
       liveApiUrl: nonEmptyStringSchema.optional(),
       dynamicApiUrl: nonEmptyStringSchema.optional(),
+      webUrl: nonEmptyStringSchema.optional(),
+      liveWebUrl: nonEmptyStringSchema.optional(),
       nameSyncCron: nonEmptyStringSchema.optional(),
       syncWhitelistUserIds: z.array(targetIdSchema).optional(),
       subscriptionWhitelistUserIds: z.array(targetIdSchema).optional(),
@@ -203,8 +206,7 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
   wallpaper: {
     enabled: config.wallpaper?.enabled ?? true,
     cron: config.wallpaper?.cron ?? "0 7 * * *",
-    apiUrl:
-      config.wallpaper?.apiUrl ?? "",
+    apiUrl: config.wallpaper?.apiUrl ?? "",
     imageBaseUrl: config.wallpaper?.imageBaseUrl ?? "",
   },
   news: {
@@ -255,6 +257,7 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     proxyUrl: config.network?.proxyUrl ?? "",
     bilibiliCookie: config.bilibili?.cookie?.trim() ?? "",
     whitelistUserIds: config.video?.whitelistUserIds ?? [],
+    bilibiliHosts: config.video?.bilibiliHosts ?? [],
     downloadDirectory: config.video?.downloadDirectory ?? "/temp",
     napcatMediaDirectory: config.video?.napcatMediaDirectory ?? "/app/media",
     ytDlpLinuxPath: config.video?.ytDlpLinuxPath ?? "",
@@ -273,6 +276,8 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     cardApiUrl: config.vtb?.cardApiUrl ?? "",
     liveApiUrl: config.vtb?.liveApiUrl ?? "",
     dynamicApiUrl: config.vtb?.dynamicApiUrl ?? "",
+    webUrl: config.vtb?.webUrl ?? "",
+    liveWebUrl: config.vtb?.liveWebUrl ?? "",
     nameSyncCron: config.vtb?.nameSyncCron ?? "0 0 * * 0",
     syncWhitelistUserIds: config.vtb?.syncWhitelistUserIds ?? [],
     subscriptionWhitelistUserIds: config.vtb?.subscriptionWhitelistUserIds ?? [],
@@ -360,6 +365,7 @@ export type VideoConfig = {
   proxyUrl: string;
   bilibiliCookie: string;
   whitelistUserIds: Array<string | number>;
+  bilibiliHosts: string[];
   downloadDirectory: string;
   napcatMediaDirectory: string;
   ytDlpLinuxPath: string;
@@ -379,6 +385,8 @@ export type VtbConfig = {
   cardApiUrl: string;
   liveApiUrl: string;
   dynamicApiUrl: string;
+  webUrl: string;
+  liveWebUrl: string;
   nameSyncCron: string;
   syncWhitelistUserIds: Array<string | number>;
   subscriptionWhitelistUserIds: Array<string | number>;

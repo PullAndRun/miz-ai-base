@@ -36,8 +36,8 @@ marketApiUrl = ""
 [miz.wallpaper]
 enabled = true
 cron = "0 7 * * *"
-apiUrl = ""
-imageBaseUrl = ""
+apiUrl = "https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN"
+imageBaseUrl = "https://www.bing.com"
 
 [miz.news]
 enabled = true
@@ -84,6 +84,7 @@ whitelistUserIds = []
 [miz.video]
 enabled = true
 whitelistUserIds = []
+bilibiliHosts = ["bilibili.com", "b23.tv"]
 downloadDirectory = "/temp"
 napcatMediaDirectory = "/app/media"
 ytDlpLinuxPath = "tools/yt-dlp"
@@ -104,6 +105,8 @@ userApiUrl = ""
 cardApiUrl = ""
 liveApiUrl = ""
 dynamicApiUrl = ""
+webUrl = "https://www.bilibili.com"
+liveWebUrl = "https://live.bilibili.com"
 nameSyncCron = "0 0 * * 0"
 syncWhitelistUserIds = []
 subscriptionWhitelistUserIds = []

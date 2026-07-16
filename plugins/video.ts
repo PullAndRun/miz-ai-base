@@ -40,7 +40,7 @@ const videoPlugin: MizPlugin = {
     }
 
     const whitelisted = isWhitelistedVideoUser(message.userId, config.video.whitelistUserIds);
-    if (!whitelisted && !isBilibiliUrl(url)) {
+    if (!whitelisted && !isBilibiliUrl(url, config.video.bilibiliHosts)) {
       await reply("目前可以直接搬运 B 站视频；其他站点需要视频白名单权限。");
       return;
     }
@@ -96,7 +96,7 @@ const videoPlugin: MizPlugin = {
       logger.info("plugin", "video sent", {
         userId: message.userId,
         groupId: message.groupId,
-        source: isBilibiliUrl(url) ? "bilibili" : "whitelist",
+        source: isBilibiliUrl(url, config.video.bilibiliHosts) ? "bilibili" : "whitelist",
       });
     } catch (error) {
       logger.error("plugin", "video processing or delivery failed", error);

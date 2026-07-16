@@ -68,6 +68,7 @@ export type Gateway = {
 const idSchema = z.union([z.string(), z.number()]);
 const FOLLOWED_GROUP_MEMBER_ID = "361390990";
 const GROUP_PERMISSION_CACHE_MS = 3_000;
+const GROUP_PERMISSION_CHECK_TIMEOUT_MS = 5_000;
 const MAX_GROUP_PERMISSION_CACHE_ENTRIES = 5_000;
 const MESSAGE_DEDUPLICATION_WINDOW_MS = 10 * 60 * 1_000;
 const MAX_DEDUPLICATED_MESSAGE_IDS = 5_000;
@@ -104,6 +105,7 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
   const messageHandlers = new Set<MessageHandler>();
   const canSendGroupMessage = createGroupSendPermissionChecker(client, logger);
   const canMentionAllGroupMembers = createAtAllPermissionChecker(client, logger);
+  let cachedGroupList: unknown[] | undefined;
 
   registerEvents(client, logger, messageHandlers, canSendGroupMessage, createMessageDeduplicator());
 
@@ -111,7 +113,21 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
     connect: () => client.connect(),
     dispose: () => client.dispose(),
     reportServerInfo: () => reportServerInfo(client, logger),
-    getGroupList: () => client.getGroupList(),
+    getGroupList: async () => {
+      try {
+        const groupList = await client.getGroupList();
+        if (Array.isArray(groupList)) {
+          cachedGroupList = [...groupList];
+        }
+        return groupList;
+      } catch (error) {
+        if (!cachedGroupList) {
+          throw error;
+        }
+        logger.warn("gateway", "group list refresh failed; using last successful result", error);
+        return [...cachedGroupList];
+      }
+    },
     canMentionAllGroupMembers,
     sendGroupMessage: async (groupId, message) => {
       if (!await canSendGroupMessage(groupId)) {
@@ -390,11 +406,11 @@ const callApiWithoutRetry = <T>(
   params: Record<string, unknown>,
   timeoutMs?: number,
 ): Promise<T> => {
-  // NapLink 1.1.0 exposes retry options on ApiClient but not on its public send helpers.
-  // Keep this narrow escape hatch here so non-idempotent media sends never get replayed.
+  // NapLink 1.1.0 exposes retry options on ApiClient but not on every public helper.
+  // Keep the no-retry path here for non-idempotent sends and lightweight preflight checks.
   const apiClient = (client as unknown as { apiClient?: ApiClientWithRetryOptions }).apiClient;
   if (!apiClient) {
-    throw new Error("NapLink API client is unavailable for a no-retry send");
+    throw new Error("NapLink API client is unavailable for a no-retry call");
   }
 
   return apiClient.call<T>(method, params, {
@@ -519,7 +535,12 @@ const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
 
   const getSelfId = () => {
     if (!selfId) {
-      selfId = client.getLoginInfo()
+      selfId = callApiWithoutRetry<unknown>(
+        client,
+        "get_login_info",
+        {},
+        GROUP_PERMISSION_CHECK_TIMEOUT_MS,
+      )
         .then((info) => getIdValue(info, ["user_id", "userId", "uin", "qq"]))
         .catch((error) => {
           selfId = undefined;
@@ -534,15 +555,23 @@ const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
     try {
       const botId = await getSelfId();
       if (!botId) {
-        logger.warn("gateway", "group send skipped: unable to identify bot account", { groupId });
-        return false;
+        logger.warn("gateway", "unable to identify bot account before group send; relying on send result", { groupId });
+        return true;
       }
 
       const [groupInfo, memberInfo] = await Promise.all([
-        // Always bypass NapCat's group-info cache. A whole-group mute can be
-        // enabled between two VTB notifications and must block this send.
-        client.getGroupInfo(groupId, true),
-        client.getGroupMemberInfo(groupId, botId, true),
+        callApiWithoutRetry<unknown>(
+          client,
+          "get_group_info",
+          { group_id: groupId, no_cache: true },
+          GROUP_PERMISSION_CHECK_TIMEOUT_MS,
+        ),
+        callApiWithoutRetry<unknown>(
+          client,
+          "get_group_member_info",
+          { group_id: groupId, user_id: botId, no_cache: true },
+          GROUP_PERMISSION_CHECK_TIMEOUT_MS,
+        ),
       ]);
       const wholeBan = getBooleanValue(groupInfo, [
         "whole_ban",
@@ -566,10 +595,10 @@ const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
       }
       return allowed;
     } catch (error) {
-      // Sending while the status is unknown would create a noisy NapCat error
-      // and an unnecessary VTB retry, so fail closed.
-      logger.warn("gateway", "group send skipped: unable to read mute status", { groupId, error });
-      return false;
+      // A transient permission lookup timeout must not suppress the actual
+      // message. NapCat's send response remains the source of truth.
+      logger.warn("gateway", "unable to read mute status; relying on group send result", { groupId, error });
+      return true;
     }
   };
 };

@@ -170,6 +170,7 @@ export const resolveVtbStreamer = async (name: string, config: VtbConfig): Promi
   const response = userResponseSchema.parse(
     await fetchJson(
       url,
+      config.webUrl,
       config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined,
     ),
   );
@@ -343,6 +344,7 @@ export const getVtbCardInfos = async (mids: readonly string[], config: VtbConfig
     const response = cardResponseSchema.parse(
       await fetchJson(
         url,
+        config.webUrl,
         config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined,
       ),
     );
@@ -411,7 +413,7 @@ export const getVtbLiveInfos = async (streamers: readonly VtbStreamer[], config:
   for (const batch of chunk(uniqueStreamers, 50)) {
     const url = config.liveApiUrl;
     const response = liveResponseSchema.parse(
-      await fetchJson(url, config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined, {
+      await fetchJson(url, config.webUrl, config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ uids: batch.map((streamer) => streamer.mid) }),
@@ -462,7 +464,7 @@ export const getVtbDynamics = async (
     items: channel.item
       .map((item) => {
         const description = cleanDynamicText(String(item.description));
-        const dynamicUrl = formatDynamicUrl(item.link);
+        const dynamicUrl = formatDynamicUrl(item.link, config.webUrl);
         return {
           title: String(item.title),
           description: truncateDynamicText(description),
@@ -491,7 +493,7 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
     return undefined;
   }
 
-  const cacheKey = `${url}\n${getVtbCredentialKey(config.bilibiliCookie)}`;
+  const cacheKey = `${url}\n${config.webUrl}\n${getVtbCredentialKey(config.bilibiliCookie)}`;
   const cacheRead = readExpiringCache(vtbImageCache, cacheKey, Date.now());
   vtbImageCache = cacheRead.cache;
   const cached = cacheRead.value;
@@ -500,6 +502,7 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
   }
 
   const requestHeaders = createVtbRequestHeaders(
+    config.webUrl,
     config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined,
   );
   const requestInit = { headers: requestHeaders } satisfies RequestInit;
@@ -1254,7 +1257,7 @@ const getNextReminderTime = (current: Date, intervalMinutes: number, now: Date) 
 const formatSyncFailure = (error: unknown) =>
   error instanceof Error ? error.message.replace(/\s+/g, " ").trim().slice(0, 200) : "没有返回具体原因";
 
-export const formatLiveMessage = (live: VtbLiveInfo, fans?: number) => [
+export const formatLiveMessage = (live: VtbLiveInfo, fans: number | undefined, liveWebUrl: string) => [
   `🔴 ${live.name} 的直播间开门啦！`,
   "",
   "今天播的是——",
@@ -1262,19 +1265,19 @@ export const formatLiveMessage = (live: VtbLiveInfo, fans?: number) => [
   "",
   ...(live.liveStartedAt ? [`⏰ ${dayjs(live.liveStartedAt).format("MM月DD日 HH:mm")} 开播`] : []),
   ...(fans === undefined ? [] : [`✨ ${fans.toLocaleString("zh-CN")} 位粉丝`]),
-  ...(live.roomId ? [`🔗 ${formatLiveRoomUrl(live.roomId)}`] : []),
+  ...(live.roomId ? [`🔗 ${formatLiveRoomUrl(live.roomId, liveWebUrl)}`] : []),
   "",
   "来得正好，一起去看看吧！",
 ].join("\n");
 
-export const formatLiveQueryMessage = (live: VtbLiveInfo, fans?: number) => [
+export const formatLiveQueryMessage = (live: VtbLiveInfo, fans: number | undefined, liveWebUrl: string) => [
   `📺 ${live.name} 的直播小窗`,
   live.isLive ? "🔴 现在正在直播" : "🌙 现在还没开播",
   "",
   `「${live.title}」`,
   ...(live.liveStartedAt ? ["", `⏰ ${dayjs(live.liveStartedAt).format("MM月DD日 HH:mm")} 开播`] : []),
   ...(fans === undefined ? [] : [`✨ ${fans.toLocaleString("zh-CN")} 位粉丝`]),
-  ...(live.roomId ? [`🔗 ${formatLiveRoomUrl(live.roomId)}`] : []),
+  ...(live.roomId ? [`🔗 ${formatLiveRoomUrl(live.roomId, liveWebUrl)}`] : []),
   "",
   live.isLive ? "直播间正热闹，来得及的话就去看看吧！" : "今天还在蓄力，等下次开播再见。",
 ].join("\n");
@@ -1286,6 +1289,7 @@ export const formatOfflineMessage = (
   startFans?: number,
   endFans?: number,
   roomId?: string,
+  liveWebUrl = "",
 ) => {
   const fanChange = startFans === undefined || endFans === undefined ? undefined : endFans - startFans;
   const durationMinutes = Math.max(1, Math.floor((endedAt.getTime() - startedAt.getTime()) / 60_000));
@@ -1295,14 +1299,14 @@ export const formatOfflineMessage = (
     `这次和大家一起度过了 ${formatLiveDuration(durationMinutes)}`,
     `⏰ ${dayjs(endedAt).format("MM月DD日 HH:mm")} 结束`,
     ...(fanChange && fanChange > 0 ? [`✨ 本场新关注 +${fanChange.toLocaleString("zh-CN")}`] : []),
-    ...(roomId ? [`🔗 ${formatLiveRoomUrl(roomId)}`] : []),
+    ...(roomId ? [`🔗 ${formatLiveRoomUrl(roomId, liveWebUrl)}`] : []),
     "",
     "辛苦啦，也谢谢大家一路陪到下播。充好电，我们下次见！",
   ].join("\n");
 };
 
-export const formatDynamicMessage = (dynamic: VtbDynamic) => {
-  const dynamicUrl = formatDynamicUrl(dynamic.link);
+export const formatDynamicMessage = (dynamic: VtbDynamic, webUrl: string) => {
+  const dynamicUrl = formatDynamicUrl(dynamic.link, webUrl);
   const hasDynamicUrlInDescription =
     dynamic.containsDynamicUrl ||
     dynamic.description.includes(dynamic.link) ||
@@ -1344,11 +1348,12 @@ const formatLiveDuration = (durationMinutes: number) => {
     : `${hours.toLocaleString("zh-CN")} 小时 ${minutes.toLocaleString("zh-CN")} 分钟`;
 };
 
-export const formatLiveRoomUrl = (roomId: string) => `https://live.bilibili.com/${roomId}`;
+export const formatLiveRoomUrl = (roomId: string, liveWebUrl: string) =>
+  `${liveWebUrl.replace(/\/+$/, "")}/${roomId}`;
 
-export const formatDynamicUrl = (link: string) => {
+export const formatDynamicUrl = (link: string, webUrl: string) => {
   const dynamicId = /(?:opus|dynamic)\/(\d+)/.exec(link)?.[1] ?? /\/(\d+)(?:\?.*)?$/.exec(link)?.[1];
-  return dynamicId ? `https://www.bilibili.com/opus/${dynamicId}` : link;
+  return dynamicId ? `${webUrl.replace(/\/+$/, "")}/opus/${dynamicId}` : link;
 };
 
 const createConfiguredVtbRepository = async (config: MizConfig) => {
@@ -1390,10 +1395,15 @@ const toOptionalMid = (value: string | undefined) => {
   return roomId === undefined ? null : BigInt(roomId);
 };
 
-const fetchJson = async (url: string, headers?: Record<string, string>, init?: RequestInit) => {
+const fetchJson = async (
+  url: string,
+  webUrl: string,
+  headers?: Record<string, string>,
+  init?: RequestInit,
+) => {
   const requestInit: RequestInit = {
     ...init,
-    headers: createVtbRequestHeaders(headers, init?.headers),
+    headers: createVtbRequestHeaders(webUrl, headers, init?.headers),
   };
   return runProtectedVtbRequest(
     url,
@@ -1595,10 +1605,10 @@ const isVtbCooldownError = (error: unknown) =>
 const waitForVtbRequest = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
-const createVtbRequestHeaders = (...sources: Array<HeadersInit | undefined>) => {
+const createVtbRequestHeaders = (webUrl: string, ...sources: Array<HeadersInit | undefined>) => {
   const headers = new Headers({
     "user-agent": "Mozilla/5.0",
-    referer: "https://www.bilibili.com/",
+    referer: `${webUrl.replace(/\/+$/, "")}/`,
   });
   for (const source of sources) {
     if (!source) {

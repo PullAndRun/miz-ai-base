@@ -116,6 +116,8 @@ Docker 模式最后再合并：
 
 对象字段会递归合并，数组会整体替换。`ff14.toml`、`vtb.toml` 和 `app.local.toml` 都是可选文件；`app.toml` 始终必需。
 
+通用外部 API URL 放在 `app.toml`。`ff14.toml` 只保存低价提醒目标，`vtb.toml` 只保存群订阅；本机网关、数据库、代理、RSSHub 等环境相关地址继续放在 `app.local.toml`，Docker 地址放在 `app.docker.toml`。
+
 运行期间修改 `config` 目录中的 TOML 文件，会重新加载插件和定时任务配置。如果修改了网关地址、NapLink 连接参数等连接级配置，建议重启进程以确保完全生效。
 
 ### 主要配置段
@@ -134,13 +136,13 @@ Docker 模式最后再合并：
 | `[miz.faq]` | 每群词条上限、答案长度上限和管理白名单。 |
 | `[miz.todo]` | 群待办提醒、批量处理数量和管理白名单。 |
 | `[miz.broadcast]` | 可以向机器人所在全部群发送广播的用户白名单。 |
-| `[miz.video]` | 视频开关、白名单、下载目录、NapCat 媒体目录和工具路径。 |
+| `[miz.video]` | 视频开关、白名单、B 站域名、下载目录、NapCat 媒体目录和工具路径。 |
 | `[miz.news]` | 财经新闻接口、目标群和定时表达式。 |
-| `[miz.wallpaper]` | Bing 壁纸接口、图片地址和定时表达式。 |
+| `[miz.wallpaper]` | Bing 官方元数据接口、图片基址、开关和定时表达式。 |
 | `[miz.ff14]` | 市场接口、返回条数、低价提醒开关和定时表达式。 |
-| `[miz.vtb]` | B 站接口、轮询策略、缓存、同步白名单和订阅管理白名单。 |
+| `[miz.vtb]` | B 站数据接口、网页与直播基址、轮询策略、缓存及管理白名单。 |
 
-未填写对应接口地址时，依赖该接口的命令会提示尚未配置，相关定时任务会自动停用并记录原因。
+未填写对应接口地址时，依赖该接口的命令会提示尚未配置，相关定时任务会自动停用并记录原因。示例配置已填写 Bing 官方地址。
 
 ### VTB 订阅
 
@@ -172,7 +174,7 @@ docker compose up -d
 
 如使用其他网络名称，请同步修改 Compose。NapCat、PostgreSQL、代理或 RSSHub 等依赖服务也需要加入同一网络，或者在 `config/app.docker.toml` 中填写容器能够访问的地址。
 
-首次执行 `bun run start:docker` 时，会自动创建最小的 `config/app.docker.toml`：
+首次执行 `bun run start:docker` 时，会根据 `config/example/app.docker.toml` 自动创建最小的 `config/app.docker.toml`：
 
 - NapCat：`ws://napcat-miz:3000`
 - PostgreSQL：`http://postgresql:5432`

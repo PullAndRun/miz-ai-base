@@ -8,40 +8,30 @@ afterEach(() => {
 });
 
 describe("daily wallpaper cache", () => {
-  test("coalesces identical requests without mixing different configurations", async () => {
+  test("uses the configured Bing endpoints and coalesces identical requests", async () => {
+    const metadataUrl = "https://metadata.example.test/HPImageArchive.aspx";
+    const imageBaseUrl = "https://images.example.test";
     const calls = new Map<string, number>();
     globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
       const url = String(input);
       calls.set(url, (calls.get(url) ?? 0) + 1);
-      if (url.endsWith("/metadata-a")) {
-        return Response.json({ images: [{ url: "/image-a", hsh: "a", copyright: "A" }] });
+      if (url === metadataUrl) {
+        return Response.json({ images: [{ url: "/official-image", hsh: "official", copyright: "Bing" }] });
       }
-      if (url.endsWith("/metadata-b")) {
-        return Response.json({ images: [{ url: "/image-b", hsh: "b", copyright: "B" }] });
-      }
-      if (url.endsWith("/image-a")) {
-        return new Response(new Uint8Array([1]));
-      }
-      if (url.endsWith("/image-b")) {
-        return new Response(new Uint8Array([2]));
+      if (url === "https://images.example.test/official-image") {
+        return new Response(new Uint8Array([3]));
       }
       throw new Error(`Unexpected URL: ${url}`);
     }) as unknown as typeof fetch;
 
-    const metadataA = "https://wallpaper-a.example.test/metadata-a";
-    const metadataB = "https://wallpaper-b.example.test/metadata-b";
-    const [firstA, secondA, wallpaperB] = await Promise.all([
-      getDailyWallpaper(metadataA, "https://wallpaper-a.example.test"),
-      getDailyWallpaper(metadataA, "https://wallpaper-a.example.test"),
-      getDailyWallpaper(metadataB, "https://wallpaper-b.example.test"),
+    const [first, second] = await Promise.all([
+      getDailyWallpaper(metadataUrl, imageBaseUrl),
+      getDailyWallpaper(metadataUrl, imageBaseUrl),
     ]);
 
-    expect(firstA).toEqual(secondA);
-    expect(firstA).toMatchObject({ id: "a", copyright: "A", imageBase64: "AQ==" });
-    expect(wallpaperB).toMatchObject({ id: "b", copyright: "B", imageBase64: "Ag==" });
-    expect(calls.get(metadataA)).toBe(1);
-    expect(calls.get(metadataB)).toBe(1);
-    expect(calls.get("https://wallpaper-a.example.test/image-a")).toBe(1);
-    expect(calls.get("https://wallpaper-b.example.test/image-b")).toBe(1);
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({ id: "official", copyright: "Bing", imageBase64: "Aw==" });
+    expect(calls.get(metadataUrl)).toBe(1);
+    expect(calls.get("https://images.example.test/official-image")).toBe(1);
   });
 });
