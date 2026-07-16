@@ -2,6 +2,7 @@
   "name": "miz",
   "version": "0.1.0",
   "private": true,
+  "license": "WTFPL",
   "type": "module",
   "scripts": {
     "start": "bun run prisma:generate && bun run scripts/start.ts normal",
