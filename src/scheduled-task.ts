@@ -1,12 +1,15 @@
 import cron from "node-cron";
 import type { Logger } from "@/logger";
 
+const CRON_EXECUTION_TOLERANCE_MS = 10_000;
+
 export type ScheduledTaskRuntime = {
   stop(): Promise<void>;
 };
 
 type ExclusiveCronTaskOptions = {
   cronExpression: string;
+  taskName: string;
 } & ExclusiveTaskOptions;
 
 type ExclusiveTaskOptions = {
@@ -29,13 +32,26 @@ export type ExclusiveTaskRunner = {
  */
 export const createExclusiveCronTask = ({
   cronExpression,
+  taskName,
   ...taskOptions
 }: ExclusiveCronTaskOptions): ScheduledTaskRuntime => {
   const runner = createExclusiveTaskRunner(taskOptions);
-  const task = cron.schedule(cronExpression, runner.start);
+  const task = cron.createTask(cronExpression, runner.start, {
+    name: taskName,
+    missedExecutionTolerance: CRON_EXECUTION_TOLERANCE_MS,
+  });
+  task.on("execution:missed", ({ date, triggeredAt }) => {
+    taskOptions.logger.warn("plugin", `${taskName} missed its cron slot; running catch-up`, {
+      cronExpression,
+      scheduledAt: date.toISOString(),
+      delayMs: Math.max(0, triggeredAt.getTime() - date.getTime()),
+    });
+    runner.start();
+  });
+  void task.start();
   return {
     stop: async () => {
-      task.stop();
+      await task.stop();
       await runner.stop();
     },
   };

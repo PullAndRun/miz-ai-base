@@ -161,6 +161,7 @@ const startScheduleTask = async (config: MizConfig, gateway: Gateway, logger: Lo
   logger.info("plugin", "schedule task started", { cronExpression, reminderMinutes: config.schedule.reminderMinutes });
   return createExclusiveCronTask({
     cronExpression,
+    taskName: "schedule task",
     logger,
     run: runTask,
     skippedMessage: "schedule task skipped: previous run is still active",
@@ -241,6 +242,7 @@ const startActivityTask = async (config: MizConfig, gateway: Gateway, logger: Lo
   });
   return createExclusiveCronTask({
     cronExpression,
+    taskName: "activity task",
     logger,
     run: runTask,
     skippedMessage: "activity task skipped: previous run is still active",
@@ -308,6 +310,7 @@ const startTodoTask = async (config: MizConfig, gateway: Gateway, logger: Logger
   logger.info("plugin", "todo task started", { cronExpression, reminderMinutes: config.todo.reminderMinutes });
   return createExclusiveCronTask({
     cronExpression,
+    taskName: "todo task",
     logger,
     run: runTask,
     skippedMessage: "todo task skipped: previous run is still active",
@@ -368,6 +371,7 @@ const startReminderTask = async (config: MizConfig, gateway: Gateway, logger: Lo
   logger.info("plugin", "reminder task started", { cronExpression });
   return createExclusiveCronTask({
     cronExpression,
+    taskName: "reminder task",
     logger,
     run: runTask,
     skippedMessage: "reminder task skipped: previous run is still active",
@@ -415,6 +419,7 @@ const startVtbNameSyncTask = (config: MizConfig, logger: Logger): TaskRuntime =>
   logger.info("plugin", "vtb name sync task started", { cronExpression });
   return createExclusiveCronTask({
     cronExpression,
+    taskName: "vtb name sync task",
     logger,
     run: runTask,
     skippedMessage: "vtb name sync task skipped: previous run is still active",
@@ -469,6 +474,7 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
 
   return createExclusiveCronTask({
     cronExpression,
+    taskName: "vtb task",
     logger,
     run: runTask,
     failureMessage: "vtb task failed",
@@ -895,6 +901,7 @@ const startYtDlpUpdateTask = (config: MizConfig, logger: Logger): TaskRuntime =>
   logger.info("plugin", "yt-dlp update task started", { cronExpression });
   return createExclusiveCronTask({
     cronExpression,
+    taskName: "yt-dlp update task",
     logger,
     run: runTask,
     skippedMessage: "yt-dlp update task skipped: previous run is still active",
@@ -936,6 +943,7 @@ const startNewsTask = (config: MizConfig, gateway: Gateway, logger: Logger): Tas
 
   return createExclusiveCronTask({
     cronExpression,
+    taskName: "news task",
     logger,
     run: runTask,
     skippedMessage: "news task skipped: previous run is still active",
@@ -1027,6 +1035,7 @@ const startWallpaperTask = (
 
   return createExclusiveCronTask({
     cronExpression,
+    taskName: "wallpaper task",
     logger,
     run: runTask,
     skippedMessage: "wallpaper task skipped: previous run is still active",
@@ -1119,6 +1128,7 @@ const startFf14PriceAlertTask = (
 
   return createExclusiveCronTask({
     cronExpression,
+    taskName: "ff14 price alert task",
     logger,
     run: runTask,
     skippedMessage: "ff14 price alert task skipped: previous run is still active",
