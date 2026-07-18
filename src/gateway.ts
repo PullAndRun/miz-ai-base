@@ -579,16 +579,7 @@ const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
           GROUP_PERMISSION_CHECK_TIMEOUT_MS,
         ),
       ]);
-      const permission = getGroupSendPermission(groupInfo, memberInfo);
-      const { allowed, wholeBan, mutedUntil } = permission;
-      if (!allowed) {
-        logger.info("gateway", "group send skipped: group or bot is muted, or mute status is unavailable", {
-          groupId,
-          wholeBan,
-          mutedUntil,
-        });
-      }
-      return allowed;
+      return getGroupSendPermission(groupInfo, memberInfo).allowed;
     } catch (error) {
       logger.warn("gateway", "group send skipped: unable to read mute status", { groupId, error });
       return false;
