@@ -2,16 +2,38 @@ import { describe, expect, test } from "bun:test";
 import { getGroupSendPermission, isGroupAtAllAvailable } from "@/gateway";
 
 describe("group send permission", () => {
-  test("blocks NapCat's -1 whole-group mute flag", () => {
+  test("blocks NapCat's -1 whole-group mute flag for ordinary members", () => {
     expect(getGroupSendPermission(
       { group_all_shut: -1 },
-      { shut_up_timestamp: 0 },
+      { shut_up_timestamp: 0, role: "member" },
       1_000,
     )).toEqual({
       allowed: false,
       wholeBan: true,
       mutedUntil: 0,
     });
+  });
+
+  test("allows an unmuted administrator or owner during a whole-group mute", () => {
+    expect(getGroupSendPermission(
+      { group_all_shut: -1 },
+      { shut_up_timestamp: 0, role: "admin" },
+      1_000,
+    ).allowed).toBeTrue();
+
+    expect(getGroupSendPermission(
+      { data: { group_all_shut: true } },
+      { data: { shut_up_timestamp: 1_000, role: "owner" } },
+      1_000,
+    ).allowed).toBeTrue();
+  });
+
+  test("blocks an administrator who is individually muted during a whole-group mute", () => {
+    expect(getGroupSendPermission(
+      { group_all_shut: -1 },
+      { shut_up_timestamp: 1_001, role: "admin" },
+      1_000,
+    ).allowed).toBeFalse();
   });
 
   test("blocks the bot while its mute timestamp is in the future", () => {

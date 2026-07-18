@@ -612,9 +612,14 @@ export const getGroupSendPermission = (
     "shutUpAll",
   ]);
   const mutedUntil = getNumberValue(memberInfo, ["shut_up_timestamp", "shutUpTimestamp"]);
+  const role = getStringValue(memberInfo, ["role"]);
+  const bypassesWholeBan = role === "admin" || role === "owner";
 
   return {
-    allowed: wholeBan === false && mutedUntil !== undefined && mutedUntil <= nowSeconds,
+    allowed: wholeBan !== undefined
+      && (!wholeBan || bypassesWholeBan)
+      && mutedUntil !== undefined
+      && mutedUntil <= nowSeconds,
     wholeBan,
     mutedUntil,
   };
