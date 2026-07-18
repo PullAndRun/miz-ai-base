@@ -32,6 +32,12 @@ export type GroupMessageUnavailableError = Error & Readonly<{
   groupId: number | string;
 }>;
 
+export type GroupSendPermission = Readonly<{
+  allowed: boolean;
+  wholeBan?: boolean;
+  mutedUntil?: number;
+}>;
+
 export const createGroupMessageUnavailableError = (
   groupId: number | string,
 ): GroupMessageUnavailableError => Object.assign(
@@ -555,8 +561,8 @@ const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
     try {
       const botId = await getSelfId();
       if (!botId) {
-        logger.warn("gateway", "unable to identify bot account before group send; relying on send result", { groupId });
-        return true;
+        logger.warn("gateway", "group send skipped: unable to identify bot account", { groupId });
+        return false;
       }
 
       const [groupInfo, memberInfo] = await Promise.all([
@@ -573,21 +579,10 @@ const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
           GROUP_PERMISSION_CHECK_TIMEOUT_MS,
         ),
       ]);
-      const wholeBan = getBooleanValue(groupInfo, [
-        "whole_ban",
-        "wholeBan",
-        "group_all_shut",
-        "groupAllShut",
-        "is_all_shut",
-        "isAllShut",
-        "shut_up_all",
-        "shutUpAll",
-      ]);
-      const mutedUntil = getNumberValue(memberInfo, ["shut_up_timestamp", "shutUpTimestamp"]);
-      const botMuted = mutedUntil !== undefined && mutedUntil > Math.floor(Date.now() / 1_000);
-      const allowed = !wholeBan && !botMuted;
+      const permission = getGroupSendPermission(groupInfo, memberInfo);
+      const { allowed, wholeBan, mutedUntil } = permission;
       if (!allowed) {
-        logger.info("gateway", "group send skipped: group or bot is muted", {
+        logger.info("gateway", "group send skipped: group or bot is muted, or mute status is unavailable", {
           groupId,
           wholeBan,
           mutedUntil,
@@ -595,11 +590,33 @@ const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
       }
       return allowed;
     } catch (error) {
-      // A transient permission lookup timeout must not suppress the actual
-      // message. NapCat's send response remains the source of truth.
-      logger.warn("gateway", "unable to read mute status; relying on group send result", { groupId, error });
-      return true;
+      logger.warn("gateway", "group send skipped: unable to read mute status", { groupId, error });
+      return false;
     }
+  };
+};
+
+export const getGroupSendPermission = (
+  groupInfo: unknown,
+  memberInfo: unknown,
+  nowSeconds = Math.floor(Date.now() / 1_000),
+): GroupSendPermission => {
+  const wholeBan = getOptionalNonZeroBooleanValue(groupInfo, [
+    "whole_ban",
+    "wholeBan",
+    "group_all_shut",
+    "groupAllShut",
+    "is_all_shut",
+    "isAllShut",
+    "shut_up_all",
+    "shutUpAll",
+  ]);
+  const mutedUntil = getNumberValue(memberInfo, ["shut_up_timestamp", "shutUpTimestamp"]);
+
+  return {
+    allowed: wholeBan === false && mutedUntil !== undefined && mutedUntil <= nowSeconds,
+    wholeBan,
+    mutedUntil,
   };
 };
 
@@ -716,9 +733,28 @@ const getStringValue = (value: unknown, keys: readonly string[]) => {
   return typeof raw === "string" ? raw : undefined;
 };
 
-const getBooleanValue = (value: unknown, keys: readonly string[]) => {
+const getOptionalNonZeroBooleanValue = (value: unknown, keys: readonly string[]) => {
   const raw = getValue(value, keys);
-  return typeof raw === "boolean" ? raw : raw === 1 || raw === "1" || raw === "true";
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  if (typeof raw === "number") {
+    return Number.isFinite(raw) ? raw !== 0 : undefined;
+  }
+  if (typeof raw === "string") {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+    if (normalized) {
+      const number = Number(normalized);
+      return Number.isFinite(number) ? number !== 0 : undefined;
+    }
+  }
+  return undefined;
 };
 
 const getOptionalBooleanValue = (value: unknown, keys: readonly string[]) => {
