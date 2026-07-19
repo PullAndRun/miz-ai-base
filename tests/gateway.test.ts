@@ -1,7 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { getGroupSendPermission, isGroupAtAllAvailable } from "@/gateway";
+import {
+  createGroupMessageUnavailableError,
+  getGroupSendPermission,
+  isGroupAtAllAvailable,
+  isGroupMessageUnavailableError,
+} from "@/gateway";
 
 describe("group send permission", () => {
+  test("identifies a muted or unavailable group message error", () => {
+    expect(isGroupMessageUnavailableError(createGroupMessageUnavailableError(123))).toBeTrue();
+    expect(isGroupMessageUnavailableError(new Error("other failure"))).toBeFalse();
+  });
+
   test("blocks NapCat's -1 whole-group mute flag for ordinary members", () => {
     expect(getGroupSendPermission(
       { group_all_shut: -1 },

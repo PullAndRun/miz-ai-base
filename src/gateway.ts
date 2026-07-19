@@ -45,6 +45,9 @@ export const createGroupMessageUnavailableError = (
   { name: "GroupMessageUnavailableError", groupId },
 );
 
+export const isGroupMessageUnavailableError = (error: unknown): error is GroupMessageUnavailableError =>
+  error instanceof Error && error.name === "GroupMessageUnavailableError";
+
 export type Gateway = {
   connect(): Promise<void>;
   dispose(): void;

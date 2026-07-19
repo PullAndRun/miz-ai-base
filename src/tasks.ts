@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import dayjs from "dayjs";
 import { updateVtbSubscriptionNames, type MizConfig } from "@/config";
-import type { Gateway } from "@/gateway";
+import { isGroupMessageUnavailableError, type Gateway } from "@/gateway";
 import type { Logger } from "@/logger";
 import {
   FF14_REGION_NAMES,
@@ -147,11 +147,10 @@ const startScheduleTask = async (config: MizConfig, gateway: Gateway, logger: Lo
               error: normalizeError(releaseError),
             });
           }
-          logger.error("plugin", "schedule reminder delivery failed after claiming", {
+          logGroupDeliveryFailure(logger, "schedule reminder delivery failed after claiming", {
             displayId: event.displayId,
             groupId: event.groupId,
-            error: normalizeError(error),
-          });
+          }, error);
         }
     });
 
@@ -226,11 +225,10 @@ const startActivityTask = async (config: MizConfig, gateway: Gateway, logger: Lo
               error: normalizeError(releaseError),
             });
           }
-          logger.error("plugin", "activity reminder delivery failed after claiming", {
+          logGroupDeliveryFailure(logger, "activity reminder delivery failed after claiming", {
             displayId: activity.displayId,
             groupId: activity.groupId,
-            error: normalizeError(error),
-          });
+          }, error);
         }
     });
     await repository.cleanupFinishedActivities();
@@ -297,11 +295,10 @@ const startTodoTask = async (config: MizConfig, gateway: Gateway, logger: Logger
               error: normalizeError(releaseError),
             });
           }
-          logger.error("plugin", "todo reminder delivery failed after claiming", {
+          logGroupDeliveryFailure(logger, "todo reminder delivery failed after claiming", {
             displayId: todo.displayId,
             groupId: todo.groupId,
-            error: normalizeError(error),
-          });
+          }, error);
         }
     });
     await repository.cleanupFinishedTodos();
@@ -359,11 +356,10 @@ const startReminderTask = async (config: MizConfig, gateway: Gateway, logger: Lo
               error: normalizeError(releaseError),
             });
           }
-          logger.error("plugin", "reminder delivery failed after claiming", {
+          logGroupDeliveryFailure(logger, "reminder delivery failed after claiming", {
             id: reminder.id,
             groupId: reminder.groupId,
-            error: normalizeError(error),
-          });
+          }, error);
         }
     });
   };
@@ -830,12 +826,11 @@ const sendVtbGroupMessage = async (
       continue;
     }
 
-    logger.error("plugin", "vtb notification delivery failed", {
+    logGroupDeliveryFailure(logger, "vtb notification delivery failed", {
       kind,
       streamer,
       groupId,
-      error: normalizeError(result.reason),
-    });
+    }, result.reason);
   }
   return deliveredGroups;
 };
@@ -978,10 +973,9 @@ const pushNewsToConfiguredGroups = async (
       return result.value;
     }
 
-    logger.error("plugin", "news delivery failed", {
+    logGroupDeliveryFailure(logger, "news delivery failed", {
       groupId: groupIds[index],
-      error: normalizeError(result.reason),
-    });
+    }, result.reason);
     return 0;
   });
   const sentNewsCount = sentCounts.reduce((total, count) => total + count, 0);
@@ -1074,10 +1068,9 @@ const sendDailyWallpaper = async (config: MizConfig, gateway: Gateway, logger: L
       continue;
     }
 
-    logger.error("plugin", "daily wallpaper delivery failed", {
+    logGroupDeliveryFailure(logger, "daily wallpaper delivery failed", {
       groupId,
-      error: normalizeError(result.reason),
-    });
+    }, result.reason);
   }
 
   logger.info("plugin", "wallpaper task delivery completed", {
@@ -1193,10 +1186,9 @@ const runFf14PriceAlerts = async (
         lowestPrice,
       });
     } catch (error) {
-      logger.error("plugin", "ff14 price alert failed", {
+      logGroupDeliveryFailure(logger, "ff14 price alert failed", {
         alert,
-        error: normalizeError(error),
-      });
+      }, error);
     }
   }
 };
@@ -1227,3 +1219,15 @@ const hasVtbApiEndpoints = (config: MizConfig["vtb"]) =>
   );
 
 const normalizeError = serializeError;
+
+const logGroupDeliveryFailure = (
+  logger: Logger,
+  message: string,
+  metadata: Record<string, unknown>,
+  error: unknown,
+) => {
+  if (isGroupMessageUnavailableError(error)) {
+    return;
+  }
+  logger.error("plugin", message, { ...metadata, error: normalizeError(error) });
+};
