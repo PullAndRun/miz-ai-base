@@ -81,6 +81,7 @@ const GROUP_PERMISSION_CHECK_TIMEOUT_MS = 5_000;
 const MAX_GROUP_PERMISSION_CACHE_ENTRIES = 5_000;
 const MESSAGE_DEDUPLICATION_WINDOW_MS = 10 * 60 * 1_000;
 const MAX_DEDUPLICATED_MESSAGE_IDS = 5_000;
+export const NAPLINK_RECONNECT_MAX_ATTEMPTS = Number.POSITIVE_INFINITY;
 
 const textSegmentSchema = z
   .looseObject({
@@ -240,7 +241,7 @@ const createNapLinkClient = (config: MizConfig, logger: Logger) =>
     },
     reconnect: {
       enabled: true,
-      maxAttempts: config.naplink.reconnectMaxAttempts,
+      maxAttempts: NAPLINK_RECONNECT_MAX_ATTEMPTS,
     },
     logging: {
       level: config.naplink.logLevel,

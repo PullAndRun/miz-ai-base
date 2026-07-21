@@ -4,7 +4,12 @@ import {
   getGroupSendPermission,
   isGroupAtAllAvailable,
   isGroupMessageUnavailableError,
+  NAPLINK_RECONNECT_MAX_ATTEMPTS,
 } from "@/gateway";
+
+test("gateway reconnect attempts are unlimited", () => {
+  expect(NAPLINK_RECONNECT_MAX_ATTEMPTS).toBe(Number.POSITIVE_INFINITY);
+});
 
 describe("group send permission", () => {
   test("identifies a muted or unavailable group message error", () => {

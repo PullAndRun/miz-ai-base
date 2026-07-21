@@ -126,7 +126,7 @@ Docker 模式最后再合并：
 | --- | --- |
 | `[miz.gateway]` | NapCat OneBot WebSocket 地址和访问令牌。 |
 | `[miz.postgresql]` | PostgreSQL 主机地址、数据库名、用户名和密码。 |
-| `[miz.naplink]` | 日志级别、连接超时、心跳、API 超时、重试和重连次数。 |
+| `[miz.naplink]` | 日志级别、连接超时、心跳、API 超时和 API 重试次数；网关断线后会持续自动重连，直至恢复连接。 |
 | `[miz.plugins]` | 命令前缀和插件目录，默认分别为 `miz`、`plugins`。 |
 | `[miz.network]` | 供视频和 VTB 请求使用的代理地址 `proxyUrl`。 |
 | `[miz.bilibili]` | B 站 Cookie，供视频下载和 VTB 接口请求复用。 |

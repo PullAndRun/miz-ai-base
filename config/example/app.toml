@@ -14,7 +14,6 @@ connectTimeoutMs = 0
 pingIntervalMs = 0
 apiTimeoutMs = 0
 apiRetries = 0
-reconnectMaxAttempts = 0
 
 [miz.plugins]
 commandPrefix = ""

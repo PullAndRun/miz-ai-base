@@ -26,7 +26,6 @@ const rawMizConfigSchema = z.object({
       pingIntervalMs: nonNegativeIntegerSchema.optional(),
       apiTimeoutMs: nonNegativeIntegerSchema.optional(),
       apiRetries: nonNegativeIntegerSchema.optional(),
-      reconnectMaxAttempts: nonNegativeIntegerSchema.optional(),
     })
     .optional(),
   plugins: z
@@ -183,7 +182,6 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     pingIntervalMs: config.naplink?.pingIntervalMs ?? 30_000,
     apiTimeoutMs: config.naplink?.apiTimeoutMs ?? 30_000,
     apiRetries: config.naplink?.apiRetries ?? 3,
-    reconnectMaxAttempts: config.naplink?.reconnectMaxAttempts ?? 10,
   },
   plugins: {
     commandPrefix: config.plugins?.commandPrefix ?? "miz",
