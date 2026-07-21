@@ -307,10 +307,11 @@ bun audit
 
 | 脚本 | 作用 |
 | --- | --- |
-| `bun run start` | 普通模式启动，自动生成 Prisma Client 并执行迁移。 |
-| `bun run start:docker` | Docker 模式启动并加载 `app.docker.toml`。 |
-| `bun run dev` | 普通模式监听源文件变化。 |
-| `bun run dev:docker` | Docker 配置下监听源文件变化。 |
+| `bun run start` | 更新依赖后，以普通模式启动、生成 Prisma Client 并执行迁移。 |
+| `bun run start:docker` | 更新依赖后，以 Docker 模式启动并加载 `app.docker.toml`。 |
+| `bun run dev` | 更新依赖后，以普通模式监听源文件变化。 |
+| `bun run dev:docker` | 更新依赖后，以 Docker 配置监听源文件变化。 |
+| `bun run dependencies:update` | 检查并将 `package.json` 中的依赖更新到最新版本。 |
 | `bun run prisma:migrate` | 使用当前配置执行 `prisma migrate deploy`。 |
 | `bun run prisma:push` | 将 Schema 直接推送到数据库，适合本地开发验证。 |
 
