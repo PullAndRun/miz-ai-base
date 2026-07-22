@@ -514,7 +514,7 @@ const createWelcomeMessage = (userId: string | number, memberName: string, group
   {
     type: "text",
     data: {
-      text: ` 欢迎来到「${groupName}」！🎉\n先逛逛群公告和置顶，熟悉之后就自在聊天吧。有活动时，也欢迎一起加入热闹。`,
+      text: ` 锵锵——欢迎来到「${groupName}」！🎉\n人海这么大，偏偏在这里遇见你。看来我们今天的运气相当不错嘛～`,
     },
   },
 ];
