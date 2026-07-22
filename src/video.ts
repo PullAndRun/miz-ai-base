@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { VideoConfig } from "@/config";
+import type { NetworkConfig, VideoConfig } from "@/config";
 import { isWhitelistedUser } from "@/group-permissions";
 
 const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
@@ -147,8 +147,13 @@ export const prepareVideoForQq = async (videoPath: string, config: VideoConfig) 
 
 export const deleteDownloadedVideo = (videoPath: string) => rm(videoPath, { force: true });
 
-export const updateYtDlp = async (config: VideoConfig) => {
-  await runYtDlp(config, ["-U", ...(config.proxyUrl ? ["--proxy", config.proxyUrl] : [])]);
+export const createYtDlpUpdateArgs = (network: NetworkConfig) => [
+  "-U",
+  ...(network.proxyUrl ? ["--proxy", network.proxyUrl] : []),
+];
+
+export const updateYtDlp = async (config: VideoConfig, network: NetworkConfig) => {
+  await runYtDlp(config, createYtDlpUpdateArgs(network));
 };
 
 const createRequestArgs = (url: string, config: VideoConfig) => [

@@ -889,7 +889,7 @@ const startYtDlpUpdateTask = (config: MizConfig, logger: Logger): TaskRuntime =>
   }
 
   const runTask = async () => {
-    await updateYtDlp(config.video);
+    await updateYtDlp(config.video, config.network);
     logger.info("plugin", "yt-dlp updated");
   };
 
