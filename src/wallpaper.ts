@@ -9,6 +9,7 @@ const MAX_WALLPAPER_CACHE_ENTRIES = 4;
 
 const bingImageSchema = z.looseObject({
   url: z.string().min(1),
+  urlbase: z.string().min(1).optional(),
   hsh: z.string().min(1).optional(),
   startdate: z.string().min(1).optional(),
   start_date: z.string().min(1).optional(),
@@ -95,7 +96,7 @@ const refreshDailyWallpaper = async (
       return cachedWallpaper;
     }
 
-    const imageBase64 = await fetchImageAsBase64(resolveImageUrl(image.url, imageBaseUrl));
+    const imageBase64 = await fetchImageAsBase64(resolveHighestQualityImageUrl(image, imageBaseUrl));
     const wallpaper = {
       id,
       date: image.startdate ?? image.start_date,
@@ -134,7 +135,16 @@ const fetchWallpaperMetadata = async (apiUrl: string) => {
 const fetchImageAsBase64 = async (url: string) => {
   const response = await fetchWithRetry(url, { timeoutMs: FETCH_TIMEOUT_MS });
 
+  // Base64 only changes the transport representation; the downloaded image
+  // bytes are forwarded unchanged and are never decoded or re-encoded here.
   return (await readResponseBytes(response, MAX_WALLPAPER_BYTES)).toString("base64");
+};
+
+const resolveHighestQualityImageUrl = (image: BingImage, imageBaseUrl: string) => {
+  // Bing's metadata URL normally points at a 1920x1080 rendition. `urlbase`
+  // identifies the same image and supports the original UHD rendition.
+  const url = image.urlbase ? `${image.urlbase}_UHD.jpg` : image.url;
+  return resolveImageUrl(url, imageBaseUrl);
 };
 
 const resolveImageUrl = (url: string, imageBaseUrl: string) =>
