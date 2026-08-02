@@ -12,6 +12,7 @@ const rawMizConfigSchema = z.object({
   gateway: z.object({
     url: nonEmptyStringSchema,
     accessToken: nonEmptyStringSchema,
+    followedGroupMemberId: targetIdSchema.optional(),
   }),
   postgresql: z.object({
     url: nonEmptyStringSchema,

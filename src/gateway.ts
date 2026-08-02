@@ -75,7 +75,6 @@ export type Gateway = {
 };
 
 const idSchema = z.union([z.string(), z.number()]);
-const FOLLOWED_GROUP_MEMBER_ID = "361390990";
 const GROUP_PERMISSION_CACHE_MS = 3_000;
 const GROUP_PERMISSION_CHECK_TIMEOUT_MS = 5_000;
 const MAX_GROUP_PERMISSION_CACHE_ENTRIES = 5_000;
@@ -117,7 +116,14 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
   const canMentionAllGroupMembers = createAtAllPermissionChecker(client, logger);
   let cachedGroupList: unknown[] | undefined;
 
-  registerEvents(client, logger, messageHandlers, canSendGroupMessage, createMessageDeduplicator());
+  registerEvents(
+    client,
+    logger,
+    messageHandlers,
+    canSendGroupMessage,
+    createMessageDeduplicator(),
+    config.gateway.followedGroupMemberId,
+  );
 
   return {
     connect: () => client.connect(),
@@ -278,6 +284,7 @@ const registerEvents = (
   messageHandlers: Set<MessageHandler>,
   canSendGroupMessage: (groupId: number | string) => Promise<boolean>,
   isDuplicateMessage: (message: IncomingMessage) => boolean,
+  followedGroupMemberId: string | number | undefined,
 ) => {
   client.on("state_change", (state: ConnectionState) => {
     logger.info("gateway", `state=${state}`);
@@ -315,7 +322,7 @@ const registerEvents = (
   client.on("notice", (event) => {
     const parsedEvent = napCatEventSchema.safeParse(event);
     logger.info("gateway", `event=${parsedEvent.success ? formatEventName(parsedEvent.data) : "unknown"}`);
-    if (!parsedEvent.success || !isFollowedMemberLeavingGroup(parsedEvent.data)) {
+    if (!parsedEvent.success || !isFollowedMemberLeavingGroup(parsedEvent.data, followedGroupMemberId)) {
       if (parsedEvent.success && isNewGroupMember(parsedEvent.data)) {
         void sendNewMemberWelcome(client, parsedEvent.data, logger, canSendGroupMessage).catch(
           (error) => logger.error("gateway", "failed to send new member welcome", {
@@ -475,11 +482,15 @@ const formatEventName = (event: NapCatEvent) =>
     .filter(Boolean)
     .join(".");
 
-const isFollowedMemberLeavingGroup = (event: NapCatEvent) =>
+const isFollowedMemberLeavingGroup = (
+  event: NapCatEvent,
+  followedGroupMemberId: string | number | undefined,
+) =>
+  followedGroupMemberId !== undefined &&
   event.notice_type === "group_decrease" &&
   event.group_id !== undefined &&
   event.user_id !== undefined &&
-  String(event.user_id) === FOLLOWED_GROUP_MEMBER_ID;
+  String(event.user_id) === String(followedGroupMemberId);
 
 const isNewGroupMember = (event: NapCatEvent) =>
   event.notice_type === "group_increase" &&

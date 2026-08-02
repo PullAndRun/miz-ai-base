@@ -1,6 +1,7 @@
 [miz.gateway]
 url = ""
 accessToken = ""
+# followedGroupMemberId = 123456789
 
 [miz.postgresql]
 url = ""
