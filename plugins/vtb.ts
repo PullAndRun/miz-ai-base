@@ -19,9 +19,21 @@ import {
   removeVtbSubscription,
   updateVtbSubscriptionNames,
 } from "@/config";
-import { changeVtbSubscriptions, findVtbSubscription } from "@/vtb-subscriptions";
+import { findVtbSubscription } from "@/vtb-subscriptions";
 
-const vtbPlugin: MizPlugin = {
+type VtbPluginDependencies = {
+  loadCurrentConfig?: typeof loadConfig;
+  addSubscription?: typeof addVtbSubscription;
+  removeSubscription?: typeof removeVtbSubscription;
+  getRepository?: typeof getVtbRepository;
+};
+
+export const createVtbPlugin = ({
+  loadCurrentConfig = loadConfig,
+  addSubscription = addVtbSubscription,
+  removeSubscription = removeVtbSubscription,
+  getRepository = getVtbRepository,
+}: VtbPluginDependencies = {}): MizPlugin => ({
   name: "vtb",
   commands: ["vtb"],
   description: [
@@ -85,7 +97,12 @@ const vtbPlugin: MizPlugin = {
         }
 
         if (type === "list") {
-          const subscription = findVtbSubscription(config.vtb.subscriptions, message.groupId);
+          // Subscription commands persist directly to vtb.toml. The plugin's
+          // config is an immutable runtime snapshot and can stay stale until
+          // the debounced config watcher reloads it, so always list the latest
+          // persisted subscriptions.
+          const latestConfig = await loadCurrentConfig();
+          const subscription = findVtbSubscription(latestConfig.vtb.subscriptions, message.groupId);
           await reply(
             subscription?.streamers.length
               ? [`📺 这个群正在关注 ${subscription.streamers.length} 位主播：`, ...subscription.streamers.map((name) => `· ${name}`)].join("\n")
@@ -95,23 +112,22 @@ const vtbPlugin: MizPlugin = {
         }
 
         const result = type === "subscribe"
-          ? await addVtbSubscription(message.groupId, streamerName)
-          : await removeVtbSubscription(message.groupId, streamerName);
+          ? await addSubscription(message.groupId, streamerName)
+          : await removeSubscription(message.groupId, streamerName);
         if (!result.changed) {
           await reply(type === "subscribe" ? `${streamerName} 已经在关注名单里啦。` : `关注名单里没有 ${streamerName}。`);
           return;
         }
 
-        const nextSubscriptions = changeVtbSubscriptions(
-          config.vtb.subscriptions,
-          message.groupId,
-          streamerName,
-          type,
-        );
+        // Use the state after the atomic file update. Besides making an
+        // immediate follow-up command consistent, this prevents an
+        // unsubscribe from deleting a streamer that a stale runtime snapshot
+        // did not know was still subscribed in another group.
+        const nextSubscriptions = (await loadCurrentConfig()).vtb.subscriptions;
         let databaseSynchronized = true;
         if (type === "subscribe") {
           try {
-            const repository = await getVtbRepository(config);
+            const repository = await getRepository(config);
             const streamer = await resolveTrackedVtbStreamer(streamerName, config.vtb, repository);
             if (streamer) {
               databaseSynchronized = true;
@@ -133,7 +149,7 @@ const vtbPlugin: MizPlugin = {
             });
           }
         } else if (!nextSubscriptions.some((subscription) => subscription.streamers.includes(streamerName))) {
-          const repository = await getVtbRepository(config);
+          const repository = await getRepository(config);
           const removed = await repository.deleteStreamerByName(streamerName);
           if (removed) {
             logger.info("plugin", "vtb streamer removed from database after final subscription was cancelled", {
@@ -160,7 +176,7 @@ const vtbPlugin: MizPlugin = {
           return;
         }
 
-        const fullConfig = await loadConfig();
+        const fullConfig = await loadCurrentConfig();
         const { databaseSync, renamed, roomUpdated, failed } = await syncVtbSubscriptionNames(fullConfig);
         if (renamed.length > 0) {
           await updateVtbSubscriptionNames(new Map(renamed.map((item) => [item.previousName, item.name])));
@@ -195,7 +211,7 @@ const vtbPlugin: MizPlugin = {
         return;
       }
 
-      const repository = await getVtbRepository(config);
+      const repository = await getRepository(config);
       const streamer = await resolveTrackedVtbStreamer(streamerName, config.vtb, repository);
       if (!streamer) {
         await reply(`没找到“${streamerName}”。换成主播当前使用的完整 B 站昵称再试试吧。`);
@@ -241,6 +257,8 @@ const vtbPlugin: MizPlugin = {
       await reply("B 站数据刚才在路上卡了一下，过一会儿再查吧。");
     }
   },
-};
+});
+
+const vtbPlugin = createVtbPlugin();
 
 export default vtbPlugin;
