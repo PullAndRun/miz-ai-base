@@ -213,7 +213,7 @@ napcatMediaDirectory = "/app/media"
 | `miz qrcode decode` | 与二维码图片放在同一条消息中，识别最大 10 MB 的图片。 |
 | `miz video <URL>` | 下载并发送最长 10 分钟的视频；普通成员仅可使用 B 站链接，白名单成员可使用其他 yt-dlp 支持的站点。 |
 | `miz remind 30m 内容` | 创建单次提醒；支持 `m`、`h`、`d`，最长 365 天。 |
-| `miz remind every 1d 内容` | 创建循环提醒。使用 `@QQ号` 指定他人需要群管理或提醒白名单权限。 |
+| `miz remind every 1d 内容` | 创建循环提醒。使用 `@QQ号` 或 `@全体成员` 指定提醒对象，需要群管理或提醒白名单权限。 |
 | `miz remind list/cancel/edit ...` | 查看、取消或编辑提醒；普通成员只能管理自己创建的提醒。 |
 | `miz schedule add YYYY-MM-DD HH:mm 内容` | 创建群日程；需要群主、群管理员或日程白名单权限。 |
 | `miz schedule list` | 查看本群即将开始的日程。 |

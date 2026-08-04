@@ -91,6 +91,15 @@ const textSegmentSchema = z
       }),
   });
 
+const atSegmentSchema = z
+  .looseObject({
+    type: z.literal("at"),
+    data: z
+      .looseObject({
+        qq: z.union([z.string(), z.number()]),
+      }),
+  });
+
 const napCatEventSchema = z
   .looseObject({
     post_type: z.string().optional(),
@@ -439,14 +448,14 @@ const callApiWithoutRetry = <T>(
 const extractMessageText = (event: NapCatEvent) => {
   const message = event.message;
   if (typeof message === "string") {
-    return message;
+    return normalizeAtMentions(message);
   }
 
   if (Array.isArray(message)) {
     return message.map(extractSegmentText).join("");
   }
 
-  return event.raw_message ?? "";
+  return normalizeAtMentions(event.raw_message ?? "");
 };
 
 const extractSegmentText = (segment: unknown) => {
@@ -455,8 +464,16 @@ const extractSegmentText = (segment: unknown) => {
   }
 
   const parsedSegment = textSegmentSchema.safeParse(segment);
-  return parsedSegment.success ? parsedSegment.data.data.text : "";
+  if (parsedSegment.success) {
+    return parsedSegment.data.data.text;
+  }
+
+  const parsedAt = atSegmentSchema.safeParse(segment);
+  return parsedAt.success ? `@${parsedAt.data.data.qq} ` : "";
 };
+
+const normalizeAtMentions = (text: string) =>
+  text.replace(/\[CQ:at,qq=([^,\]]+)(?:,[^\]]+)?\]/gi, "@$1 ");
 
 const reportServerInfo = async (client: NapLink, logger: Logger) => {
   try {

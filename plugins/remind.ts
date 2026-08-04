@@ -4,6 +4,7 @@ import { canManageGroupFeature } from "@/group-permissions";
 import { getVtbRepository } from "@/vtb";
 
 const MAX_REMINDER_CONTENT_LENGTH = 300;
+const ALL_MEMBER_TARGET_ID = "all";
 const durationUnitsInMinutes = {
   m: 1,
   h: 60,
@@ -113,7 +114,7 @@ const listReminders = async ({ config, message, reply }: ReminderContext) => {
       `#${reminder.id}`,
       dayjs(reminder.remindAt).format("YYYY年MM月DD日 HH:mm"),
       reminder.repeatIntervalMinutes ? `每 ${formatMinutes(reminder.repeatIntervalMinutes)}` : "单次",
-      `@${reminder.targetId}`,
+      formatReminderTarget(reminder.targetId),
       reminder.content,
       ...(canManage ? [`创建者 ${reminder.creatorId}`] : []),
     ].join(" · ")),
@@ -187,7 +188,7 @@ const parseAction = (args: string) => {
     : undefined;
 };
 
-const parseReminderSpec = (args: string): ReminderSpec | undefined => {
+export const parseReminderSpec = (args: string): ReminderSpec | undefined => {
   const normalized = args.trim();
   const repeating = /^every\s+(\d+)\s*([mhdMHD])\s+(.+)$/.exec(normalized);
   const once = /^(\d+)\s*([mhdMHD])\s+(.+)$/.exec(normalized);
@@ -199,7 +200,7 @@ const parseReminderSpec = (args: string): ReminderSpec | undefined => {
   const amount = Number(matched[1]);
   const unit = matched[2].toLowerCase() as keyof typeof durationUnitsInMinutes;
   const delayMinutes = amount * durationUnitsInMinutes[unit];
-  const target = /^@(\d+)\s+(.+)$/.exec(matched[3].trim());
+  const target = /^@(\d+|all|全体成员)\s+(.+)$/i.exec(matched[3].trim());
   const content = (target?.[2] ?? matched[3]).trim();
   if (!Number.isSafeInteger(delayMinutes) || delayMinutes <= 0 || delayMinutes > MAX_REMINDER_MINUTES || !content || content.length > MAX_REMINDER_CONTENT_LENGTH) {
     return undefined;
@@ -208,16 +209,24 @@ const parseReminderSpec = (args: string): ReminderSpec | undefined => {
   return {
     delayMinutes,
     repeatIntervalMinutes: repeating ? delayMinutes : undefined,
-    targetId: target?.[1],
+    targetId: target ? normalizeReminderTarget(target[1]) : undefined,
     content,
   };
 };
+
+const normalizeReminderTarget = (target: string) =>
+  target.toLowerCase() === ALL_MEMBER_TARGET_ID || target === "全体成员"
+    ? ALL_MEMBER_TARGET_ID
+    : target;
+
+const formatReminderTarget = (targetId: string) =>
+  targetId === ALL_MEMBER_TARGET_ID ? "@全体成员" : `@${targetId}`;
 
 const formatReminderSpec = (spec: ReminderSpec) => [
   spec.repeatIntervalMinutes
     ? `🔁 ${formatMinutes(spec.delayMinutes)}后第一次，之后每 ${formatMinutes(spec.repeatIntervalMinutes)}一次`
     : `🔔 ${formatMinutes(spec.delayMinutes)}后提醒一次`,
-  ...(spec.targetId ? [`👤 提醒 @${spec.targetId}`] : []),
+  ...(spec.targetId ? [`👤 提醒 ${formatReminderTarget(spec.targetId)}`] : []),
 ].join("\n");
 
 const formatMinutes = (minutes: number) => {
@@ -235,6 +244,7 @@ const createUsageMessage = () => [
   "单次提醒：miz remind 30m 提醒内容",
   "循环提醒：miz remind every 1d 提醒内容",
   "提醒别人：miz remind 30m @123456789 提醒内容",
+  "提醒全体：miz remind every 1d @全体成员 提醒内容",
   "修改提醒：miz remind edit 编号 2h 新内容",
   "查看或取消：miz remind list / miz remind cancel 编号",
   "时间单位支持 m（分钟）、h（小时）、d（天），最长 365 天。",
