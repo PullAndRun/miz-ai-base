@@ -285,21 +285,7 @@ const createNapLinkLogger = (logger: Logger): NapLinkLogger => ({
 const metadataOrUndefined = (metadata: unknown[]) => (metadata.length === 0 ? undefined : metadata);
 
 export const isIgnorableNapLinkWarning = (message: string, metadata: readonly unknown[] = []) =>
-  message === "收到未知请求的响应: undefined" ||
-  (
-    message.endsWith(": send_group_msg") &&
-    metadata.some(hasRichMediaTransferFailure)
-  );
-
-const hasRichMediaTransferFailure = (value: unknown): boolean => {
-  if (typeof value === "string") {
-    return /rich media transfer failed/i.test(value);
-  }
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  return Object.values(value).some(hasRichMediaTransferFailure);
-};
+  message === "收到未知请求的响应: undefined";
 
 const registerEvents = (
   client: NapLink,

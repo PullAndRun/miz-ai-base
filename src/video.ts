@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { BilibiliConfig, NetworkConfig, VideoConfig } from "@/config";
@@ -130,9 +130,6 @@ export const getNapcatVideoFile = (videoPath: string, config: VideoConfig) => {
   fileUrl.pathname = napcatPath;
   return fileUrl.href;
 };
-
-export const getNapcatVideoBase64File = async (videoPath: string) =>
-  `base64://${(await readFile(videoPath)).toString("base64")}`;
 
 export const deleteDownloadedVideo = (videoPath: string) => rm(videoPath, { force: true });
 

@@ -13,18 +13,11 @@ test("gateway reconnect attempts are unlimited", () => {
 });
 
 describe("gateway warning filtering", () => {
-  test("suppresses only the expected intermediate rich-media send failures", () => {
+  test("does not suppress rich-media delivery failures", () => {
+    expect(isIgnorableNapLinkWarning("收到未知请求的响应: undefined")).toBeTrue();
     expect(isIgnorableNapLinkWarning("API失败: send_group_msg", [{
       retcode: 1200,
       message: "EventChecker Failed: rich media transfer failed",
-    }])).toBeTrue();
-    expect(isIgnorableNapLinkWarning("API失败: send_group_msg", [{
-      retcode: 1200,
-      message: "permission denied",
-    }])).toBeFalse();
-    expect(isIgnorableNapLinkWarning("API失败: send_forward_msg", [{
-      retcode: 1200,
-      message: "rich media transfer failed",
     }])).toBeFalse();
   });
 });

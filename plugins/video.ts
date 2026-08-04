@@ -1,10 +1,10 @@
+import type { VideoSegment } from "@naplink/naplink";
 import type { MizPlugin } from "@/plugins";
 import type { Logger } from "@/logger";
 import type { VideoConfig } from "@/config";
 import {
   deleteDownloadedVideo,
   downloadVideo,
-  getNapcatVideoBase64File,
   getNapcatVideoFile,
   getVideoDuration,
   isBilibiliUrl,
@@ -23,7 +23,7 @@ const videoPlugin: MizPlugin = {
     "把链接里的视频搬到聊天里，最长 10 分钟。普通成员可用 B 站链接，白名单成员可用其他站点。",
     "用法：miz video 视频链接",
   ].join("\n"),
-  async handle({ command, config, logger, message, reply, replyForward, replyWithoutRetry }) {
+  async handle({ command, config, logger, message, reply, replyWithoutRetry }) {
     const url = command.args.trim();
     if (!url) {
       await reply("🎬 视频链接还没放进来。\n例如：miz video https://...\n时长记得控制在 10 分钟以内。");
@@ -46,6 +46,7 @@ const videoPlugin: MizPlugin = {
       return;
     }
 
+    let deliveryAttempted = false;
     try {
       const duration = await getVideoDuration(url, config.video, config.network, config.bilibili);
       if (duration === undefined) {
@@ -66,34 +67,25 @@ const videoPlugin: MizPlugin = {
       });
       let delayedCleanup = false;
       try {
-        const result = await deliverVideoWithFallback(
-          downloadedVideoPath,
-          config.video,
-          (videoMessage) => replyWithoutRetry(videoMessage, { timeoutMs: VIDEO_SEND_TIMEOUT_MS }),
-          (videoMessage) => replyForward(
-            [videoMessage],
-            {
-              title: "视频",
-              source: "miz video",
-              summary: "1 条视频",
-            },
-          ),
+        deliveryAttempted = true;
+        await replyWithoutRetry(
+          createNapcatVideoMessage(downloadedVideoPath, config.video),
+          { timeoutMs: VIDEO_SEND_TIMEOUT_MS },
         );
-        delayedCleanup = result.encounteredTimeout;
       } catch (error) {
-        delayedCleanup = isVideoDeliveryError(error) && error.encounteredTimeout;
+        delayedCleanup = isVideoSendTimeoutError(error);
         throw error;
       } finally {
         if (delayedCleanup) {
-          scheduleVideoCleanup([downloadedVideoPath], logger);
+          scheduleVideoCleanup(downloadedVideoPath, logger);
         } else {
-          await cleanupVideoFiles([downloadedVideoPath]);
+          await cleanupVideoFile(downloadedVideoPath, logger);
         }
       }
     } catch (error) {
       logger.error("plugin", "video processing or delivery failed", error);
-      await reply(isVideoDeliveryError(error)
-        ? "视频已经下载好了，但 NapCat 向 QQ 上传视频失败了。请稍后再试；如果持续失败，请检查 NapCat 和 QQ 的富媒体发送状态。"
+      await reply(deliveryAttempted
+        ? "视频已经交给 NapCat 发送，但没有收到成功确认。请稍后再试；如果持续失败，请检查 NapCat 和 QQ 的富媒体发送状态。"
         : "视频刚才在路上卡住了，稍后再试一次吧。如果内容需要登录，请让管理员检查对应站点的登录配置。");
     }
   },
@@ -106,83 +98,25 @@ export const isVideoSendTimeoutError = (error: unknown) =>
   error !== null &&
   (error as { code?: unknown }).code === "E_API_TIMEOUT";
 
-export type VideoDeliveryMode = "file" | "base64" | "forward";
-
-export type VideoDeliveryError = AggregateError & Readonly<{
-  name: "VideoDeliveryError";
-  encounteredTimeout: boolean;
-}>;
-
-export const isVideoDeliveryError = (error: unknown): error is VideoDeliveryError =>
-  error instanceof AggregateError && error.name === "VideoDeliveryError";
-
-const createVideoDeliveryError = (errors: readonly unknown[]): VideoDeliveryError =>
-  Object.assign(new AggregateError(errors, "all video delivery attempts failed"), {
-    name: "VideoDeliveryError" as const,
-    encounteredTimeout: errors.some(isVideoSendTimeoutError),
-  });
-
-export const createNapcatVideoMessage = (videoPath: string, config: VideoConfig) => [{
+export const createNapcatVideoMessage = (
+  videoPath: string,
+  config: VideoConfig,
+): VideoSegment => ({
   type: "video",
   data: {
     file: getNapcatVideoFile(videoPath, config),
   },
-}] as const;
+});
 
-export const createNapcatBase64VideoMessage = async (videoPath: string) => [{
-  type: "video",
-  data: {
-    file: await getNapcatVideoBase64File(videoPath),
-  },
-}] as const;
-
-export const deliverVideoWithFallback = async (
-  videoPath: string,
-  config: VideoConfig,
-  sendVideoMessage: (message: readonly unknown[]) => Promise<unknown>,
-  sendForwardMessage: (message: readonly unknown[]) => Promise<unknown>,
-): Promise<{ mode: VideoDeliveryMode; encounteredTimeout: boolean }> => {
-  const errors: unknown[] = [];
-  const attempt = async (mode: VideoDeliveryMode, operation: () => Promise<unknown>) => {
-    try {
-      await operation();
-      return { mode, encounteredTimeout: errors.some(isVideoSendTimeoutError) };
-    } catch (error) {
-      errors.push(error);
-      return undefined;
-    }
-  };
-
-  const fileResult = await attempt("file", () =>
-    sendVideoMessage(createNapcatVideoMessage(videoPath, config)));
-  if (fileResult) {
-    return fileResult;
-  }
-
-  const base64Result = await attempt("base64", async () =>
-    sendVideoMessage(await createNapcatBase64VideoMessage(videoPath)));
-  if (base64Result) {
-    return base64Result;
-  }
-
-  const forwardResult = await attempt("forward", () =>
-    sendForwardMessage(createNapcatVideoMessage(videoPath, config)));
-  if (forwardResult) {
-    return forwardResult;
-  }
-
-  throw createVideoDeliveryError(errors);
+const cleanupVideoFile = async (videoPath: string, logger: Logger) => {
+  await deleteDownloadedVideo(videoPath).catch((error) => {
+    logger.warn("plugin", "video cleanup failed", { videoPath, error });
+  });
 };
 
-const cleanupVideoFiles = async (videoPaths: readonly string[]) => {
-  await Promise.all(videoPaths.map((videoPath) => deleteDownloadedVideo(videoPath)));
-};
-
-const scheduleVideoCleanup = (videoPaths: readonly string[], logger: Logger) => {
+const scheduleVideoCleanup = (videoPath: string, logger: Logger) => {
   const timer = setTimeout(() => {
-    void cleanupVideoFiles(videoPaths).catch((error) => {
-      logger.warn("plugin", "delayed video cleanup failed", error);
-    });
+    void cleanupVideoFile(videoPath, logger);
   }, VIDEO_SEND_CLEANUP_GRACE_MS);
   timer.unref?.();
 };

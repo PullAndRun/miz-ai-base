@@ -273,7 +273,7 @@ await reply({
 });
 ```
 
-发送视频等大媒体时，应参考 [`plugins/video.ts`](plugins/video.ts) 处理路径映射、超时和清理，尤其要区分普通模式与 Docker 模式。
+发送视频等大媒体时，应参考 [`plugins/video.ts`](plugins/video.ts) 处理路径映射、超时和清理。视频应通过 NapCat 的 `video` 消息段单次发送，不要在失败后自动改用 Base64 或合并转发重发。
 
 ### 合并转发
 

@@ -1,6 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   createFfmpegTranscodeArgs,
@@ -9,7 +7,6 @@ import {
   createVideoSourcePathTemplate,
   createYtDlpRequestArgs,
   createYtDlpUpdateArgs,
-  getNapcatVideoBase64File,
   getNapcatVideoFile,
   isBilibiliUrl,
   isRetryableYtDlpError,
@@ -18,10 +15,7 @@ import {
 } from "@/video";
 import type { VideoConfig } from "@/config";
 import {
-  createNapcatBase64VideoMessage,
   createNapcatVideoMessage,
-  deliverVideoWithFallback,
-  isVideoDeliveryError,
   isVideoSendTimeoutError,
 } from "../plugins/video";
 
@@ -75,32 +69,12 @@ describe("video download filenames", () => {
     expect(getNapcatVideoFile(videoPath, videoConfig)).toBe(
       "file:///app/media/miz-video-id.mp4",
     );
-    expect(createNapcatVideoMessage(videoPath, videoConfig)).toEqual([{
+    expect(createNapcatVideoMessage(videoPath, videoConfig)).toEqual({
       type: "video",
       data: {
         file: "file:///app/media/miz-video-id.mp4",
       },
-    }]);
-  });
-
-  test("creates the base64 file input used by the second delivery attempt", async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
-    const videoPath = path.join(directory, "video.mp4");
-    try {
-      await writeFile(videoPath, Buffer.from([0, 1, 2, 253, 254, 255]));
-
-      expect(await getNapcatVideoBase64File(videoPath)).toBe(
-        "base64://AAEC/f7/",
-      );
-      expect(await createNapcatBase64VideoMessage(videoPath)).toEqual([{
-        type: "video",
-        data: {
-          file: "base64://AAEC/f7/",
-        },
-      }]);
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
+    });
   });
 });
 
@@ -200,90 +174,5 @@ describe("video delivery timeout", () => {
   test("treats an API timeout as an unknown send result", () => {
     expect(isVideoSendTimeoutError({ code: "E_API_TIMEOUT" })).toBeTrue();
     expect(isVideoSendTimeoutError(new Error("download failed"))).toBeFalse();
-  });
-});
-
-describe("video delivery fallback", () => {
-  test("tries file, base64, and forward delivery in order", async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
-    const videoPath = path.join(directory, "video.mp4");
-    const messages: Array<readonly unknown[]> = [];
-    try {
-      await writeFile(videoPath, Buffer.from([0, 1, 2]));
-      const result = await deliverVideoWithFallback(
-        videoPath,
-        videoConfig,
-        async (message) => {
-          messages.push(message);
-          throw new Error("send failed");
-        },
-        async (message) => {
-          messages.push(message);
-        },
-      );
-
-      expect(result).toEqual({ mode: "forward", encounteredTimeout: false });
-      expect(messages).toEqual([
-        createNapcatVideoMessage(videoPath, videoConfig),
-        await createNapcatBase64VideoMessage(videoPath),
-        createNapcatVideoMessage(videoPath, videoConfig),
-      ]);
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
-
-  test("stops after a successful base64 video message", async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
-    const videoPath = path.join(directory, "video.mp4");
-    let sends = 0;
-    let forwards = 0;
-    try {
-      await writeFile(videoPath, Buffer.from([0, 1, 2]));
-      const result = await deliverVideoWithFallback(
-        videoPath,
-        videoConfig,
-        async () => {
-          sends += 1;
-          if (sends === 1) {
-            throw { code: "E_API_TIMEOUT" };
-          }
-        },
-        async () => {
-          forwards += 1;
-        },
-      );
-
-      expect(result).toEqual({ mode: "base64", encounteredTimeout: true });
-      expect(sends).toBe(2);
-      expect(forwards).toBe(0);
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
-
-  test("reports one delivery error only after all three methods fail", async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
-    const videoPath = path.join(directory, "video.mp4");
-    try {
-      await writeFile(videoPath, Buffer.from([0, 1, 2]));
-      const sendError = new Error("send failed");
-      const delivery = deliverVideoWithFallback(
-        videoPath,
-        videoConfig,
-        async () => {
-          throw sendError;
-        },
-        async () => {
-          throw sendError;
-        },
-      );
-
-      const error = await delivery.catch((deliveryError: unknown) => deliveryError);
-      expect(isVideoDeliveryError(error)).toBeTrue();
-      expect((error as AggregateError).errors).toHaveLength(3);
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
   });
 });
