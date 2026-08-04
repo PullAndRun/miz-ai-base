@@ -16,6 +16,8 @@ import {
 import type { VideoConfig } from "@/config";
 import {
   createNapcatVideoMessage,
+  deliverVideoWithForwardFallback,
+  isVideoDeliveryError,
   isVideoSendTimeoutError,
 } from "../plugins/video";
 
@@ -174,5 +176,63 @@ describe("video delivery timeout", () => {
   test("treats an API timeout as an unknown send result", () => {
     expect(isVideoSendTimeoutError({ code: "E_API_TIMEOUT" })).toBeTrue();
     expect(isVideoSendTimeoutError(new Error("download failed"))).toBeFalse();
+  });
+});
+
+describe("video delivery fallback", () => {
+  test("uses the ordinary video message when it succeeds", async () => {
+    let forwards = 0;
+
+    const result = await deliverVideoWithForwardFallback(
+      async () => undefined,
+      async () => {
+        forwards += 1;
+      },
+    );
+
+    expect(result).toEqual({ mode: "message", encounteredTimeout: false });
+    expect(forwards).toBe(0);
+  });
+
+  test("uses one forward attempt after ordinary delivery fails", async () => {
+    let forwards = 0;
+
+    const result = await deliverVideoWithForwardFallback(
+      async () => {
+        throw new Error("ordinary send failed");
+      },
+      async () => {
+        forwards += 1;
+      },
+    );
+
+    expect(result).toEqual({ mode: "forward", encounteredTimeout: false });
+    expect(forwards).toBe(1);
+  });
+
+  test("preserves an unknown timeout result for delayed cleanup", async () => {
+    const result = await deliverVideoWithForwardFallback(
+      async () => {
+        throw { code: "E_API_TIMEOUT" };
+      },
+      async () => undefined,
+    );
+
+    expect(result).toEqual({ mode: "forward", encounteredTimeout: true });
+  });
+
+  test("reports delivery failure after both attempts fail", async () => {
+    const delivery = deliverVideoWithForwardFallback(
+      async () => {
+        throw new Error("ordinary send failed");
+      },
+      async () => {
+        throw new Error("forward send failed");
+      },
+    );
+
+    const error = await delivery.catch((deliveryError: unknown) => deliveryError);
+    expect(isVideoDeliveryError(error)).toBeTrue();
+    expect((error as AggregateError).errors).toHaveLength(2);
   });
 });

@@ -185,7 +185,7 @@ docker compose up -d
 
 Docker 模式发送视频时，miz 先通过 `[miz.network].proxyUrl` 调用 yt-dlp 下载视频（B 站同时使用 `[miz.bilibili].cookie`），再用 FFmpeg 转码为 H.264/AAC MP4 并写入项目的 `temp` 目录。随后把 `napcatMediaDirectory` 下的文件 URL 交给 NapCat。NapCat 容器必须把同一个宿主机 `temp` 目录挂载为该路径，例如：
 
-发送时使用 NapLink 的普通消息接口提交一个 NapCat `video` 消息段，`file` 指向上述共享目录中的 `file:///` URL。视频不会再改用 Base64 或合并转发重复尝试。
+发送时先使用 NapLink 的普通消息接口提交一个 NapCat `video` 消息段，`file` 指向上述共享目录中的 `file:///` URL。普通发送失败后，会把同一个视频段作为单节点合并转发再尝试一次；不会改用 Base64。
 
 ```yaml
 services:

@@ -23,7 +23,7 @@ const videoPlugin: MizPlugin = {
     "把链接里的视频搬到聊天里，最长 10 分钟。普通成员可用 B 站链接，白名单成员可用其他站点。",
     "用法：miz video 视频链接",
   ].join("\n"),
-  async handle({ command, config, logger, message, reply, replyWithoutRetry }) {
+  async handle({ command, config, logger, message, reply, replyForward, replyWithoutRetry }) {
     const url = command.args.trim();
     if (!url) {
       await reply("🎬 视频链接还没放进来。\n例如：miz video https://...\n时长记得控制在 10 分钟以内。");
@@ -68,12 +68,21 @@ const videoPlugin: MizPlugin = {
       let delayedCleanup = false;
       try {
         deliveryAttempted = true;
-        await replyWithoutRetry(
-          createNapcatVideoMessage(downloadedVideoPath, config.video),
-          { timeoutMs: VIDEO_SEND_TIMEOUT_MS },
+        const videoMessage = createNapcatVideoMessage(downloadedVideoPath, config.video);
+        const result = await deliverVideoWithForwardFallback(
+          () => replyWithoutRetry(videoMessage, { timeoutMs: VIDEO_SEND_TIMEOUT_MS }),
+          () => replyForward(
+            [[videoMessage]],
+            {
+              title: "视频",
+              source: "miz video",
+              summary: "1 条视频",
+            },
+          ),
         );
+        delayedCleanup = result.encounteredTimeout;
       } catch (error) {
-        delayedCleanup = isVideoSendTimeoutError(error);
+        delayedCleanup = isVideoDeliveryError(error) && error.encounteredTimeout;
         throw error;
       } finally {
         if (delayedCleanup) {
@@ -83,9 +92,11 @@ const videoPlugin: MizPlugin = {
         }
       }
     } catch (error) {
-      logger.error("plugin", "video processing or delivery failed", error);
+      if (!isVideoDeliveryError(error)) {
+        logger.error("plugin", "video processing failed", error);
+      }
       await reply(deliveryAttempted
-        ? "视频已经交给 NapCat 发送，但没有收到成功确认。请稍后再试；如果持续失败，请检查 NapCat 和 QQ 的富媒体发送状态。"
+        ? "视频普通发送和合并转发都没有成功。请稍后再试；如果持续失败，请检查 NapCat 和 QQ 的富媒体发送状态。"
         : "视频刚才在路上卡住了，稍后再试一次吧。如果内容需要登录，请让管理员检查对应站点的登录配置。");
     }
   },
@@ -107,6 +118,41 @@ export const createNapcatVideoMessage = (
     file: getNapcatVideoFile(videoPath, config),
   },
 });
+
+export type VideoDeliveryError = AggregateError & Readonly<{
+  name: "VideoDeliveryError";
+  encounteredTimeout: boolean;
+}>;
+
+export const isVideoDeliveryError = (error: unknown): error is VideoDeliveryError =>
+  error instanceof AggregateError && error.name === "VideoDeliveryError";
+
+export const deliverVideoWithForwardFallback = async (
+  sendVideoMessage: () => Promise<unknown>,
+  sendForwardMessage: () => Promise<unknown>,
+): Promise<{ mode: "message" | "forward"; encounteredTimeout: boolean }> => {
+  try {
+    await sendVideoMessage();
+    return { mode: "message", encounteredTimeout: false };
+  } catch (videoError) {
+    try {
+      await sendForwardMessage();
+      return {
+        mode: "forward",
+        encounteredTimeout: isVideoSendTimeoutError(videoError),
+      };
+    } catch (forwardError) {
+      throw Object.assign(
+        new AggregateError([videoError, forwardError], "video message and forward delivery failed"),
+        {
+          name: "VideoDeliveryError" as const,
+          encounteredTimeout:
+            isVideoSendTimeoutError(videoError) || isVideoSendTimeoutError(forwardError),
+        },
+      );
+    }
+  }
+};
 
 const cleanupVideoFile = async (videoPath: string, logger: Logger) => {
   await deleteDownloadedVideo(videoPath).catch((error) => {
