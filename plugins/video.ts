@@ -60,19 +60,12 @@ const videoPlugin: MizPlugin = {
 
       const downloadedVideoPath = await downloadVideo({ url, config: config.video });
       let delayedCleanup = false;
-      let deliveryMode: "file" | "base64" | "forward" = "file";
       const deferCleanupOnTimeout = (error: unknown) => {
         if (!isVideoSendTimeoutError(error)) {
           return false;
         }
 
         delayedCleanup = true;
-        logger.warn("plugin", "video send timed out; NapCat may still complete the upload", {
-          userId: message.userId,
-          groupId: message.groupId,
-          timeoutMs: VIDEO_SEND_TIMEOUT_MS,
-          error,
-        });
         return true;
       };
       try {
@@ -89,17 +82,11 @@ const videoPlugin: MizPlugin = {
             throw error;
           }
 
-          logger.warn("plugin", "file video send failed; retrying with base64", {
-            userId: message.userId,
-            groupId: message.groupId,
-            error,
-          });
           try {
             await replyWithoutRetry(
               await createNapcatBase64VideoMessage(downloadedVideoPath),
               { timeoutMs: VIDEO_SEND_TIMEOUT_MS },
             );
-            deliveryMode = "base64";
           } catch (base64Error) {
             if (deferCleanupOnTimeout(base64Error)) {
               return;
@@ -108,11 +95,6 @@ const videoPlugin: MizPlugin = {
               throw base64Error;
             }
 
-            logger.warn("plugin", "base64 video send failed; falling back to PacketBackend forward", {
-              userId: message.userId,
-              groupId: message.groupId,
-              error: base64Error,
-            });
             await replyForward(
               [createNapcatVideoMessage(downloadedVideoPath, config.video)],
               {
@@ -121,7 +103,6 @@ const videoPlugin: MizPlugin = {
                 summary: "1 条视频",
               },
             );
-            deliveryMode = "forward";
           }
         }
       } finally {
@@ -131,12 +112,6 @@ const videoPlugin: MizPlugin = {
           await cleanupVideoFiles([downloadedVideoPath]);
         }
       }
-      logger.info("plugin", "video sent", {
-        userId: message.userId,
-        groupId: message.groupId,
-        source: isBilibiliUrl(url, config.video.bilibiliHosts) ? "bilibili" : "whitelist",
-        deliveryMode,
-      });
     } catch (error) {
       logger.error("plugin", "video processing or delivery failed", error);
       await reply(isVideoRichMediaTransferError(error)

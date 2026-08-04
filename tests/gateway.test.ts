@@ -4,11 +4,29 @@ import {
   getGroupSendPermission,
   isGroupAtAllAvailable,
   isGroupMessageUnavailableError,
+  isIgnorableNapLinkWarning,
   NAPLINK_RECONNECT_MAX_ATTEMPTS,
 } from "@/gateway";
 
 test("gateway reconnect attempts are unlimited", () => {
   expect(NAPLINK_RECONNECT_MAX_ATTEMPTS).toBe(Number.POSITIVE_INFINITY);
+});
+
+describe("gateway warning filtering", () => {
+  test("suppresses only the expected intermediate rich-media send failures", () => {
+    expect(isIgnorableNapLinkWarning("API失败: send_group_msg", [{
+      retcode: 1200,
+      message: "EventChecker Failed: rich media transfer failed",
+    }])).toBeTrue();
+    expect(isIgnorableNapLinkWarning("API失败: send_group_msg", [{
+      retcode: 1200,
+      message: "permission denied",
+    }])).toBeFalse();
+    expect(isIgnorableNapLinkWarning("API失败: send_forward_msg", [{
+      retcode: 1200,
+      message: "rich media transfer failed",
+    }])).toBeFalse();
+  });
 });
 
 describe("group send permission", () => {
