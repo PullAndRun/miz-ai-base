@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { NetworkConfig, VideoConfig } from "@/config";
@@ -9,6 +10,9 @@ const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 const TRANSCODE_TIMEOUT_MS = 30 * 60_000;
 const PROCESS_FORCE_KILL_DELAY_MS = 5_000;
 const MAX_CAPTURED_PROCESS_OUTPUT_BYTES = 1024 * 1024;
+const YT_DLP_DOWNLOAD_RETRY_COUNT = 20;
+const YT_DLP_OUTER_RETRY_COUNT = 1;
+const YT_DLP_OUTER_RETRY_DELAY_MS = 2_000;
 export const MAX_VIDEO_DURATION_SECONDS = 10 * 60;
 const BILIBILI_HOSTS = ["bilibili.com", "b23.tv"] as const;
 
@@ -58,6 +62,14 @@ export const downloadVideo = async ({
     "--no-playlist",
     "--no-progress",
     "--no-warnings",
+    "--retries",
+    String(YT_DLP_DOWNLOAD_RETRY_COUNT),
+    "--fragment-retries",
+    String(YT_DLP_DOWNLOAD_RETRY_COUNT),
+    "--retry-sleep",
+    "http:exp=1:20",
+    "--retry-sleep",
+    "fragment:exp=1:20",
     "--output",
     path.join(downloadDirectory, `%(title).180B [%(id)s] ${requestId}.%(ext)s`),
     "--format",
@@ -68,10 +80,10 @@ export const downloadVideo = async ({
     getFfmpegPath(config),
     "--print",
     "after_move:filepath",
-    ...createYtDlpRequestArgs(url, config),
   ];
   try {
-    const output = await runYtDlp(config, args);
+    const output = await withYtDlpRequest(url, config, (requestArgs) =>
+      runYtDlpWithTransientRetry(config, [...args, ...requestArgs]));
     const videoPath = await findDownloadedVideo(output, downloadDirectory, downloadStartedAt, requestId);
     if (!videoPath) {
       throw new Error("yt-dlp returned a missing video file");
@@ -85,13 +97,14 @@ export const downloadVideo = async ({
 };
 
 export const getVideoDuration = async (url: string, config: VideoConfig) => {
-  const output = await runYtDlp(config, [
-    "--no-playlist",
-    "--skip-download",
-    "--print",
-    "%(duration)s",
-    ...createYtDlpRequestArgs(url, config),
-  ]);
+  const output = await withYtDlpRequest(url, config, (requestArgs) =>
+    runYtDlpWithTransientRetry(config, [
+      "--no-playlist",
+      "--skip-download",
+      "--print",
+      "%(duration)s",
+      ...requestArgs,
+    ]));
   const value = Number(output.trim().split(/\r?\n/).filter(Boolean).at(-1));
   return Number.isFinite(value) && value > 0 ? value : undefined;
 };
@@ -157,13 +170,101 @@ export const updateYtDlp = async (config: VideoConfig, network: NetworkConfig) =
   await runYtDlp(config, createYtDlpUpdateArgs(network));
 };
 
-export const createYtDlpRequestArgs = (url: string, config: VideoConfig) => [
+export const createYtDlpRequestArgs = (
+  url: string,
+  config: VideoConfig,
+  cookieFilePath?: string,
+) => [
   ...(config.proxyUrl ? ["--proxy", config.proxyUrl] : []),
-  ...(isBilibiliUrl(url, config.bilibiliHosts) && config.bilibiliCookie
-    ? ["--add-headers", `Cookie:${config.bilibiliCookie}`]
+  ...(cookieFilePath && config.bilibiliCookie && isBilibiliUrl(url, config.bilibiliHosts)
+    ? ["--cookies", cookieFilePath]
     : []),
   url,
 ];
+
+export const createYtDlpCookieFileContents = (url: string, config: VideoConfig) => {
+  if (!isBilibiliUrl(url, config.bilibiliHosts) || !config.bilibiliCookie) {
+    return undefined;
+  }
+
+  const cookies = config.bilibiliCookie
+    .split(";")
+    .map((part) => {
+      const separatorIndex = part.indexOf("=");
+      if (separatorIndex <= 0) {
+        return undefined;
+      }
+
+      const name = part.slice(0, separatorIndex).trim();
+      const value = part.slice(separatorIndex + 1).trim();
+      return /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name) && !/[\t\r\n]/.test(value)
+        ? { name, value }
+        : undefined;
+    })
+    .filter((cookie): cookie is { name: string; value: string } => cookie !== undefined);
+  if (cookies.length === 0) {
+    return undefined;
+  }
+
+  const parsedUrl = new URL(url);
+  const hostname = parsedUrl.hostname.toLowerCase();
+  const domain = hostname === "b23.tv" || hostname === "bilibili.com" || hostname.endsWith(".bilibili.com")
+    ? ".bilibili.com"
+    : hostname;
+  const includeSubdomains = domain.startsWith(".") ? "TRUE" : "FALSE";
+  const secure = parsedUrl.protocol === "https:" ? "TRUE" : "FALSE";
+  const lines = cookies.map(({ name, value }) =>
+    [domain, includeSubdomains, "/", secure, "0", name, value].join("\t"));
+  return [
+    "# Netscape HTTP Cookie File",
+    "# Generated temporarily by miz for yt-dlp.",
+    ...lines,
+    "",
+  ].join("\n");
+};
+
+export const isRetryableYtDlpError = (error: unknown) =>
+  error instanceof Error &&
+  /unexpected_eof_while_reading|eof occurred in violation of protocol|connection (?:reset|refused)|remote end closed connection|timed? out|temporary failure in name resolution|network is unreachable|http error 5\d\d/i.test(error.message);
+
+const withYtDlpRequest = async <T>(
+  url: string,
+  config: VideoConfig,
+  callback: (requestArgs: string[]) => Promise<T>,
+) => {
+  const cookieContents = createYtDlpCookieFileContents(url, config);
+  if (!cookieContents) {
+    return callback(createYtDlpRequestArgs(url, config));
+  }
+
+  const cookieDirectory = path.join(tmpdir(), "miz");
+  await mkdir(cookieDirectory, { recursive: true });
+  const cookieFilePath = path.join(cookieDirectory, `.miz-yt-dlp-${crypto.randomUUID()}.cookies`);
+  await writeFile(cookieFilePath, cookieContents, { encoding: "utf8", flag: "wx", mode: 0o600 });
+  try {
+    return await callback(createYtDlpRequestArgs(url, config, cookieFilePath));
+  } finally {
+    await rm(cookieFilePath, { force: true });
+  }
+};
+
+const runYtDlpWithTransientRetry = async (config: VideoConfig, args: string[]) => {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= YT_DLP_OUTER_RETRY_COUNT; attempt += 1) {
+    try {
+      return await runYtDlp(config, args);
+    } catch (error) {
+      lastError = error;
+      if (attempt === YT_DLP_OUTER_RETRY_COUNT || !isRetryableYtDlpError(error)) {
+        throw error;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, YT_DLP_OUTER_RETRY_DELAY_MS * 2 ** attempt));
+    }
+  }
+
+  throw lastError;
+};
 
 const runYtDlp = (config: VideoConfig, args: string[]) =>
   runProcess(getYtDlpPath(config), args, "yt-dlp", DOWNLOAD_TIMEOUT_MS);

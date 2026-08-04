@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  createYtDlpCookieFileContents,
   createYtDlpRequestArgs,
   createYtDlpUpdateArgs,
   isBilibiliUrl,
+  isRetryableYtDlpError,
   isVideoDurationAllowed,
   MAX_VIDEO_DURATION_SECONDS,
 } from "@/video";
@@ -51,16 +53,40 @@ describe("Bilibili download authentication", () => {
     "https://www.bilibili.com/video/BV1",
     "https://b23.tv/abc123",
   ])("passes the app.toml cookie to yt-dlp for %s", (url) => {
-    expect(createYtDlpRequestArgs(url, videoConfig)).toEqual([
-      "--add-headers",
-      "Cookie:SESSDATA=test-cookie",
+    expect(createYtDlpRequestArgs(url, videoConfig, "/temp/miz.cookies")).toEqual([
+      "--cookies",
+      "/temp/miz.cookies",
       url,
     ]);
   });
 
+  test("converts the configured header into a scoped Netscape cookie file", () => {
+    const contents = createYtDlpCookieFileContents("https://b23.tv/abc123", {
+      ...videoConfig,
+      bilibiliCookie: "SESSDATA=test-cookie; bili_jct=csrf=value",
+    });
+
+    expect(contents).toContain(".bilibili.com\tTRUE\t/\tTRUE\t0\tSESSDATA\ttest-cookie");
+    expect(contents).toContain(".bilibili.com\tTRUE\t/\tTRUE\t0\tbili_jct\tcsrf=value");
+    expect(contents).not.toContain("Cookie:");
+  });
+
   test("does not send the Bilibili cookie to unrelated hosts", () => {
     const url = "https://example.com/video.mp4";
-    expect(createYtDlpRequestArgs(url, videoConfig)).toEqual([url]);
+    expect(createYtDlpRequestArgs(url, videoConfig, "/temp/miz.cookies")).toEqual([url]);
+    expect(createYtDlpCookieFileContents(url, videoConfig)).toBeUndefined();
+  });
+});
+
+describe("yt-dlp transient failures", () => {
+  test("retries TLS EOF failures reported by the downloader", () => {
+    expect(isRetryableYtDlpError(new Error(
+      "yt-dlp failed: [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol",
+    ))).toBeTrue();
+  });
+
+  test("does not retry permanent extractor failures", () => {
+    expect(isRetryableYtDlpError(new Error("yt-dlp failed: HTTP Error 403: Forbidden"))).toBeFalse();
   });
 });
 
