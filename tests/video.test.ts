@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import path from "node:path";
 import {
   createYtDlpCookieFileContents,
+  createVideoOutputPathTemplate,
   createYtDlpRequestArgs,
   createYtDlpUpdateArgs,
   isBilibiliUrl,
@@ -31,6 +33,20 @@ describe("video duration limit", () => {
   test("allows exactly ten minutes and rejects anything longer", () => {
     expect(isVideoDurationAllowed(MAX_VIDEO_DURATION_SECONDS)).toBeTrue();
     expect(isVideoDurationAllowed(MAX_VIDEO_DURATION_SECONDS + 0.01)).toBeFalse();
+  });
+});
+
+describe("video download filenames", () => {
+  test("keeps the NapCat-visible temporary filename ASCII-only", () => {
+    const outputTemplate = createVideoOutputPathTemplate(
+      "/temp",
+      "64c82c6d-1c58-4e2d-bcec-53c48eccb21d",
+    );
+
+    expect(path.basename(outputTemplate)).toBe(
+      "miz-video-64c82c6d-1c58-4e2d-bcec-53c48eccb21d.%(ext)s",
+    );
+    expect(/^[\x20-\x7E]+$/.test(path.basename(outputTemplate))).toBeTrue();
   });
 });
 

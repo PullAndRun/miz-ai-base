@@ -71,7 +71,7 @@ export const downloadVideo = async ({
     "--retry-sleep",
     "fragment:exp=1:20",
     "--output",
-    path.join(downloadDirectory, `%(title).180B [%(id)s] ${requestId}.%(ext)s`),
+    createVideoOutputPathTemplate(downloadDirectory, requestId),
     "--format",
     "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
     "--merge-output-format",
@@ -165,6 +165,9 @@ export const createYtDlpUpdateArgs = (network: NetworkConfig) => [
   "-U",
   ...(network.proxyUrl ? ["--proxy", network.proxyUrl] : []),
 ];
+
+export const createVideoOutputPathTemplate = (downloadDirectory: string, requestId: string) =>
+  path.join(downloadDirectory, `miz-video-${requestId}.%(ext)s`);
 
 export const updateYtDlp = async (config: VideoConfig, network: NetworkConfig) => {
   await runYtDlp(config, createYtDlpUpdateArgs(network));
