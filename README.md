@@ -185,6 +185,8 @@ docker compose up -d
 
 Docker 模式发送视频时，miz 将 yt-dlp 下载并合并的原始 MP4 写入项目的 `temp` 目录，并把 `napcatMediaDirectory` 下的文件 URL 交给 NapCat。NapCat 容器必须把同一个宿主机 `temp` 目录挂载为该路径，例如：
 
+发送时优先使用 File URL；仅在 NapCat 返回 `rich media transfer failed` 时改用 Base64，Base64 仍失败才发送单视频转发作为兜底。
+
 ```yaml
 services:
   napcat:

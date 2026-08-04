@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   createYtDlpCookieFileContents,
   createVideoOutputPathTemplate,
   createYtDlpRequestArgs,
   createYtDlpUpdateArgs,
+  getNapcatVideoDataUrl,
   getNapcatVideoFile,
   isBilibiliUrl,
   isRetryableYtDlpError,
@@ -13,6 +16,7 @@ import {
 } from "@/video";
 import type { VideoConfig } from "@/config";
 import {
+  createNapcatBase64VideoMessage,
   createNapcatVideoMessage,
   isVideoRichMediaTransferError,
   isVideoSendTimeoutError,
@@ -66,6 +70,26 @@ describe("video download filenames", () => {
         file: "file:///app/media/miz-video-id.mp4",
       },
     }]);
+  });
+
+  test("creates the base64 data URL used by the second delivery attempt", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
+    const videoPath = path.join(directory, "video.mp4");
+    try {
+      await writeFile(videoPath, Buffer.from([0, 1, 2, 253, 254, 255]));
+
+      expect(await getNapcatVideoDataUrl(videoPath)).toBe(
+        "data:video/mp4;base64,AAEC/f7/",
+      );
+      expect(await createNapcatBase64VideoMessage(videoPath)).toEqual([{
+        type: "video",
+        data: {
+          file: "data:video/mp4;base64,AAEC/f7/",
+        },
+      }]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

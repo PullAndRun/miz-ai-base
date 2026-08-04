@@ -4,6 +4,7 @@ import type { VideoConfig } from "@/config";
 import {
   deleteDownloadedVideo,
   downloadVideo,
+  getNapcatVideoDataUrl,
   getNapcatVideoFile,
   getVideoDuration,
   isBilibiliUrl,
@@ -22,7 +23,7 @@ const videoPlugin: MizPlugin = {
     "把链接里的视频搬到聊天里，最长 10 分钟。普通成员可用 B 站链接，白名单成员可用其他站点。",
     "用法：miz video 视频链接",
   ].join("\n"),
-  async handle({ command, config, logger, message, reply, replyWithoutRetry }) {
+  async handle({ command, config, logger, message, reply, replyForward, replyWithoutRetry }) {
     const url = command.args.trim();
     if (!url) {
       await reply("🎬 视频链接还没放进来。\n例如：miz video https://...\n时长记得控制在 10 分钟以内。");
@@ -59,6 +60,21 @@ const videoPlugin: MizPlugin = {
 
       const downloadedVideoPath = await downloadVideo({ url, config: config.video });
       let delayedCleanup = false;
+      let deliveryMode: "file" | "base64" | "forward" = "file";
+      const deferCleanupOnTimeout = (error: unknown) => {
+        if (!isVideoSendTimeoutError(error)) {
+          return false;
+        }
+
+        delayedCleanup = true;
+        logger.warn("plugin", "video send timed out; NapCat may still complete the upload", {
+          userId: message.userId,
+          groupId: message.groupId,
+          timeoutMs: VIDEO_SEND_TIMEOUT_MS,
+          error,
+        });
+        return true;
+      };
       try {
         try {
           await replyWithoutRetry(
@@ -66,18 +82,47 @@ const videoPlugin: MizPlugin = {
             { timeoutMs: VIDEO_SEND_TIMEOUT_MS },
           );
         } catch (error) {
-          if (!isVideoSendTimeoutError(error)) {
+          if (deferCleanupOnTimeout(error)) {
+            return;
+          }
+          if (!isVideoRichMediaTransferError(error)) {
             throw error;
           }
 
-          delayedCleanup = true;
-          logger.warn("plugin", "video send timed out; NapCat may still complete the upload", {
+          logger.warn("plugin", "file video send failed; retrying with base64", {
             userId: message.userId,
             groupId: message.groupId,
-            timeoutMs: VIDEO_SEND_TIMEOUT_MS,
             error,
           });
-          return;
+          try {
+            await replyWithoutRetry(
+              await createNapcatBase64VideoMessage(downloadedVideoPath),
+              { timeoutMs: VIDEO_SEND_TIMEOUT_MS },
+            );
+            deliveryMode = "base64";
+          } catch (base64Error) {
+            if (deferCleanupOnTimeout(base64Error)) {
+              return;
+            }
+            if (!isVideoRichMediaTransferError(base64Error)) {
+              throw base64Error;
+            }
+
+            logger.warn("plugin", "base64 video send failed; falling back to PacketBackend forward", {
+              userId: message.userId,
+              groupId: message.groupId,
+              error: base64Error,
+            });
+            await replyForward(
+              [createNapcatVideoMessage(downloadedVideoPath, config.video)],
+              {
+                title: "视频",
+                source: "miz video",
+                summary: "1 条视频",
+              },
+            );
+            deliveryMode = "forward";
+          }
         }
       } finally {
         if (delayedCleanup) {
@@ -90,6 +135,7 @@ const videoPlugin: MizPlugin = {
         userId: message.userId,
         groupId: message.groupId,
         source: isBilibiliUrl(url, config.video.bilibiliHosts) ? "bilibili" : "whitelist",
+        deliveryMode,
       });
     } catch (error) {
       logger.error("plugin", "video processing or delivery failed", error);
@@ -114,6 +160,13 @@ export const createNapcatVideoMessage = (videoPath: string, config: VideoConfig)
   type: "video",
   data: {
     file: getNapcatVideoFile(videoPath, config),
+  },
+}] as const;
+
+export const createNapcatBase64VideoMessage = async (videoPath: string) => [{
+  type: "video",
+  data: {
+    file: await getNapcatVideoDataUrl(videoPath),
   },
 }] as const;
 
