@@ -2,9 +2,27 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { findDependencyVersionChanges, updatePackageDependencies } from "@/dependency-update";
+import {
+  createBunUpdateArgs,
+  DEPENDENCY_UPDATE_REGISTRY,
+  findDependencyVersionChanges,
+  updatePackageDependencies,
+} from "@/dependency-update";
 
 describe("package dependency updates", () => {
+  test("uses the npmmirror registry during startup updates", () => {
+    expect(DEPENDENCY_UPDATE_REGISTRY).toBe("https://registry.npmmirror.com");
+    expect(createBunUpdateArgs()).toEqual([
+      "bun",
+      "update",
+      "--latest",
+      "--ignore-scripts",
+      "--no-progress",
+      "--registry",
+      "https://registry.npmmirror.com",
+    ]);
+  });
+
   test("reports changed runtime and development dependency versions", () => {
     expect(findDependencyVersionChanges(
       {

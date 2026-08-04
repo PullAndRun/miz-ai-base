@@ -5,6 +5,8 @@ const DEPENDENCY_SECTIONS = [
   "peerDependencies",
 ] as const;
 
+export const DEPENDENCY_UPDATE_REGISTRY = "https://registry.npmmirror.com";
+
 type DependencySection = typeof DEPENDENCY_SECTIONS[number];
 
 type PackageManifest = Partial<Record<DependencySection, Record<string, string>>>;
@@ -60,13 +62,7 @@ const readPackageManifest = async (path: string): Promise<PackageManifest> => {
 };
 
 const runBunUpdate = async () => {
-  const child = Bun.spawn([
-    "bun",
-    "update",
-    "--latest",
-    "--ignore-scripts",
-    "--no-progress",
-  ], {
+  const child = Bun.spawn(createBunUpdateArgs(), {
     cwd: process.cwd(),
     env: { ...process.env, NO_COLOR: "1" },
     stdout: "pipe",
@@ -81,6 +77,16 @@ const runBunUpdate = async () => {
     throw new Error(`bun update exited with code ${exitCode}: ${formatProcessOutput(stderr || stdout)}`);
   }
 };
+
+export const createBunUpdateArgs = () => [
+  "bun",
+  "update",
+  "--latest",
+  "--ignore-scripts",
+  "--no-progress",
+  "--registry",
+  DEPENDENCY_UPDATE_REGISTRY,
+];
 
 const formatProcessOutput = (output: string) =>
   output.replace(/\s+/g, " ").trim().slice(-2_000) || "no process output";

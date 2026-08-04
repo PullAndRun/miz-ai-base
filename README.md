@@ -313,7 +313,7 @@ bun audit
 | `bun run start:docker` | 更新依赖后，以 Docker 模式启动并加载 `app.docker.toml`。 |
 | `bun run dev` | 更新依赖后，以普通模式监听源文件变化。 |
 | `bun run dev:docker` | 更新依赖后，以 Docker 配置监听源文件变化。 |
-| `bun run dependencies:update` | 检查并将 `package.json` 中的依赖更新到最新版本。 |
+| `bun run dependencies:update` | 通过 npmmirror 国内源检查并将 `package.json` 中的依赖更新到最新版本。 |
 | `bun run prisma:migrate` | 使用当前配置执行 `prisma migrate deploy`。 |
 | `bun run prisma:push` | 将 Schema 直接推送到数据库，适合本地开发验证。 |
 
