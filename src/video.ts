@@ -10,6 +10,7 @@ const TRANSCODE_TIMEOUT_MS = 30 * 60_000;
 const PROCESS_FORCE_KILL_DELAY_MS = 5_000;
 const MAX_CAPTURED_PROCESS_OUTPUT_BYTES = 1024 * 1024;
 export const MAX_VIDEO_DURATION_SECONDS = 10 * 60;
+const BILIBILI_HOSTS = ["bilibili.com", "b23.tv"] as const;
 
 export const isVideoDurationAllowed = (durationSeconds: number) =>
   Number.isFinite(durationSeconds) && durationSeconds > 0 && durationSeconds <= MAX_VIDEO_DURATION_SECONDS;
@@ -17,7 +18,7 @@ export const isVideoDurationAllowed = (durationSeconds: number) =>
 export const isBilibiliUrl = (value: string, allowedHosts: readonly string[]) => {
   try {
     const hostname = new URL(value).hostname.toLowerCase();
-    return allowedHosts.some((allowedHost) => {
+    return [...BILIBILI_HOSTS, ...allowedHosts].some((allowedHost) => {
       const normalizedHost = allowedHost.trim().toLowerCase().replace(/^\.+/, "");
       return normalizedHost !== "" &&
         (hostname === normalizedHost || hostname.endsWith(`.${normalizedHost}`));
@@ -67,7 +68,7 @@ export const downloadVideo = async ({
     getFfmpegPath(config),
     "--print",
     "after_move:filepath",
-    ...createRequestArgs(url, config),
+    ...createYtDlpRequestArgs(url, config),
   ];
   try {
     const output = await runYtDlp(config, args);
@@ -89,7 +90,7 @@ export const getVideoDuration = async (url: string, config: VideoConfig) => {
     "--skip-download",
     "--print",
     "%(duration)s",
-    ...createRequestArgs(url, config),
+    ...createYtDlpRequestArgs(url, config),
   ]);
   const value = Number(output.trim().split(/\r?\n/).filter(Boolean).at(-1));
   return Number.isFinite(value) && value > 0 ? value : undefined;
@@ -156,10 +157,10 @@ export const updateYtDlp = async (config: VideoConfig, network: NetworkConfig) =
   await runYtDlp(config, createYtDlpUpdateArgs(network));
 };
 
-const createRequestArgs = (url: string, config: VideoConfig) => [
+export const createYtDlpRequestArgs = (url: string, config: VideoConfig) => [
   ...(config.proxyUrl ? ["--proxy", config.proxyUrl] : []),
   ...(isBilibiliUrl(url, config.bilibiliHosts) && config.bilibiliCookie
-    ? ["--add-header", `Cookie:${config.bilibiliCookie}`]
+    ? ["--add-headers", `Cookie:${config.bilibiliCookie}`]
     : []),
   url,
 ];

@@ -1,11 +1,29 @@
 import { describe, expect, test } from "bun:test";
 import {
+  createYtDlpRequestArgs,
   createYtDlpUpdateArgs,
   isBilibiliUrl,
   isVideoDurationAllowed,
   MAX_VIDEO_DURATION_SECONDS,
 } from "@/video";
+import type { VideoConfig } from "@/config";
 import { isVideoSendTimeoutError } from "../plugins/video";
+
+const videoConfig: VideoConfig = {
+  enabled: true,
+  runtimeMode: "normal",
+  proxyUrl: "",
+  bilibiliCookie: "SESSDATA=test-cookie",
+  whitelistUserIds: [],
+  bilibiliHosts: [],
+  downloadDirectory: "/temp",
+  napcatMediaDirectory: "/app/media",
+  ytDlpLinuxPath: "tools/yt-dlp",
+  ytDlpWindowsPath: "tools/yt-dlp.exe",
+  ffmpegLinuxPath: "tools/ffmpeg",
+  ffmpegWindowsPath: "tools/ffmpeg.exe",
+  updateCron: "0 0 * * *",
+};
 
 describe("video duration limit", () => {
   test("allows exactly ten minutes and rejects anything longer", () => {
@@ -15,11 +33,34 @@ describe("video duration limit", () => {
 });
 
 describe("video host configuration", () => {
-  test("matches configured hosts and their subdomains", () => {
+  test("always recognizes Bilibili and b23.tv hosts", () => {
+    expect(isBilibiliUrl("https://www.bilibili.com/video/BV1", [])).toBeTrue();
+    expect(isBilibiliUrl("https://b23.tv/abc123", [])).toBeTrue();
+    expect(isBilibiliUrl("https://notbilibili.com/video/1", [])).toBeFalse();
+  });
+
+  test("also matches configured hosts and their subdomains", () => {
     const hosts = ["video.example.test", "short.example.test"];
     expect(isBilibiliUrl("https://www.video.example.test/video/1", hosts)).toBeTrue();
     expect(isBilibiliUrl("https://short.example.test/abc", hosts)).toBeTrue();
-    expect(isBilibiliUrl("https://bilibili.com/video/1", hosts)).toBeFalse();
+  });
+});
+
+describe("Bilibili download authentication", () => {
+  test.each([
+    "https://www.bilibili.com/video/BV1",
+    "https://b23.tv/abc123",
+  ])("passes the app.toml cookie to yt-dlp for %s", (url) => {
+    expect(createYtDlpRequestArgs(url, videoConfig)).toEqual([
+      "--add-headers",
+      "Cookie:SESSDATA=test-cookie",
+      url,
+    ]);
+  });
+
+  test("does not send the Bilibili cookie to unrelated hosts", () => {
+    const url = "https://example.com/video.mp4";
+    expect(createYtDlpRequestArgs(url, videoConfig)).toEqual([url]);
   });
 });
 
