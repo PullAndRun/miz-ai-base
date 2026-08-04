@@ -183,7 +183,7 @@ docker compose up -d
 
 这些名称只是默认容器名，请按实际环境修改。文件创建后不会被后续启动覆盖。
 
-Docker 模式发送视频时，miz 将视频写入项目的 `temp` 目录，并把 `napcatMediaDirectory` 下的文件 URL 交给 NapCat。NapCat 容器必须把同一个宿主机 `temp` 目录挂载为该路径，例如：
+Docker 模式发送视频时，miz 将 yt-dlp 下载并合并的原始 MP4 写入项目的 `temp` 目录，并把 `napcatMediaDirectory` 下的文件 URL 交给 NapCat。NapCat 容器必须把同一个宿主机 `temp` 目录挂载为该路径，例如：
 
 ```yaml
 services:
@@ -323,7 +323,7 @@ bun audit
 
 检查是否保留了完整示例中的空字符串或不合法的 `0` 占位值。只保留需要覆盖的可选字段，或者为其填写有效值。
 
-### Docker 中视频下载成功但 QQ 无法读取
+### 视频下载成功但 QQ 发送失败
 
 确认 miz 的项目 `temp` 目录与 NapCat 的 `napcatMediaDirectory` 指向同一份宿主机目录，并确认 NapCat 容器有读取权限。
 

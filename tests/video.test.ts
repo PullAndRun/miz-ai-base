@@ -12,7 +12,11 @@ import {
   MAX_VIDEO_DURATION_SECONDS,
 } from "@/video";
 import type { VideoConfig } from "@/config";
-import { isVideoRichMediaTransferError, isVideoSendTimeoutError } from "../plugins/video";
+import {
+  createNapcatVideoMessage,
+  isVideoRichMediaTransferError,
+  isVideoSendTimeoutError,
+} from "../plugins/video";
 
 const videoConfig: VideoConfig = {
   enabled: true,
@@ -50,11 +54,18 @@ describe("video download filenames", () => {
     expect(/^[\x20-\x7E]+$/.test(path.basename(outputTemplate))).toBeTrue();
   });
 
-  test("always gives NapCat a shared file URL instead of base64", () => {
-    const file = getNapcatVideoFile("C:\\miz\\temp\\miz-video-id.qq.mp4", videoConfig);
+  test("gives NapCat a shared file URL without base64", () => {
+    const videoPath = "C:\\miz\\temp\\miz-video-id.mp4";
 
-    expect(file).toEndWith("/app/media/miz-video-id.qq.mp4");
-    expect(file).not.toStartWith("base64://");
+    expect(getNapcatVideoFile(videoPath, videoConfig)).toBe(
+      "file:///app/media/miz-video-id.mp4",
+    );
+    expect(createNapcatVideoMessage(videoPath, videoConfig)).toEqual([{
+      type: "video",
+      data: {
+        file: "file:///app/media/miz-video-id.mp4",
+      },
+    }]);
   });
 });
 

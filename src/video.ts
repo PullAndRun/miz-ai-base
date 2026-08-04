@@ -2,12 +2,10 @@ import { spawn } from "node:child_process";
 import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import type { NetworkConfig, VideoConfig } from "@/config";
 import { isWhitelistedUser } from "@/group-permissions";
 
 const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
-const TRANSCODE_TIMEOUT_MS = 30 * 60_000;
 const PROCESS_FORCE_KILL_DELAY_MS = 5_000;
 const MAX_CAPTURED_PROCESS_OUTPUT_BYTES = 1024 * 1024;
 const YT_DLP_DOWNLOAD_RETRY_COUNT = 20;
@@ -109,48 +107,10 @@ export const getVideoDuration = async (url: string, config: VideoConfig) => {
 };
 
 export const getNapcatVideoFile = (videoPath: string, config: VideoConfig) => {
-  // The download directory must be mounted into NapCat at this configured path.
-  // NapCat reads the file itself, so video bytes never cross the gateway as base64.
   const napcatPath = path.posix.join(config.napcatMediaDirectory, path.basename(videoPath));
-  return pathToFileURL(napcatPath).href;
-};
-
-// QQ's video player is not consistently compatible with the HEVC and AV1 streams
-// commonly returned by Bilibili. Re-encode to its broadly supported MP4 profile
-// and move the MP4 index to the front so playback can start immediately.
-export const prepareVideoForQq = async (videoPath: string, config: VideoConfig) => {
-  const parsedPath = path.parse(videoPath);
-  const outputPath = path.join(parsedPath.dir, `${parsedPath.name}.qq.mp4`);
-  try {
-    await runFfmpeg(config, [
-      "-y",
-      "-i",
-      videoPath,
-      "-map",
-      "0:v:0",
-      "-map",
-      "0:a?",
-      "-c:v",
-      "libx264",
-      "-preset",
-      "veryfast",
-      "-crf",
-      "23",
-      "-pix_fmt",
-      "yuv420p",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "128k",
-      "-movflags",
-      "+faststart",
-      outputPath,
-    ]);
-    return outputPath;
-  } catch (error) {
-    await rm(outputPath, { force: true });
-    throw error;
-  }
+  const fileUrl = new URL("file:///");
+  fileUrl.pathname = napcatPath;
+  return fileUrl.href;
 };
 
 export const deleteDownloadedVideo = (videoPath: string) => rm(videoPath, { force: true });
@@ -265,9 +225,6 @@ const runYtDlpWithTransientRetry = async (config: VideoConfig, args: string[]) =
 
 const runYtDlp = (config: VideoConfig, args: string[]) =>
   runProcess(getYtDlpPath(config), args, "yt-dlp", DOWNLOAD_TIMEOUT_MS);
-
-const runFfmpeg = (config: VideoConfig, args: string[]) =>
-  runProcess(getFfmpegPath(config), args, "ffmpeg", TRANSCODE_TIMEOUT_MS);
 
 const runProcess = (
   executable: string,

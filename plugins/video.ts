@@ -1,5 +1,6 @@
 import type { MizPlugin } from "@/plugins";
 import type { Logger } from "@/logger";
+import type { VideoConfig } from "@/config";
 import {
   deleteDownloadedVideo,
   downloadVideo,
@@ -9,7 +10,6 @@ import {
   isVideoDurationAllowed,
   isVideoUrl,
   isWhitelistedVideoUser,
-  prepareVideoForQq,
 } from "@/video";
 
 const VIDEO_SEND_TIMEOUT_MS = 10 * 60_000;
@@ -58,17 +58,13 @@ const videoPlugin: MizPlugin = {
       }
 
       const downloadedVideoPath = await downloadVideo({ url, config: config.video });
-      let videoPath = downloadedVideoPath;
       let delayedCleanup = false;
       try {
-        videoPath = await prepareVideoForQq(downloadedVideoPath, config.video);
         try {
-          await replyWithoutRetry({
-            type: "video",
-            data: {
-              file: getNapcatVideoFile(videoPath, config.video),
-            },
-          }, { timeoutMs: VIDEO_SEND_TIMEOUT_MS });
+          await replyWithoutRetry(
+            createNapcatVideoMessage(downloadedVideoPath, config.video),
+            { timeoutMs: VIDEO_SEND_TIMEOUT_MS },
+          );
         } catch (error) {
           if (!isVideoSendTimeoutError(error)) {
             throw error;
@@ -84,13 +80,10 @@ const videoPlugin: MizPlugin = {
           return;
         }
       } finally {
-        const videoPaths = videoPath === downloadedVideoPath
-          ? [videoPath]
-          : [videoPath, downloadedVideoPath];
         if (delayedCleanup) {
-          scheduleVideoCleanup(videoPaths, logger);
+          scheduleVideoCleanup([downloadedVideoPath], logger);
         } else {
-          await cleanupVideoFiles(videoPaths);
+          await cleanupVideoFiles([downloadedVideoPath]);
         }
       }
       logger.info("plugin", "video sent", {
@@ -116,6 +109,13 @@ export const isVideoSendTimeoutError = (error: unknown) =>
 
 export const isVideoRichMediaTransferError = (error: unknown) =>
   error instanceof Error && /rich media transfer failed/i.test(error.message);
+
+export const createNapcatVideoMessage = (videoPath: string, config: VideoConfig) => [{
+  type: "video",
+  data: {
+    file: getNapcatVideoFile(videoPath, config),
+  },
+}] as const;
 
 const cleanupVideoFiles = async (videoPaths: readonly string[]) => {
   await Promise.all(videoPaths.map((videoPath) => deleteDownloadedVideo(videoPath)));
