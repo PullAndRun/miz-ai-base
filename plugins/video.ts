@@ -66,7 +66,7 @@ const videoPlugin: MizPlugin = {
           await replyWithoutRetry({
             type: "video",
             data: {
-              file: await getNapcatVideoFile(videoPath, config.video),
+              file: getNapcatVideoFile(videoPath, config.video),
             },
           }, { timeoutMs: VIDEO_SEND_TIMEOUT_MS });
         } catch (error) {
@@ -74,7 +74,7 @@ const videoPlugin: MizPlugin = {
             throw error;
           }
 
-          delayedCleanup = config.video.runtimeMode === "docker";
+          delayedCleanup = true;
           logger.warn("plugin", "video send timed out; NapCat may still complete the upload", {
             userId: message.userId,
             groupId: message.groupId,
@@ -100,7 +100,9 @@ const videoPlugin: MizPlugin = {
       });
     } catch (error) {
       logger.error("plugin", "video processing or delivery failed", error);
-      await reply("视频刚才在路上卡住了，稍后再试一次吧。如果内容需要登录，请让管理员检查对应站点的登录配置。");
+      await reply(isVideoRichMediaTransferError(error)
+        ? "视频已经下载好了，但 NapCat 向 QQ 上传视频失败了。请稍后再试；如果持续失败，请检查 NapCat 和 QQ 的富媒体发送状态。"
+        : "视频刚才在路上卡住了，稍后再试一次吧。如果内容需要登录，请让管理员检查对应站点的登录配置。");
     }
   },
 };
@@ -111,6 +113,9 @@ export const isVideoSendTimeoutError = (error: unknown) =>
   typeof error === "object" &&
   error !== null &&
   (error as { code?: unknown }).code === "E_API_TIMEOUT";
+
+export const isVideoRichMediaTransferError = (error: unknown) =>
+  error instanceof Error && /rich media transfer failed/i.test(error.message);
 
 const cleanupVideoFiles = async (videoPaths: readonly string[]) => {
   await Promise.all(videoPaths.map((videoPath) => deleteDownloadedVideo(videoPath)));

@@ -5,13 +5,14 @@ import {
   createVideoOutputPathTemplate,
   createYtDlpRequestArgs,
   createYtDlpUpdateArgs,
+  getNapcatVideoFile,
   isBilibiliUrl,
   isRetryableYtDlpError,
   isVideoDurationAllowed,
   MAX_VIDEO_DURATION_SECONDS,
 } from "@/video";
 import type { VideoConfig } from "@/config";
-import { isVideoSendTimeoutError } from "../plugins/video";
+import { isVideoRichMediaTransferError, isVideoSendTimeoutError } from "../plugins/video";
 
 const videoConfig: VideoConfig = {
   enabled: true,
@@ -47,6 +48,13 @@ describe("video download filenames", () => {
       "miz-video-64c82c6d-1c58-4e2d-bcec-53c48eccb21d.%(ext)s",
     );
     expect(/^[\x20-\x7E]+$/.test(path.basename(outputTemplate))).toBeTrue();
+  });
+
+  test("always gives NapCat a shared file URL instead of base64", () => {
+    const file = getNapcatVideoFile("C:\\miz\\temp\\miz-video-id.qq.mp4", videoConfig);
+
+    expect(file).toEndWith("/app/media/miz-video-id.qq.mp4");
+    expect(file).not.toStartWith("base64://");
   });
 });
 
@@ -124,5 +132,14 @@ describe("video delivery timeout", () => {
   test("treats an API timeout as an unknown send result", () => {
     expect(isVideoSendTimeoutError({ code: "E_API_TIMEOUT" })).toBeTrue();
     expect(isVideoSendTimeoutError(new Error("download failed"))).toBeFalse();
+  });
+});
+
+describe("video delivery errors", () => {
+  test("recognizes NapCat rich media upload failures", () => {
+    expect(isVideoRichMediaTransferError(
+      new Error("EventChecker Failed: rich media transfer failed"),
+    )).toBeTrue();
+    expect(isVideoRichMediaTransferError(new Error("download failed"))).toBeFalse();
   });
 });

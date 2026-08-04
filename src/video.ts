@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -108,14 +108,9 @@ export const getVideoDuration = async (url: string, config: VideoConfig) => {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 };
 
-export const getNapcatVideoFile = async (videoPath: string, config: VideoConfig) => {
-  if (config.runtimeMode !== "docker") {
-    // In normal mode NapLink transfers bytes to NapCat directly.
-    return `base64://${(await readFile(path.resolve(videoPath))).toString("base64")}`;
-  }
-
-  // Docker deployments map the project temp directory to NapCat's /app/media.
-  // Only send the in-container file address: NapCat reads the bytes itself.
+export const getNapcatVideoFile = (videoPath: string, config: VideoConfig) => {
+  // The download directory must be mounted into NapCat at this configured path.
+  // NapCat reads the file itself, so video bytes never cross the gateway as base64.
   const napcatPath = path.posix.join(config.napcatMediaDirectory, path.basename(videoPath));
   return pathToFileURL(napcatPath).href;
 };
