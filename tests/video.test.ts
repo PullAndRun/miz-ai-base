@@ -19,7 +19,7 @@ const videoConfig: VideoConfig = {
   proxyUrl: "",
   bilibiliCookie: "SESSDATA=test-cookie",
   whitelistUserIds: [],
-  bilibiliHosts: [],
+  bilibiliHosts: ["bilibili.com", "b23.tv"],
   downloadDirectory: "/temp",
   napcatMediaDirectory: "/app/media",
   ytDlpLinuxPath: "tools/yt-dlp",
@@ -51,16 +51,16 @@ describe("video download filenames", () => {
 });
 
 describe("video host configuration", () => {
-  test("always recognizes Bilibili and b23.tv hosts", () => {
-    expect(isBilibiliUrl("https://www.bilibili.com/video/BV1", [])).toBeTrue();
-    expect(isBilibiliUrl("https://b23.tv/abc123", [])).toBeTrue();
-    expect(isBilibiliUrl("https://notbilibili.com/video/1", [])).toBeFalse();
+  test("does not recognize hosts that are not configured", () => {
+    expect(isBilibiliUrl("https://www.bilibili.com/video/BV1", [])).toBeFalse();
+    expect(isBilibiliUrl("https://b23.tv/abc123", [])).toBeFalse();
   });
 
-  test("also matches configured hosts and their subdomains", () => {
+  test("matches configured hosts and their subdomains", () => {
     const hosts = ["video.example.test", "short.example.test"];
     expect(isBilibiliUrl("https://www.video.example.test/video/1", hosts)).toBeTrue();
     expect(isBilibiliUrl("https://short.example.test/abc", hosts)).toBeTrue();
+    expect(isBilibiliUrl("https://notvideo.example.test/video/1", hosts)).toBeFalse();
   });
 });
 

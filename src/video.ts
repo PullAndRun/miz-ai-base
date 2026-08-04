@@ -14,7 +14,6 @@ const YT_DLP_DOWNLOAD_RETRY_COUNT = 20;
 const YT_DLP_OUTER_RETRY_COUNT = 1;
 const YT_DLP_OUTER_RETRY_DELAY_MS = 2_000;
 export const MAX_VIDEO_DURATION_SECONDS = 10 * 60;
-const BILIBILI_HOSTS = ["bilibili.com", "b23.tv"] as const;
 
 export const isVideoDurationAllowed = (durationSeconds: number) =>
   Number.isFinite(durationSeconds) && durationSeconds > 0 && durationSeconds <= MAX_VIDEO_DURATION_SECONDS;
@@ -22,7 +21,7 @@ export const isVideoDurationAllowed = (durationSeconds: number) =>
 export const isBilibiliUrl = (value: string, allowedHosts: readonly string[]) => {
   try {
     const hostname = new URL(value).hostname.toLowerCase();
-    return [...BILIBILI_HOSTS, ...allowedHosts].some((allowedHost) => {
+    return allowedHosts.some((allowedHost) => {
       const normalizedHost = allowedHost.trim().toLowerCase().replace(/^\.+/, "");
       return normalizedHost !== "" &&
         (hostname === normalizedHost || hostname.endsWith(`.${normalizedHost}`));
