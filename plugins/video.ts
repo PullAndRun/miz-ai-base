@@ -4,7 +4,7 @@ import type { VideoConfig } from "@/config";
 import {
   deleteDownloadedVideo,
   downloadVideo,
-  getNapcatVideoDataUrl,
+  getNapcatVideoBase64File,
   getNapcatVideoFile,
   getVideoDuration,
   isBilibiliUrl,
@@ -47,7 +47,7 @@ const videoPlugin: MizPlugin = {
     }
 
     try {
-      const duration = await getVideoDuration(url, config.video);
+      const duration = await getVideoDuration(url, config.video, config.network, config.bilibili);
       if (duration === undefined) {
         await reply("没能读到视频时长。链接可能失效、需要登录，或内容没有公开，换一个能直接打开的链接试试吧。");
         return;
@@ -58,53 +58,31 @@ const videoPlugin: MizPlugin = {
         return;
       }
 
-      const downloadedVideoPath = await downloadVideo({ url, config: config.video });
+      const downloadedVideoPath = await downloadVideo({
+        url,
+        config: config.video,
+        network: config.network,
+        bilibili: config.bilibili,
+      });
       let delayedCleanup = false;
-      const deferCleanupOnTimeout = (error: unknown) => {
-        if (!isVideoSendTimeoutError(error)) {
-          return false;
-        }
-
-        delayedCleanup = true;
-        return true;
-      };
       try {
-        try {
-          await replyWithoutRetry(
-            createNapcatVideoMessage(downloadedVideoPath, config.video),
-            { timeoutMs: VIDEO_SEND_TIMEOUT_MS },
-          );
-        } catch (error) {
-          if (deferCleanupOnTimeout(error)) {
-            return;
-          }
-          if (!isVideoRichMediaTransferError(error)) {
-            throw error;
-          }
-
-          try {
-            await replyWithoutRetry(
-              await createNapcatBase64VideoMessage(downloadedVideoPath),
-              { timeoutMs: VIDEO_SEND_TIMEOUT_MS },
-            );
-          } catch (base64Error) {
-            if (deferCleanupOnTimeout(base64Error)) {
-              return;
-            }
-            if (!isVideoRichMediaTransferError(base64Error)) {
-              throw base64Error;
-            }
-
-            await replyForward(
-              [createNapcatVideoMessage(downloadedVideoPath, config.video)],
-              {
-                title: "视频",
-                source: "miz video",
-                summary: "1 条视频",
-              },
-            );
-          }
-        }
+        const result = await deliverVideoWithFallback(
+          downloadedVideoPath,
+          config.video,
+          (videoMessage) => replyWithoutRetry(videoMessage, { timeoutMs: VIDEO_SEND_TIMEOUT_MS }),
+          (videoMessage) => replyForward(
+            [videoMessage],
+            {
+              title: "视频",
+              source: "miz video",
+              summary: "1 条视频",
+            },
+          ),
+        );
+        delayedCleanup = result.encounteredTimeout;
+      } catch (error) {
+        delayedCleanup = isVideoDeliveryError(error) && error.encounteredTimeout;
+        throw error;
       } finally {
         if (delayedCleanup) {
           scheduleVideoCleanup([downloadedVideoPath], logger);
@@ -114,7 +92,7 @@ const videoPlugin: MizPlugin = {
       }
     } catch (error) {
       logger.error("plugin", "video processing or delivery failed", error);
-      await reply(isVideoRichMediaTransferError(error)
+      await reply(isVideoDeliveryError(error)
         ? "视频已经下载好了，但 NapCat 向 QQ 上传视频失败了。请稍后再试；如果持续失败，请检查 NapCat 和 QQ 的富媒体发送状态。"
         : "视频刚才在路上卡住了，稍后再试一次吧。如果内容需要登录，请让管理员检查对应站点的登录配置。");
     }
@@ -128,8 +106,21 @@ export const isVideoSendTimeoutError = (error: unknown) =>
   error !== null &&
   (error as { code?: unknown }).code === "E_API_TIMEOUT";
 
-export const isVideoRichMediaTransferError = (error: unknown) =>
-  error instanceof Error && /rich media transfer failed/i.test(error.message);
+export type VideoDeliveryMode = "file" | "base64" | "forward";
+
+export type VideoDeliveryError = AggregateError & Readonly<{
+  name: "VideoDeliveryError";
+  encounteredTimeout: boolean;
+}>;
+
+export const isVideoDeliveryError = (error: unknown): error is VideoDeliveryError =>
+  error instanceof AggregateError && error.name === "VideoDeliveryError";
+
+const createVideoDeliveryError = (errors: readonly unknown[]): VideoDeliveryError =>
+  Object.assign(new AggregateError(errors, "all video delivery attempts failed"), {
+    name: "VideoDeliveryError" as const,
+    encounteredTimeout: errors.some(isVideoSendTimeoutError),
+  });
 
 export const createNapcatVideoMessage = (videoPath: string, config: VideoConfig) => [{
   type: "video",
@@ -141,9 +132,47 @@ export const createNapcatVideoMessage = (videoPath: string, config: VideoConfig)
 export const createNapcatBase64VideoMessage = async (videoPath: string) => [{
   type: "video",
   data: {
-    file: await getNapcatVideoDataUrl(videoPath),
+    file: await getNapcatVideoBase64File(videoPath),
   },
 }] as const;
+
+export const deliverVideoWithFallback = async (
+  videoPath: string,
+  config: VideoConfig,
+  sendVideoMessage: (message: readonly unknown[]) => Promise<unknown>,
+  sendForwardMessage: (message: readonly unknown[]) => Promise<unknown>,
+): Promise<{ mode: VideoDeliveryMode; encounteredTimeout: boolean }> => {
+  const errors: unknown[] = [];
+  const attempt = async (mode: VideoDeliveryMode, operation: () => Promise<unknown>) => {
+    try {
+      await operation();
+      return { mode, encounteredTimeout: errors.some(isVideoSendTimeoutError) };
+    } catch (error) {
+      errors.push(error);
+      return undefined;
+    }
+  };
+
+  const fileResult = await attempt("file", () =>
+    sendVideoMessage(createNapcatVideoMessage(videoPath, config)));
+  if (fileResult) {
+    return fileResult;
+  }
+
+  const base64Result = await attempt("base64", async () =>
+    sendVideoMessage(await createNapcatBase64VideoMessage(videoPath)));
+  if (base64Result) {
+    return base64Result;
+  }
+
+  const forwardResult = await attempt("forward", () =>
+    sendForwardMessage(createNapcatVideoMessage(videoPath, config)));
+  if (forwardResult) {
+    return forwardResult;
+  }
+
+  throw createVideoDeliveryError(errors);
+};
 
 const cleanupVideoFiles = async (videoPaths: readonly string[]) => {
   await Promise.all(videoPaths.map((videoPath) => deleteDownloadedVideo(videoPath)));

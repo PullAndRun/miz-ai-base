@@ -2,10 +2,11 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { NetworkConfig, VideoConfig } from "@/config";
+import type { BilibiliConfig, NetworkConfig, VideoConfig } from "@/config";
 import { isWhitelistedUser } from "@/group-permissions";
 
 const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
+const TRANSCODE_TIMEOUT_MS = 15 * 60_000;
 const PROCESS_FORCE_KILL_DELAY_MS = 5_000;
 const MAX_CAPTURED_PROCESS_OUTPUT_BYTES = 1024 * 1024;
 const YT_DLP_DOWNLOAD_RETRY_COUNT = 20;
@@ -46,14 +47,19 @@ export const isWhitelistedVideoUser = (
 export const downloadVideo = async ({
   url,
   config,
+  network,
+  bilibili,
 }: {
   url: string;
   config: VideoConfig;
+  network: NetworkConfig;
+  bilibili: BilibiliConfig;
 }) => {
   const downloadDirectory = getDownloadDirectory(config);
   await mkdir(downloadDirectory, { recursive: true });
   const downloadStartedAt = Date.now();
   const requestId = crypto.randomUUID();
+  const transcodedVideoPath = createTranscodedVideoPath(downloadDirectory, requestId);
 
   const args = [
     "--no-playlist",
@@ -68,33 +74,45 @@ export const downloadVideo = async ({
     "--retry-sleep",
     "fragment:exp=1:20",
     "--output",
-    createVideoOutputPathTemplate(downloadDirectory, requestId),
+    createVideoSourcePathTemplate(downloadDirectory, requestId),
     "--format",
-    "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+    "bv*+ba/b",
     "--merge-output-format",
-    "mp4",
+    "mkv",
     "--ffmpeg-location",
     getFfmpegPath(config),
     "--print",
     "after_move:filepath",
   ];
   try {
-    const output = await withYtDlpRequest(url, config, (requestArgs) =>
+    const output = await withYtDlpRequest(url, config, network, bilibili, (requestArgs) =>
       runYtDlpWithTransientRetry(config, [...args, ...requestArgs]));
-    const videoPath = await findDownloadedVideo(output, downloadDirectory, downloadStartedAt, requestId);
-    if (!videoPath) {
+    const sourceVideoPath = await findDownloadedVideo(output, downloadDirectory, downloadStartedAt, requestId);
+    if (!sourceVideoPath) {
       throw new Error("yt-dlp returned a missing video file");
     }
 
-    return videoPath;
+    await runFfmpeg(config, createFfmpegTranscodeArgs(sourceVideoPath, transcodedVideoPath));
+    const transcodedFile = await stat(transcodedVideoPath).catch(() => undefined);
+    if (!transcodedFile?.isFile() || transcodedFile.size === 0) {
+      throw new Error("ffmpeg returned a missing or empty video file");
+    }
+
+    await rm(sourceVideoPath, { force: true });
+    return transcodedVideoPath;
   } catch (error) {
     await deleteDownloadArtifacts(downloadDirectory, requestId);
     throw error;
   }
 };
 
-export const getVideoDuration = async (url: string, config: VideoConfig) => {
-  const output = await withYtDlpRequest(url, config, (requestArgs) =>
+export const getVideoDuration = async (
+  url: string,
+  config: VideoConfig,
+  network: NetworkConfig,
+  bilibili: BilibiliConfig,
+) => {
+  const output = await withYtDlpRequest(url, config, network, bilibili, (requestArgs) =>
     runYtDlpWithTransientRetry(config, [
       "--no-playlist",
       "--skip-download",
@@ -113,8 +131,8 @@ export const getNapcatVideoFile = (videoPath: string, config: VideoConfig) => {
   return fileUrl.href;
 };
 
-export const getNapcatVideoDataUrl = async (videoPath: string) =>
-  `data:video/mp4;base64,${(await readFile(videoPath)).toString("base64")}`;
+export const getNapcatVideoBase64File = async (videoPath: string) =>
+  `base64://${(await readFile(videoPath)).toString("base64")}`;
 
 export const deleteDownloadedVideo = (videoPath: string) => rm(videoPath, { force: true });
 
@@ -123,8 +141,46 @@ export const createYtDlpUpdateArgs = (network: NetworkConfig) => [
   ...(network.proxyUrl ? ["--proxy", network.proxyUrl] : []),
 ];
 
-export const createVideoOutputPathTemplate = (downloadDirectory: string, requestId: string) =>
-  path.join(downloadDirectory, `miz-video-${requestId}.%(ext)s`);
+export const createVideoSourcePathTemplate = (downloadDirectory: string, requestId: string) =>
+  path.join(downloadDirectory, `miz-video-${requestId}-source.%(ext)s`);
+
+export const createTranscodedVideoPath = (downloadDirectory: string, requestId: string) =>
+  path.join(downloadDirectory, `miz-video-${requestId}.mp4`);
+
+export const createFfmpegTranscodeArgs = (sourceVideoPath: string, outputVideoPath: string) => [
+  "-nostdin",
+  "-hide_banner",
+  "-loglevel",
+  "error",
+  "-y",
+  "-i",
+  sourceVideoPath,
+  "-map",
+  "0:v:0",
+  "-map",
+  "0:a:0?",
+  "-sn",
+  "-dn",
+  "-vf",
+  "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+  "-c:v",
+  "libx264",
+  "-preset",
+  "veryfast",
+  "-crf",
+  "23",
+  "-pix_fmt",
+  "yuv420p",
+  "-c:a",
+  "aac",
+  "-b:a",
+  "128k",
+  "-ar",
+  "48000",
+  "-movflags",
+  "+faststart",
+  outputVideoPath,
+];
 
 export const updateYtDlp = async (config: VideoConfig, network: NetworkConfig) => {
   await runYtDlp(config, createYtDlpUpdateArgs(network));
@@ -132,22 +188,24 @@ export const updateYtDlp = async (config: VideoConfig, network: NetworkConfig) =
 
 export const createYtDlpRequestArgs = (
   url: string,
-  config: VideoConfig,
+  network: NetworkConfig,
   cookieFilePath?: string,
 ) => [
-  ...(config.proxyUrl ? ["--proxy", config.proxyUrl] : []),
-  ...(cookieFilePath && config.bilibiliCookie && isBilibiliUrl(url, config.bilibiliHosts)
-    ? ["--cookies", cookieFilePath]
-    : []),
+  ...(network.proxyUrl ? ["--proxy", network.proxyUrl] : []),
+  ...(cookieFilePath ? ["--cookies", cookieFilePath] : []),
   url,
 ];
 
-export const createYtDlpCookieFileContents = (url: string, config: VideoConfig) => {
-  if (!isBilibiliUrl(url, config.bilibiliHosts) || !config.bilibiliCookie) {
+export const createYtDlpCookieFileContents = (
+  url: string,
+  config: VideoConfig,
+  bilibili: BilibiliConfig,
+) => {
+  if (!isBilibiliUrl(url, config.bilibiliHosts) || !bilibili.cookie) {
     return undefined;
   }
 
-  const cookies = config.bilibiliCookie
+  const cookies = bilibili.cookie
     .split(";")
     .map((part) => {
       const separatorIndex = part.indexOf("=");
@@ -190,11 +248,13 @@ export const isRetryableYtDlpError = (error: unknown) =>
 const withYtDlpRequest = async <T>(
   url: string,
   config: VideoConfig,
+  network: NetworkConfig,
+  bilibili: BilibiliConfig,
   callback: (requestArgs: string[]) => Promise<T>,
 ) => {
-  const cookieContents = createYtDlpCookieFileContents(url, config);
+  const cookieContents = createYtDlpCookieFileContents(url, config, bilibili);
   if (!cookieContents) {
-    return callback(createYtDlpRequestArgs(url, config));
+    return callback(createYtDlpRequestArgs(url, network));
   }
 
   const cookieDirectory = path.join(tmpdir(), "miz");
@@ -202,7 +262,7 @@ const withYtDlpRequest = async <T>(
   const cookieFilePath = path.join(cookieDirectory, `.miz-yt-dlp-${crypto.randomUUID()}.cookies`);
   await writeFile(cookieFilePath, cookieContents, { encoding: "utf8", flag: "wx", mode: 0o600 });
   try {
-    return await callback(createYtDlpRequestArgs(url, config, cookieFilePath));
+    return await callback(createYtDlpRequestArgs(url, network, cookieFilePath));
   } finally {
     await rm(cookieFilePath, { force: true });
   }
@@ -228,6 +288,9 @@ const runYtDlpWithTransientRetry = async (config: VideoConfig, args: string[]) =
 
 const runYtDlp = (config: VideoConfig, args: string[]) =>
   runProcess(getYtDlpPath(config), args, "yt-dlp", DOWNLOAD_TIMEOUT_MS);
+
+const runFfmpeg = (config: VideoConfig, args: string[]) =>
+  runProcess(getFfmpegPath(config), args, "ffmpeg", TRANSCODE_TIMEOUT_MS);
 
 const runProcess = (
   executable: string,
@@ -354,8 +417,8 @@ const findDownloadedVideo = async (
     const file = await stat(videoPath).catch(() => undefined);
     if (
       file?.isFile() &&
-      isFinalVideoPath(videoPath) &&
-      path.basename(videoPath).includes(requestId) &&
+      isFinalDownloadedPath(videoPath) &&
+      path.basename(videoPath).startsWith(`miz-video-${requestId}-source.`) &&
       isPathInsideDirectory(videoPath, downloadDirectory)
     ) {
       return videoPath;
@@ -364,7 +427,10 @@ const findDownloadedVideo = async (
 
   const candidates = await Promise.all(
     (await readdir(downloadDirectory, { withFileTypes: true }))
-      .filter((entry) => entry.isFile() && entry.name.includes(requestId) && isFinalVideoPath(entry.name))
+      .filter((entry) =>
+        entry.isFile() &&
+        entry.name.startsWith(`miz-video-${requestId}-source.`) &&
+        isFinalDownloadedPath(entry.name))
       .map(async (entry) => {
         const videoPath = path.join(downloadDirectory, entry.name);
         return {
@@ -388,8 +454,8 @@ const deleteDownloadArtifacts = async (downloadDirectory: string, requestId: str
   );
 };
 
-const isFinalVideoPath = (value: string) =>
-  value.toLowerCase().endsWith(".mp4") && !/\.f\d+\.mp4$/i.test(value);
+const isFinalDownloadedPath = (value: string) =>
+  !/\.(?:part|ytdl|temp)$/i.test(value) && !/\.f\d+\.[^.]+$/i.test(value);
 
 const isPathInsideDirectory = (filePath: string, directory: string) => {
   const relativePath = path.relative(path.resolve(directory), path.resolve(filePath));

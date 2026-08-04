@@ -253,8 +253,6 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
   video: {
     enabled: config.video?.enabled ?? true,
     runtimeMode: getRuntimeMode(),
-    proxyUrl: config.network?.proxyUrl ?? "",
-    bilibiliCookie: config.bilibili?.cookie?.trim() ?? "",
     whitelistUserIds: config.video?.whitelistUserIds ?? [],
     bilibiliHosts: config.video?.bilibiliHosts ?? [],
     downloadDirectory: config.video?.downloadDirectory ?? "/temp",
@@ -361,8 +359,6 @@ export type BilibiliConfig = {
 export type VideoConfig = {
   enabled: boolean;
   runtimeMode: RuntimeMode;
-  proxyUrl: string;
-  bilibiliCookie: string;
   whitelistUserIds: Array<string | number>;
   bilibiliHosts: string[];
   downloadDirectory: string;

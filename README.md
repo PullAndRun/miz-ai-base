@@ -183,9 +183,9 @@ docker compose up -d
 
 这些名称只是默认容器名，请按实际环境修改。文件创建后不会被后续启动覆盖。
 
-Docker 模式发送视频时，miz 将 yt-dlp 下载并合并的原始 MP4 写入项目的 `temp` 目录，并把 `napcatMediaDirectory` 下的文件 URL 交给 NapCat。NapCat 容器必须把同一个宿主机 `temp` 目录挂载为该路径，例如：
+Docker 模式发送视频时，miz 先通过 `[miz.network].proxyUrl` 调用 yt-dlp 下载视频（B 站同时使用 `[miz.bilibili].cookie`），再用 FFmpeg 转码为 H.264/AAC MP4 并写入项目的 `temp` 目录。随后把 `napcatMediaDirectory` 下的文件 URL 交给 NapCat。NapCat 容器必须把同一个宿主机 `temp` 目录挂载为该路径，例如：
 
-发送时优先使用 File URL；仅在 NapCat 返回 `rich media transfer failed` 时改用 Base64，Base64 仍失败才发送单视频转发作为兜底。
+发送时始终使用 `video` 消息段：依次尝试 File URL、`base64://` 视频，前两种都失败后再发送包含该视频消息段的单节点合并转发。
 
 ```yaml
 services:
