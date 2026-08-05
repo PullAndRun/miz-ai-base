@@ -10,7 +10,7 @@
     "dev": "bun run dependencies:update && bun run prisma:generate && bun --watch scripts/start.ts normal",
     "dev:docker": "bun run dependencies:update && bun run prisma:generate && bun --watch scripts/start.ts docker",
     "dependencies:update": "bun run scripts/update-dependencies.ts",
-    "ffmpeg:install": "bun run scripts/install-ffmpeg.ts",
+    "ffmpeg:download": "bun run scripts/download-ffmpeg.ts",
     "test": "bun test",
     "typecheck": "bun run prisma:generate && tsc --noEmit",
     "prisma:generate": "prisma generate",

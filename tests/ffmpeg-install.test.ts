@@ -3,6 +3,7 @@ import {
   createFfmpegDownloadProgressReporter,
   ensureFfmpeg,
   formatFfmpegDownloadProgress,
+  getManualFfmpegPlatforms,
   getFfmpegAsset,
   isSupportedFfmpegVersion,
   parseExpectedSha256,
@@ -22,12 +23,28 @@ const videoConfig: VideoConfig = {
   ytDlpWindowsPath: "tools/yt-dlp.exe",
   ffmpegLinuxPath: "tools/ffmpeg",
   ffmpegWindowsPath: "tools/ffmpeg.exe",
-  ffmpegAutoDownload: true,
   maxConcurrentJobs: 2,
   updateCron: "0 0 * * *",
 };
 
-describe("FFmpeg automatic installation", () => {
+describe("manual FFmpeg download", () => {
+  test("is isolated from the application startup path", async () => {
+    const [appStartup, runtimeStartup, downloader, packageJson] = await Promise.all([
+      Bun.file("scripts/start.ts").text(),
+      Bun.file("src/index.ts").text(),
+      Bun.file("scripts/download-ffmpeg.ts").text(),
+      Bun.file("package.json").json() as Promise<{ scripts: Record<string, string> }>,
+    ]);
+
+    expect(appStartup).not.toContain("ffmpeg");
+    expect(runtimeStartup).not.toContain("ensureFfmpeg");
+    expect(downloader).not.toMatch(/prisma|NapLink|src\/index/);
+    expect(packageJson.scripts["ffmpeg:download"]).toBe("bun run scripts/download-ffmpeg.ts");
+  });
+
+  test("the manual downloader targets both Windows and Linux", () => {
+    expect(getManualFfmpegPlatforms()).toEqual(["win32", "linux"]);
+  });
   test("pins Windows x64 to the verified Gyan 8.1.2 release", () => {
     const asset = getFfmpegAsset("win32", "x64");
     expect(asset.archiveName).toBe("ffmpeg-8.1.2-essentials_build.zip");

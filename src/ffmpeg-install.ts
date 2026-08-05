@@ -16,12 +16,23 @@ export type FfmpegAsset = Readonly<{
   checksumMode: "single" | "manifest";
   executableName: "ffmpeg" | "ffmpeg.exe";
   probeName: "ffprobe" | "ffprobe.exe";
+  version: string;
 }>;
 
 export type FfmpegInstallResult = Readonly<{
-  status: "current" | "installed" | "disabled";
+  status: "current" | "installed";
+  platform: "win32" | "linux";
+  arch: "x64" | "arm64";
   path: string;
   version?: string;
+}>;
+
+export type FfmpegInstallOptions = Readonly<{
+  force?: boolean;
+  readCurrentVersion?: (executablePath: string) => Promise<string>;
+  onDownloadProgress?: (progress: FfmpegDownloadProgress) => void;
+  platform?: "win32" | "linux";
+  arch?: "x64" | "arm64";
 }>;
 
 export type FfmpegDownloadProgress = Readonly<{
@@ -45,13 +56,14 @@ export const getFfmpegAsset = (
       checksumMode: "single",
       executableName: "ffmpeg.exe",
       probeName: "ffprobe.exe",
+      version: "8.1.2",
     };
   }
 
   const platformName = platform === "win32" ? "win" : platform === "linux" ? "linux" : undefined;
   const archName = arch === "x64" ? "64" : arch === "arm64" ? "arm64" : undefined;
   if (!platformName || !archName) {
-    throw new Error(`Automatic FFmpeg installation is not supported on ${platform}-${arch}`);
+    throw new Error(`FFmpeg download is not supported on ${platform}-${arch}`);
   }
 
   const extension = platform === "win32" ? "zip" : "tar.xz";
@@ -63,6 +75,7 @@ export const getFfmpegAsset = (
     checksumMode: "manifest",
     executableName: platform === "win32" ? "ffmpeg.exe" : "ffmpeg",
     probeName: platform === "win32" ? "ffprobe.exe" : "ffprobe",
+    version: SUPPORTED_FFMPEG_RELEASE,
   };
 };
 
@@ -98,27 +111,32 @@ export const parseExpectedSha256 = (
 export const ensureFfmpeg = async (
   config: VideoConfig,
   network: NetworkConfig,
-  options: Readonly<{
-    force?: boolean;
-    readCurrentVersion?: (executablePath: string) => Promise<string>;
-    onDownloadProgress?: (progress: FfmpegDownloadProgress) => void;
-  }> = {},
+  options: FfmpegInstallOptions = {},
 ): Promise<FfmpegInstallResult> => {
-  const configuredPath = getConfiguredFfmpegPath(config);
-  const currentPath = resolveCurrentExecutable(configuredPath);
-  if (!config.ffmpegAutoDownload && !options.force) {
-    return { status: "disabled", path: currentPath ?? configuredPath };
-  }
+  const platform = options.platform ?? normalizeTargetPlatform(process.platform);
+  const arch = options.arch ?? normalizeTargetArch(process.arch);
+  const asset = getFfmpegAsset(platform, arch);
+  const configuredPath = getConfiguredFfmpegPath(config, platform);
+  const targetPath = resolveInstallTarget(configuredPath, asset.executableName);
+  const nativeTarget = platform === process.platform && arch === process.arch;
+  const currentPath = nativeTarget ? resolveCurrentExecutable(configuredPath) : targetPath;
 
-  if (!options.force && currentPath) {
+  if (!options.force && nativeTarget && currentPath) {
     const versionOutput = await (options.readCurrentVersion ?? readFfmpegVersion)(currentPath).catch(() => "");
     if (isSupportedFfmpegVersion(versionOutput)) {
-      return { status: "current", path: currentPath, version: parseFfmpegVersion(versionOutput) };
+      return {
+        status: "current",
+        platform,
+        arch,
+        path: currentPath,
+        version: parseFfmpegVersion(versionOutput),
+      };
     }
   }
+  if (!options.force && !nativeTarget && await hasCurrentInstallMarker(targetPath, asset, platform, arch)) {
+    return { status: "current", platform, arch, path: targetPath, version: asset.version };
+  }
 
-  const asset = getFfmpegAsset();
-  const targetPath = resolveInstallTarget(configuredPath, asset.executableName);
   const targetDirectory = path.dirname(targetPath);
   await mkdir(targetDirectory, { recursive: true });
   const installDirectory = await mkdtemp(path.join(targetDirectory, ".ffmpeg-install-"));
@@ -146,21 +164,36 @@ export const ensureFfmpeg = async (
     const sourceFfmpeg = await findExtractedExecutable(extractDirectory, asset.executableName);
     stagedFfmpeg = createStagedPath(targetPath);
     await copyFile(sourceFfmpeg, stagedFfmpeg);
-    if (process.platform !== "win32") {
+    if (platform !== "win32") {
       await chmod(stagedFfmpeg, 0o755);
     }
-    const installedVersionOutput = await readFfmpegVersion(stagedFfmpeg);
-    if (!isSupportedFfmpegVersion(installedVersionOutput)) {
-      throw new Error(`Downloaded FFmpeg has unsupported version: ${installedVersionOutput.split(/\r?\n/)[0] ?? "unknown"}`);
+    let installedVersion = asset.version;
+    if (nativeTarget) {
+      const installedVersionOutput = await readFfmpegVersion(stagedFfmpeg);
+      if (!isSupportedFfmpegVersion(installedVersionOutput)) {
+        throw new Error(`Downloaded FFmpeg has unsupported version: ${installedVersionOutput.split(/\r?\n/)[0] ?? "unknown"}`);
+      }
+      installedVersion = parseFfmpegVersion(installedVersionOutput) ?? asset.version;
     }
+    const installedBinarySha256 = await calculateFileSha256(stagedFfmpeg);
 
     await replaceFile(stagedFfmpeg, targetPath);
-    await installOptionalProbe(extractDirectory, targetPath, asset.probeName);
-    setConfiguredFfmpegPath(config, targetPath);
+    await installOptionalProbe(extractDirectory, targetPath, asset.probeName, platform);
+    await writeInstallMarker(
+      targetPath,
+      asset,
+      platform,
+      arch,
+      actualChecksum,
+      installedBinarySha256,
+    );
+    setConfiguredFfmpegPath(config, platform, targetPath);
     return {
       status: "installed",
+      platform,
+      arch,
       path: targetPath,
-      version: parseFfmpegVersion(installedVersionOutput),
+      version: installedVersion,
     };
   } finally {
     if (stagedFfmpeg) {
@@ -170,16 +203,100 @@ export const ensureFfmpeg = async (
   }
 };
 
-const getConfiguredFfmpegPath = (config: VideoConfig) =>
-  process.platform === "win32" ? config.ffmpegWindowsPath : config.ffmpegLinuxPath;
+export const installFfmpegForWindowsAndLinux = async (
+  config: VideoConfig,
+  network: NetworkConfig,
+  options: Omit<FfmpegInstallOptions, "platform" | "arch"> = {},
+) => {
+  const arch = normalizeTargetArch(process.arch);
+  const results: FfmpegInstallResult[] = [];
+  for (const platform of getManualFfmpegPlatforms()) {
+    results.push(await ensureFfmpeg(config, network, { ...options, platform, arch }));
+  }
+  return results;
+};
 
-const setConfiguredFfmpegPath = (config: VideoConfig, executablePath: string) => {
-  if (process.platform === "win32") {
+export const getManualFfmpegPlatforms = () => ["win32", "linux"] as const;
+
+const normalizeTargetPlatform = (platform: NodeJS.Platform): "win32" | "linux" => {
+  if (platform === "win32" || platform === "linux") {
+    return platform;
+  }
+  throw new Error(`FFmpeg download is not supported on ${platform}`);
+};
+
+const normalizeTargetArch = (arch: string): "x64" | "arm64" => {
+  if (arch === "x64" || arch === "arm64") {
+    return arch;
+  }
+  throw new Error(`FFmpeg download is not supported for ${arch}`);
+};
+
+const getConfiguredFfmpegPath = (config: VideoConfig, platform: "win32" | "linux") =>
+  platform === "win32" ? config.ffmpegWindowsPath : config.ffmpegLinuxPath;
+
+const setConfiguredFfmpegPath = (
+  config: VideoConfig,
+  platform: "win32" | "linux",
+  executablePath: string,
+) => {
+  if (platform === "win32") {
     config.ffmpegWindowsPath = executablePath;
   } else {
     config.ffmpegLinuxPath = executablePath;
   }
 };
+
+type FfmpegInstallMarker = Readonly<{
+  platform: "win32" | "linux";
+  arch: "x64" | "arm64";
+  archiveName: string;
+  version: string;
+  archiveSha256: string;
+  binarySha256: string;
+}>;
+
+const getInstallMarkerPath = (targetPath: string) => `${targetPath}.miz-install.json`;
+
+const hasCurrentInstallMarker = async (
+  targetPath: string,
+  asset: FfmpegAsset,
+  platform: "win32" | "linux",
+  arch: "x64" | "arm64",
+) => {
+  const target = await stat(targetPath).catch(() => undefined);
+  if (!target?.isFile() || target.size === 0) {
+    return false;
+  }
+  try {
+    const marker = JSON.parse(await Bun.file(getInstallMarkerPath(targetPath)).text()) as FfmpegInstallMarker;
+    return marker.platform === platform &&
+      marker.arch === arch &&
+      marker.archiveName === asset.archiveName &&
+      marker.version === asset.version &&
+      /^[a-f0-9]{64}$/.test(marker.archiveSha256) &&
+      /^[a-f0-9]{64}$/.test(marker.binarySha256) &&
+      await calculateFileSha256(targetPath) === marker.binarySha256;
+  } catch {
+    return false;
+  }
+};
+
+const writeInstallMarker = (
+  targetPath: string,
+  asset: FfmpegAsset,
+  platform: "win32" | "linux",
+  arch: "x64" | "arm64",
+  archiveSha256: string,
+  binarySha256: string,
+) => Bun.write(getInstallMarkerPath(targetPath), `${JSON.stringify({
+  platform,
+  arch,
+  archiveName: asset.archiveName,
+  version: asset.version,
+  archiveSha256,
+  binarySha256,
+}, null, 2)}\n`);
 
 const resolveCurrentExecutable = (configuredPath: string) =>
   /[\\/]/.test(configuredPath) || path.isAbsolute(configuredPath)
@@ -392,7 +509,12 @@ const createStagedPath = (targetPath: string) => {
   return path.join(path.dirname(targetPath), `${basename}.install-${crypto.randomUUID()}${extension}`);
 };
 
-const installOptionalProbe = async (extractDirectory: string, targetPath: string, probeName: string) => {
+const installOptionalProbe = async (
+  extractDirectory: string,
+  targetPath: string,
+  probeName: string,
+  platform: "win32" | "linux",
+) => {
   const sourceProbe = await findExtractedExecutable(extractDirectory, probeName).catch(() => undefined);
   if (!sourceProbe) {
     return;
@@ -401,7 +523,7 @@ const installOptionalProbe = async (extractDirectory: string, targetPath: string
   const stagedProbe = createStagedPath(probePath);
   try {
     await copyFile(sourceProbe, stagedProbe);
-    if (process.platform !== "win32") {
+    if (platform !== "win32") {
       await chmod(stagedProbe, 0o755);
     }
     await replaceFile(stagedProbe, probePath);

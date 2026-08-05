@@ -76,20 +76,20 @@ FF14 低价提醒和 VTB 群订阅分别参考：
 | Windows | `tools/yt-dlp.exe` | `tools/ffmpeg.exe` |
 | Linux / Docker | `tools/yt-dlp` | `tools/ffmpeg` |
 
-FFmpeg 默认不需要手动下载。启动时 miz 会执行 `ffmpeg -version`；缺失或不是已验证的 8.1 系列时，会通过 `[miz.network].proxyUrl` 下载稳定构建，校验 SHA-256 后安全替换。已经是 8.1.x 时只做版本检查，不会重复下载。支持 Windows x64/ARM64 和 Linux x64/ARM64。
+应用启动时不会检查或下载 FFmpeg。需要时请显式运行下面的独立下载脚本；它只下载 FFmpeg，不会启动 miz、连接 NapCat 或执行数据库迁移。一次执行会按当前 CPU 架构同时准备 Windows 和 Linux 两套文件，并通过 `[miz.network].proxyUrl` 下载、校验 SHA-256 后安全替换。已经准备好的 8.1 版本不会重复下载；`--force` 可强制重新下载。
 
-| 运行平台 | 自动选择的构建 |
+| 目标平台 | 手动脚本选择的构建 |
 | --- | --- |
 | Windows x64 | Gyan FFmpeg 8.1.2 release essentials（ZIP） |
 | Windows ARM64 | BtbN FFmpeg n8.1 GPL（ZIP） |
 | Linux x64 | BtbN FFmpeg n8.1 GPL（tar.xz） |
 | Linux ARM64 | BtbN FFmpeg n8.1 GPL（tar.xz） |
 
-也可以手动触发安装；`--force` 会强制重新下载：
+运行独立下载脚本：
 
 ```bash
-bun run ffmpeg:install
-bun run ffmpeg:install -- --force
+bun run ffmpeg:download
+bun run ffmpeg:download -- --force
 ```
 
 Linux 下需要为两个文件添加执行权限：
@@ -153,7 +153,7 @@ Docker 模式最后再合并：
 | `[miz.faq]` | 每群词条上限、答案长度上限和管理白名单。 |
 | `[miz.todo]` | 群待办提醒、批量处理数量和管理白名单。 |
 | `[miz.broadcast]` | 可以向机器人所在全部群发送广播的用户白名单。 |
-| `[miz.video]` | 视频开关、白名单、B 站域名、下载目录、NapCat 媒体目录、工具路径、FFmpeg 自动下载开关 `ffmpegAutoDownload`，以及视频任务并发上限 `maxConcurrentJobs`（默认 2，最大 8）。 |
+| `[miz.video]` | 视频开关、白名单、B 站域名、下载目录、NapCat 媒体目录、工具路径，以及视频任务并发上限 `maxConcurrentJobs`（默认 2，最大 8）。 |
 | `[miz.news]` | 财经新闻接口、目标群和定时表达式。 |
 | `[miz.wallpaper]` | Bing 官方元数据接口、图片基址、开关和定时表达式。 |
 | `[miz.ff14]` | 市场接口、返回条数、低价提醒开关和定时表达式。 |

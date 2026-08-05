@@ -139,7 +139,6 @@ const rawMizConfigSchema = z.object({
       ytDlpWindowsPath: nonEmptyStringSchema.optional(),
       ffmpegLinuxPath: nonEmptyStringSchema.optional(),
       ffmpegWindowsPath: nonEmptyStringSchema.optional(),
-      ffmpegAutoDownload: z.boolean().optional(),
       maxConcurrentJobs: z.number().int().positive().max(8).optional(),
       updateCron: nonEmptyStringSchema.optional(),
     })
@@ -263,7 +262,6 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     ytDlpWindowsPath: config.video?.ytDlpWindowsPath ?? "",
     ffmpegLinuxPath: config.video?.ffmpegLinuxPath ?? "tools/ffmpeg",
     ffmpegWindowsPath: config.video?.ffmpegWindowsPath ?? "tools/ffmpeg.exe",
-    ffmpegAutoDownload: config.video?.ffmpegAutoDownload ?? true,
     maxConcurrentJobs: config.video?.maxConcurrentJobs ?? 2,
     updateCron: config.video?.updateCron ?? "0 0 * * *",
   },
@@ -371,7 +369,6 @@ export type VideoConfig = {
   ytDlpWindowsPath: string;
   ffmpegLinuxPath: string;
   ffmpegWindowsPath: string;
-  ffmpegAutoDownload: boolean;
   maxConcurrentJobs: number;
   updateCron: string;
 };

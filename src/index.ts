@@ -2,7 +2,6 @@ import { watch } from "node:fs";
 import { loadConfig } from "@/config";
 import { ensureProjectDirectories } from "@/directories";
 import { createGateway, type Gateway } from "@/gateway";
-import { ensureFfmpeg, formatFfmpegDownloadProgress } from "@/ffmpeg-install";
 import { getGroupIds } from "@/group-ids";
 import { createLogger, type Logger } from "@/logger";
 import { createPluginRuntime } from "@/plugins";
@@ -61,20 +60,6 @@ const main = async () => {
       }
     } catch (error) {
       logger.warn("miz", "stale video artifact cleanup failed", error);
-    }
-    try {
-      const ffmpeg = await ensureFfmpeg(loadedConfig.video, loadedConfig.network, {
-        onDownloadProgress: (progress) => {
-          logger.info("miz", formatFfmpegDownloadProgress(progress), {
-            archive: progress.archiveName,
-            receivedBytes: progress.receivedBytes,
-            totalBytes: progress.totalBytes,
-          });
-        },
-      });
-      logger.info("miz", `FFmpeg ${ffmpeg.status}`, { path: ffmpeg.path, version: ffmpeg.version });
-    } catch (error) {
-      logger.warn("miz", "automatic FFmpeg installation failed; video commands may be unavailable", error);
     }
   }
   const gateway = createGateway(loadedConfig, logger);

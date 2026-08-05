@@ -43,7 +43,6 @@ const videoConfig: VideoConfig = {
   ytDlpWindowsPath: "tools/yt-dlp.exe",
   ffmpegLinuxPath: "tools/ffmpeg",
   ffmpegWindowsPath: "tools/ffmpeg.exe",
-  ffmpegAutoDownload: true,
   maxConcurrentJobs: 2,
   updateCron: "0 0 * * *",
 };
