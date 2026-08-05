@@ -204,6 +204,8 @@ Docker 模式发送视频时，miz 先通过 `[miz.network].proxyUrl` 调用 yt-
 
 视频发送依次尝试三种方式：先把 `napcatMediaDirectory` 下的 `file:///` 路径作为普通视频消息交给 NapCat；确定失败后，在 OneBot WebSocket 负载限制允许时，改用与 NapCat 面板一致的 `data:video/mp4;base64,...`；仍失败时，再把文件视频消息段作为单节点合并转发发送。三种发送均禁用自动重试；如果请求超时，由于结果无法确认，miz 会停止降级并提示先检查聊天记录，避免重复发送。使用文件和转发方式时，NapCat 必须能读取 `napcatMediaDirectory`，Docker 部署需要把同一个宿主机 `temp` 目录挂载到该路径。
 
+如果连续两次视频发送检测到 NapCat 返回 `rich media transfer failed`，miz 会全局暂停 `miz video` 24 小时并给出剩余时间提示，避免继续触发 QQ 富媒体风控。一次不含该错误的成功视频发送会清除尚未触发暂停的连续失败计数；冷却状态保存在当前 miz 进程内。
+
 ```yaml
 services:
   napcat:

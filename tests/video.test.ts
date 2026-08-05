@@ -311,7 +311,7 @@ describe("video delivery fallback", () => {
         },
       );
 
-      expect(result).toEqual({ mode: "file" });
+      expect(result).toEqual({ mode: "file", attempts: [] });
       expect(sentFiles).toEqual([`file:///app/media/${path.basename(videoPath)}`]);
       expect(forwards).toBe(0);
     } finally {
@@ -371,7 +371,10 @@ describe("video delivery fallback", () => {
         },
       );
 
-      expect(result).toEqual({ mode: "data-url" });
+      expect(result.mode).toBe("data-url");
+      expect(result.attempts).toHaveLength(1);
+      expect(result.attempts[0]).toMatchObject({ mode: "file" });
+      expect(result.attempts[0]?.error).toBeInstanceOf(Error);
       expect(sentFiles).toEqual([
         `file:///app/media/${path.basename(videoPath)}`,
         "data:video/mp4;base64,AAEC",
@@ -398,7 +401,7 @@ describe("video delivery fallback", () => {
         async () => undefined,
       );
 
-      expect(result).toEqual({ mode: "file" });
+      expect(result).toEqual({ mode: "file", attempts: [] });
       expect(sentFiles).toEqual([`file:///app/media/${path.basename(videoPath)}`]);
     } finally {
       await rm(directory, { recursive: true, force: true });
@@ -424,7 +427,8 @@ describe("video delivery fallback", () => {
         },
       );
 
-      expect(result).toEqual({ mode: "forward" });
+      expect(result.mode).toBe("forward");
+      expect(result.attempts.map((attempt) => attempt.mode)).toEqual(["file", "data-url"]);
       expect(sentFiles).toEqual([
         `file:///app/media/${path.basename(videoPath)}`,
         "data:video/mp4;base64,AAEC",

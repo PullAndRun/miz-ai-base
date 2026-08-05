@@ -4,6 +4,7 @@ import { createExpiringCache, readExpiringCache, writeExpiringCache } from "@/ca
 import type { MizConfig } from "@/config";
 import type { Logger } from "@/logger";
 import type { ForwardMessageContent } from "@/plugins";
+import { hasRichMediaTransferFailure } from "@/rich-media-error";
 
 export type IncomingMessage = {
   text: string;
@@ -336,16 +337,6 @@ export const isIgnorableNapLinkWarning = (message: string, metadata: readonly un
       .some((action) => message.endsWith(`: ${action}`)) &&
     metadata.some(hasRichMediaTransferFailure)
   );
-
-const hasRichMediaTransferFailure = (value: unknown): boolean => {
-  if (typeof value === "string") {
-    return /rich media transfer failed/i.test(value);
-  }
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  return Object.values(value).some(hasRichMediaTransferFailure);
-};
 
 const registerEvents = (
   client: NapLink,

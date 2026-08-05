@@ -1,5 +1,6 @@
 import type { Logger } from "@/logger";
 import type { MizPlugin } from "@/plugins";
+import { hasRichMediaTransferFailure } from "@/rich-media-error";
 import {
   deliverVideoWithFallback,
   isVideoDeliveryError,
@@ -16,6 +17,12 @@ import {
   isVideoUrl,
   isWhitelistedVideoUser,
 } from "@/video";
+import {
+  formatVideoCircuitBreakerMessage,
+  getVideoCircuitBreakerStatus,
+  recordVideoDeliverySuccess,
+  recordVideoRichMediaTransferFailure,
+} from "@/video-circuit-breaker";
 
 const VIDEO_SEND_TIMEOUT_MS = 10 * 60_000;
 const VIDEO_SEND_CLEANUP_GRACE_MS = 10 * 60_000;
@@ -44,6 +51,12 @@ const videoPlugin: MizPlugin = {
 
     if (!config.video.enabled) {
       await reply("视频搬运通道还没开启，喊管理员来接通一下吧。");
+      return;
+    }
+
+    const circuitBreakerStatus = getVideoCircuitBreakerStatus();
+    if (circuitBreakerStatus.disabled) {
+      await reply(formatVideoCircuitBreakerMessage(circuitBreakerStatus));
       return;
     }
 
@@ -132,12 +145,21 @@ const processVideo = async ({
     let delayedCleanup = false;
     try {
       deliveryAttempted = true;
-      await deliverVideoWithFallback(
+      const delivery = await deliverVideoWithFallback(
         downloadedVideoPath,
         config.video,
         sendVideo,
         sendForward,
       );
+      if (delivery.attempts.some((attempt) => hasRichMediaTransferFailure(attempt.error))) {
+        const status = recordVideoRichMediaTransferFailure();
+        logger.warn("plugin", "video rich-media circuit breaker recorded a failure", status);
+        if (status.disabled) {
+          await reply(formatVideoCircuitBreakerMessage(status));
+        }
+      } else {
+        recordVideoDeliverySuccess();
+      }
     } catch (error) {
       delayedCleanup = isVideoDeliveryUnknownError(error);
       throw error;
@@ -161,6 +183,12 @@ const processVideo = async ({
       logger.warn("plugin", "all video delivery strategies failed", {
         attempts: describeDeliveryAttempts(error),
       });
+      if (error.attempts.some((attempt) => hasRichMediaTransferFailure(attempt.error))) {
+        const status = recordVideoRichMediaTransferFailure();
+        logger.warn("plugin", "video rich-media circuit breaker recorded a failure", status);
+        await reply(formatVideoCircuitBreakerMessage(status));
+        return;
+      }
     } else {
       logger.error("plugin", "video processing failed", error);
     }

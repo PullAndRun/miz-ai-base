@@ -10,6 +10,7 @@ export type VideoDeliveryMode = "file" | "data-url" | "forward";
 
 export type VideoDeliveryResult = Readonly<{
   mode: VideoDeliveryMode;
+  attempts: readonly VideoDeliveryAttempt[];
 }>;
 
 export type VideoDeliveryAttempt = Readonly<{
@@ -83,7 +84,7 @@ export const deliverVideoWithFallback = async (
   ): Promise<VideoDeliveryResult | undefined> => {
     try {
       await operation();
-      return { mode };
+      return { mode, attempts: [...attempts] };
     } catch (error) {
       if (isVideoSendTimeoutError(error)) {
         throw createUnknownDeliveryError(mode, error);
