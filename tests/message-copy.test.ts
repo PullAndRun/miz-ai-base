@@ -57,13 +57,16 @@ describe("user-facing copy", () => {
     const singleScheduledNews = formatScheduledNewsItems([
       { id: "1", title: "单条市场更新" },
     ]).join("\n\n");
-    const wallpaper = JSON.stringify(createWallpaperMessage({
-      id: "wallpaper",
-      date: "20300801",
-      title: "山间晨雾",
-      copyright: "示例版权",
-      imageBase64: "AA==",
-    }));
+    const wallpaper = JSON.stringify(createWallpaperMessage(
+      {
+        id: "wallpaper",
+        date: "20300731",
+        title: "山间晨雾",
+        copyright: "示例版权",
+        imageBase64: "AA==",
+      },
+      new Date(2030, 7, 1, 12),
+    ));
 
     expect(news).toContain("新闻快讯送达 · 1 条新消息");
     expect(news).toContain("新消息已送达，感兴趣的话可以继续了解详情。");

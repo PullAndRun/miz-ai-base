@@ -52,12 +52,12 @@ export const getDailyWallpaper = (apiUrl: string, imageBaseUrl: string): Promise
   return pendingRequest;
 };
 
-export const createWallpaperMessage = (wallpaper: Wallpaper) => [
+export const createWallpaperMessage = (wallpaper: Wallpaper, now = new Date()) => [
   {
     type: "text",
     data: {
       text: [
-        `🌄 今日风景 · ${wallpaper.date ? formatDate(wallpaper.date) : "Bing 今日精选"}`,
+        `🌄 今日风景 · ${formatLocalDate(now)}`,
         "新的一天，先把这片风景送到你眼前。",
       ].join("\n"),
     },
@@ -152,7 +152,9 @@ const resolveImageUrl = (url: string, imageBaseUrl: string) =>
 
 const cleanText = (value: string | undefined) => value?.trim() || undefined;
 
-const formatDate = (value: string) => {
-  const matchedDate = /^(\d{4})(\d{2})(\d{2})$/.exec(value);
-  return matchedDate ? `${matchedDate[1]}年${matchedDate[2]}月${matchedDate[3]}日` : value;
+const formatLocalDate = (value: Date) => {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}年${month}月${day}日`;
 };

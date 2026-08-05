@@ -2,10 +2,12 @@ import { watch } from "node:fs";
 import { loadConfig } from "@/config";
 import { ensureProjectDirectories } from "@/directories";
 import { createGateway, type Gateway } from "@/gateway";
+import { ensureFfmpeg, formatFfmpegDownloadProgress } from "@/ffmpeg-install";
 import { getGroupIds } from "@/group-ids";
 import { createLogger, type Logger } from "@/logger";
 import { createPluginRuntime } from "@/plugins";
 import { startScheduledTasks } from "@/tasks";
+import { cleanupStaleVideoArtifacts } from "@/video";
 import { closeVtbRepository, partitionAvailableVtbSubscriptions, syncConfiguredVtbStreamers } from "@/vtb";
 
 const CONFIG_RELOAD_DELAY_MS = 500;
@@ -50,6 +52,30 @@ const main = async () => {
   const logger = createLogger(loadedConfig.naplink.logLevel);
   if (createdDirectories.length > 0) {
     logger.info("miz", "created missing project directories", { directories: createdDirectories });
+  }
+  if (loadedConfig.video.enabled) {
+    try {
+      const removedArtifacts = await cleanupStaleVideoArtifacts(loadedConfig.video);
+      if (removedArtifacts.length > 0) {
+        logger.info("miz", "removed stale video artifacts", { count: removedArtifacts.length });
+      }
+    } catch (error) {
+      logger.warn("miz", "stale video artifact cleanup failed", error);
+    }
+    try {
+      const ffmpeg = await ensureFfmpeg(loadedConfig.video, loadedConfig.network, {
+        onDownloadProgress: (progress) => {
+          logger.info("miz", formatFfmpegDownloadProgress(progress), {
+            archive: progress.archiveName,
+            receivedBytes: progress.receivedBytes,
+            totalBytes: progress.totalBytes,
+          });
+        },
+      });
+      logger.info("miz", `FFmpeg ${ffmpeg.status}`, { path: ffmpeg.path, version: ffmpeg.version });
+    } catch (error) {
+      logger.warn("miz", "automatic FFmpeg installation failed; video commands may be unavailable", error);
+    }
   }
   const gateway = createGateway(loadedConfig, logger);
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { getDailyWallpaper } from "@/wallpaper";
+import { createWallpaperMessage, getDailyWallpaper } from "@/wallpaper";
 
 const originalFetch = globalThis.fetch;
 
@@ -8,6 +8,21 @@ afterEach(() => {
 });
 
 describe("daily wallpaper cache", () => {
+  test("uses the current local date instead of Bing's publication date", () => {
+    const message = JSON.stringify(createWallpaperMessage(
+      {
+        id: "cached-wallpaper",
+        date: "20300731",
+        copyright: "Bing",
+        imageBase64: "AA==",
+      },
+      new Date(2030, 7, 1, 0, 1),
+    ));
+
+    expect(message).toContain("🌄 今日风景 · 2030年08月01日");
+    expect(message).not.toContain("2030年07月31日");
+  });
+
   test("downloads Bing's UHD rendition and preserves its original bytes", async () => {
     const metadataUrl = "https://metadata.example.test/uhd";
     const imageBaseUrl = "https://images.example.test";

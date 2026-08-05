@@ -26,6 +26,8 @@ export type MessageSendOptions = {
   timeoutMs?: number;
 };
 
+export type ForwardMessageSendOptions = ForwardMessageOptions & MessageSendOptions;
+
 export type MessageHandler = (message: IncomingMessage) => void | Promise<void>;
 
 export type GroupMessageUnavailableError = Error & Readonly<{
@@ -70,6 +72,11 @@ export type Gateway = {
     target: IncomingMessage,
     messages: readonly ForwardMessageContent[],
     options?: ForwardMessageOptions,
+  ): Promise<unknown>;
+  sendForwardMessageWithoutRetry(
+    target: IncomingMessage,
+    messages: readonly ForwardMessageContent[],
+    options?: ForwardMessageSendOptions,
   ): Promise<unknown>;
   onMessage(handler: MessageHandler): () => void;
 };
@@ -181,6 +188,8 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
       ),
     sendForwardMessage: (target, messages, options) =>
       sendForwardMessage(client, target, messages, options, canSendGroupMessage),
+    sendForwardMessageWithoutRetry: (target, messages, options) =>
+      sendForwardMessageWithoutRetry(client, target, messages, options, canSendGroupMessage),
     onMessage: (handler) => {
       messageHandlers.add(handler);
       return () => {
@@ -225,6 +234,42 @@ const sendForwardMessage = (
   }
 
   throw new Error("Cannot send forward message: target has no group_id or user_id");
+};
+
+const sendForwardMessageWithoutRetry = async (
+  client: NapLink,
+  target: IncomingMessage,
+  messages: readonly ForwardMessageContent[],
+  options: ForwardMessageSendOptions = {},
+  canSendGroupMessage: (groupId: number | string) => Promise<boolean>,
+) => {
+  const params = createForwardMessageParams(target, messages, options);
+  if (target.groupId !== undefined && !await canSendGroupMessage(target.groupId)) {
+    throw createGroupMessageUnavailableError(target.groupId);
+  }
+  return callApiWithoutRetry(client, "send_forward_msg", params, options.timeoutMs);
+};
+
+const createForwardMessageParams = (
+  target: IncomingMessage,
+  messages: readonly ForwardMessageContent[],
+  options: ForwardMessageOptions,
+) => {
+  const targetId = target.groupId !== undefined
+    ? { group_id: target.groupId }
+    : target.userId !== undefined
+    ? { user_id: target.userId }
+    : undefined;
+  if (!targetId) {
+    throw new Error("Cannot send forward message: target has no group_id or user_id");
+  }
+  return {
+    ...targetId,
+    messages: messages.map((message) => createForwardNode(message, options)),
+    source: options.source,
+    summary: options.summary,
+    prompt: options.title,
+  };
 };
 
 const createForwardNode = (message: ForwardMessageContent, options: ForwardMessageOptions) => ({

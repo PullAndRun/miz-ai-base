@@ -1,11 +1,15 @@
-import type { VideoSegment } from "@naplink/naplink";
-import type { MizPlugin } from "@/plugins";
 import type { Logger } from "@/logger";
-import type { VideoConfig } from "@/config";
+import type { MizPlugin } from "@/plugins";
+import {
+  deliverVideoWithFallback,
+  isVideoDeliveryError,
+  isVideoDeliveryUnknownError,
+  type VideoDeliveryError,
+} from "@/video-delivery";
+import { tryAcquireVideoJob } from "@/video-jobs";
 import {
   deleteDownloadedVideo,
   downloadVideo,
-  getNapcatVideoFile,
   getVideoDuration,
   isBilibiliUrl,
   isVideoDurationAllowed,
@@ -23,7 +27,15 @@ const videoPlugin: MizPlugin = {
     "把链接里的视频搬到聊天里，最长 10 分钟。普通成员可用 B 站链接，白名单成员可用其他站点。",
     "用法：miz video 视频链接",
   ].join("\n"),
-  async handle({ command, config, logger, message, reply, replyForward, replyWithoutRetry }) {
+  async handle({
+    command,
+    config,
+    logger,
+    message,
+    reply,
+    replyForwardWithoutRetry,
+    replyWithoutRetry,
+  }) {
     const url = command.args.trim();
     if (!url) {
       await reply("🎬 视频链接还没放进来。\n例如：miz video https://...\n时长记得控制在 10 分钟以内。");
@@ -46,112 +58,132 @@ const videoPlugin: MizPlugin = {
       return;
     }
 
-    let deliveryAttempted = false;
+    const admission = tryAcquireVideoJob(
+      `${message.groupId ?? "private"}:${message.userId ?? "unknown"}`,
+      config.video.maxConcurrentJobs,
+    );
+    if (!admission.acquired) {
+      await reply(admission.reason === "duplicate"
+        ? "你已经有一个视频在处理中，请等它完成后再发下一个。"
+        : "现在处理中的视频有点多，请稍后再试。");
+      return;
+    }
+
     try {
-      const duration = await getVideoDuration(url, config.video, config.network, config.bilibili);
-      if (duration === undefined) {
-        await reply("没能读到视频时长。链接可能失效、需要登录，或内容没有公开，换一个能直接打开的链接试试吧。");
-        return;
-      }
-
-      if (!isVideoDurationAllowed(duration)) {
-        await reply("这段视频超过 10 分钟，搬不过来啦。换个短版，或者先裁剪一下吧。");
-        return;
-      }
-
-      const downloadedVideoPath = await downloadVideo({
+      await processVideo({
         url,
-        config: config.video,
-        network: config.network,
-        bilibili: config.bilibili,
+        config,
+        logger,
+        reply,
+        sendVideo: (videoMessage) =>
+          replyWithoutRetry([videoMessage], { timeoutMs: VIDEO_SEND_TIMEOUT_MS }),
+        sendForward: (videoMessage) => replyForwardWithoutRetry(
+          [[videoMessage]],
+          {
+            title: "视频",
+            source: "miz video",
+            summary: "1 条视频",
+            timeoutMs: VIDEO_SEND_TIMEOUT_MS,
+          },
+        ),
       });
-      let delayedCleanup = false;
-      try {
-        deliveryAttempted = true;
-        const videoMessage = createNapcatVideoMessage(downloadedVideoPath, config.video);
-        const result = await deliverVideoWithForwardFallback(
-          () => replyWithoutRetry(videoMessage, { timeoutMs: VIDEO_SEND_TIMEOUT_MS }),
-          () => replyForward(
-            [[videoMessage]],
-            {
-              title: "视频",
-              source: "miz video",
-              summary: "1 条视频",
-            },
-          ),
-        );
-        delayedCleanup = result.encounteredTimeout;
-      } catch (error) {
-        delayedCleanup = isVideoDeliveryError(error) && error.encounteredTimeout;
-        throw error;
-      } finally {
-        if (delayedCleanup) {
-          scheduleVideoCleanup(downloadedVideoPath, logger);
-        } else {
-          await cleanupVideoFile(downloadedVideoPath, logger);
-        }
-      }
-    } catch (error) {
-      if (!isVideoDeliveryError(error)) {
-        logger.error("plugin", "video processing failed", error);
-      }
-      await reply(deliveryAttempted
-        ? "视频普通发送和合并转发都没有成功。请稍后再试；如果持续失败，请检查 NapCat 和 QQ 的富媒体发送状态。"
-        : "视频刚才在路上卡住了，稍后再试一次吧。如果内容需要登录，请让管理员检查对应站点的登录配置。");
+    } finally {
+      admission.release();
     }
   },
 };
 
 export default videoPlugin;
 
-export const isVideoSendTimeoutError = (error: unknown) =>
-  typeof error === "object" &&
-  error !== null &&
-  (error as { code?: unknown }).code === "E_API_TIMEOUT";
-
-export const createNapcatVideoMessage = (
-  videoPath: string,
-  config: VideoConfig,
-): VideoSegment => ({
-  type: "video",
-  data: {
-    file: getNapcatVideoFile(videoPath, config),
-  },
-});
-
-export type VideoDeliveryError = AggregateError & Readonly<{
-  name: "VideoDeliveryError";
-  encounteredTimeout: boolean;
-}>;
-
-export const isVideoDeliveryError = (error: unknown): error is VideoDeliveryError =>
-  error instanceof AggregateError && error.name === "VideoDeliveryError";
-
-export const deliverVideoWithForwardFallback = async (
-  sendVideoMessage: () => Promise<unknown>,
-  sendForwardMessage: () => Promise<unknown>,
-): Promise<{ mode: "message" | "forward"; encounteredTimeout: boolean }> => {
+const processVideo = async ({
+  url,
+  config,
+  logger,
+  reply,
+  sendVideo,
+  sendForward,
+}: {
+  url: string;
+  config: Parameters<NonNullable<MizPlugin["handle"]>>[0]["config"];
+  logger: Logger;
+  reply: (message: unknown) => Promise<unknown>;
+  sendVideo: Parameters<typeof deliverVideoWithFallback>[2];
+  sendForward: Parameters<typeof deliverVideoWithFallback>[3];
+}) => {
+  let deliveryAttempted = false;
   try {
-    await sendVideoMessage();
-    return { mode: "message", encounteredTimeout: false };
-  } catch (videoError) {
-    try {
-      await sendForwardMessage();
-      return {
-        mode: "forward",
-        encounteredTimeout: isVideoSendTimeoutError(videoError),
-      };
-    } catch (forwardError) {
-      throw Object.assign(
-        new AggregateError([videoError, forwardError], "video message and forward delivery failed"),
-        {
-          name: "VideoDeliveryError" as const,
-          encounteredTimeout:
-            isVideoSendTimeoutError(videoError) || isVideoSendTimeoutError(forwardError),
-        },
-      );
+    const duration = await getVideoDuration(url, config.video, config.network, config.bilibili);
+    if (duration === undefined) {
+      await reply("没能读到视频时长。链接可能失效、需要登录，或内容没有公开，换一个能直接打开的链接试试吧。");
+      return;
     }
+
+    if (!isVideoDurationAllowed(duration)) {
+      await reply("这段视频超过 10 分钟，搬不过来啦。换个短版，或者先裁剪一下吧。");
+      return;
+    }
+
+    const downloadedVideoPath = await downloadVideo({
+      url,
+      config: config.video,
+      network: config.network,
+      bilibili: config.bilibili,
+    });
+    let delayedCleanup = false;
+    try {
+      deliveryAttempted = true;
+      await deliverVideoWithFallback(
+        downloadedVideoPath,
+        config.video,
+        sendVideo,
+        sendForward,
+      );
+    } catch (error) {
+      delayedCleanup = isVideoDeliveryUnknownError(error);
+      throw error;
+    } finally {
+      if (delayedCleanup) {
+        scheduleVideoCleanup(downloadedVideoPath, logger);
+      } else {
+        await cleanupVideoFile(downloadedVideoPath, logger);
+      }
+    }
+  } catch (error) {
+    if (isVideoDeliveryUnknownError(error)) {
+      logger.warn("plugin", "video delivery timed out with an unknown result", {
+        mode: error.mode,
+        error: describeError(error.cause),
+      });
+      await reply("视频发送请求超时了，结果暂时无法确认。请先看看聊天里是否已经出现视频，避免重复发送。");
+      return;
+    }
+    if (isVideoDeliveryError(error)) {
+      logger.warn("plugin", "all video delivery strategies failed", {
+        attempts: describeDeliveryAttempts(error),
+      });
+    } else {
+      logger.error("plugin", "video processing failed", error);
+    }
+    await reply(deliveryAttempted
+      ? "共享文件、Base64 和文件转发都没能把视频发出去。请稍后再试；如果持续失败，请检查 NapCat 和 QQ 的富媒体发送状态。"
+      : "视频刚才在下载或转码时卡住了，稍后再试一次吧。如果内容需要登录，请让管理员检查对应站点的登录配置。");
   }
+};
+
+const describeDeliveryAttempts = (error: VideoDeliveryError) =>
+  error.attempts.map((attempt) => ({
+    mode: attempt.mode,
+    error: describeError(attempt.error),
+  }));
+
+const describeError = (error: unknown) => {
+  if (error instanceof Error) {
+    return { name: error.name, message: error.message };
+  }
+  if (typeof error === "object" && error !== null) {
+    return { code: (error as { code?: unknown }).code };
+  }
+  return { value: String(error) };
 };
 
 const cleanupVideoFile = async (videoPath: string, logger: Logger) => {

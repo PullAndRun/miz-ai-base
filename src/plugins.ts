@@ -32,7 +32,19 @@ export type PluginContext = {
     source?: string;
     summary?: string;
   }): Promise<unknown>;
-  gateway: Pick<Gateway, "getGroupList" | "sendGroupMessage" | "sendPrivateMessage" | "sendForwardMessage">;
+  replyForwardWithoutRetry(messages: readonly ForwardMessageContent[], options?: {
+    title?: string;
+    source?: string;
+    summary?: string;
+    timeoutMs?: number;
+  }): Promise<unknown>;
+  gateway: Pick<Gateway,
+    | "getGroupList"
+    | "sendGroupMessage"
+    | "sendPrivateMessage"
+    | "sendForwardMessage"
+    | "sendForwardMessageWithoutRetry"
+  >;
   logger: Logger;
   plugins: readonly PluginInfo[];
   commandPrefix: string;
@@ -364,6 +376,13 @@ const createPluginMessageContext = ({
       title: options?.title,
       source: options?.source,
       summary: options?.summary,
+    }),
+  replyForwardWithoutRetry: (messages, options) =>
+    gateway.sendForwardMessageWithoutRetry(message, messages, {
+      title: options?.title,
+      source: options?.source,
+      summary: options?.summary,
+      timeoutMs: options?.timeoutMs,
     }),
 });
 

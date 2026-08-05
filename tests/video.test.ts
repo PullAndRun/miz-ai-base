@@ -1,25 +1,36 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, readdir, rm, truncate, utimes, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  BILIBILI_QQ_VIDEO_FORMAT,
+  canSendNapcatVideoAsDataUrl,
+  cleanupStaleVideoArtifacts,
   createFfmpegTranscodeArgs,
   createTranscodedVideoPath,
   createYtDlpCookieFileContents,
   createVideoSourcePathTemplate,
+  createYtDlpFfmpegLocationArgs,
   createYtDlpRequestArgs,
+  createYtDlpVideoFormatArgs,
   createYtDlpUpdateArgs,
+  getNapcatVideoDataUrl,
   getNapcatVideoFile,
   isBilibiliUrl,
   isRetryableYtDlpError,
   isVideoDurationAllowed,
+  MAX_NAPCAT_DATA_URL_VIDEO_BYTES,
   MAX_VIDEO_DURATION_SECONDS,
 } from "@/video";
 import type { VideoConfig } from "@/config";
 import {
+  createNapcatDataUrlVideoMessage,
   createNapcatVideoMessage,
-  deliverVideoWithForwardFallback,
+  deliverVideoWithFallback,
   isVideoDeliveryError,
+  isVideoDeliveryUnknownError,
   isVideoSendTimeoutError,
-} from "../plugins/video";
+} from "@/video-delivery";
 
 const videoConfig: VideoConfig = {
   enabled: true,
@@ -32,6 +43,8 @@ const videoConfig: VideoConfig = {
   ytDlpWindowsPath: "tools/yt-dlp.exe",
   ffmpegLinuxPath: "tools/ffmpeg",
   ffmpegWindowsPath: "tools/ffmpeg.exe",
+  ffmpegAutoDownload: true,
+  maxConcurrentJobs: 2,
   updateCron: "0 0 * * *",
 };
 const networkConfig = { proxyUrl: "" };
@@ -78,6 +91,77 @@ describe("video download filenames", () => {
       },
     });
   });
+
+  test("matches the Data URL produced by NapCat's video picker", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
+    const videoPath = path.join(directory, "video.mp4");
+    try {
+      await writeFile(videoPath, Buffer.from([0, 1, 2, 253, 254, 255]));
+
+      expect(await getNapcatVideoDataUrl(videoPath)).toBe(
+        "data:video/mp4;base64,AAEC/f7/",
+      );
+      expect(await createNapcatDataUrlVideoMessage(videoPath)).toEqual({
+        type: "video",
+        data: {
+          file: "data:video/mp4;base64,AAEC/f7/",
+        },
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps Data URL payloads below NapCat's WebSocket limit", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
+    const videoPath = path.join(directory, "video.mp4");
+    try {
+      await writeFile(videoPath, Buffer.from([0, 1, 2]));
+      expect(await canSendNapcatVideoAsDataUrl(videoPath)).toBeTrue();
+
+      await truncate(videoPath, MAX_NAPCAT_DATA_URL_VIDEO_BYTES + 1);
+      expect(await canSendNapcatVideoAsDataUrl(videoPath)).toBeFalse();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("stale video artifact cleanup", () => {
+  test("removes only old miz video files", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "miz-video-cleanup-test-"));
+    const staleArtifact = path.join(
+      directory,
+      "miz-video-64c82c6d-1c58-4e2d-8cec-53c48eccb21d.mp4",
+    );
+    const currentArtifact = path.join(
+      directory,
+      "miz-video-74c82c6d-1c58-4e2d-9cec-53c48eccb21d-source.mp4.part",
+    );
+    const unrelatedFile = path.join(directory, "keep.mp4");
+    try {
+      await Promise.all([
+        writeFile(staleArtifact, "stale"),
+        writeFile(currentArtifact, "current"),
+        writeFile(unrelatedFile, "unrelated"),
+      ]);
+      const oldTimestamp = new Date(Date.now() - 60_000);
+      await utimes(staleArtifact, oldTimestamp, oldTimestamp);
+
+      const removed = await cleanupStaleVideoArtifacts({
+        ...videoConfig,
+        downloadDirectory: directory,
+      }, 30_000);
+
+      expect(removed).toEqual([staleArtifact]);
+      expect((await readdir(directory)).sort()).toEqual([
+        path.basename(currentArtifact),
+        path.basename(unrelatedFile),
+      ].sort());
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("ffmpeg video transcoding", () => {
@@ -89,6 +173,36 @@ describe("ffmpeg video transcoding", () => {
     expect(args).toContain("aac");
     expect(args).toContain("+faststart");
     expect(args.at(-1)).toBe("output.mp4");
+  });
+
+  test("preserves Bilibili's QQ-compatible H.264/AAC streams", () => {
+    expect(createYtDlpVideoFormatArgs(true)).toEqual([
+      "--format",
+      BILIBILI_QQ_VIDEO_FORMAT,
+      "--merge-output-format",
+      "mp4",
+    ]);
+    expect(createYtDlpVideoFormatArgs(false)).toEqual([
+      "--format",
+      "bv*+ba/b",
+      "--merge-output-format",
+      "mkv",
+    ]);
+  });
+
+  test("passes the stable FFmpeg resolved from PATH to yt-dlp", () => {
+    const stableFfmpeg = process.platform === "win32"
+      ? "C:\\stable-ffmpeg\\ffmpeg.exe"
+      : "/opt/stable-ffmpeg/ffmpeg";
+    expect(createYtDlpFfmpegLocationArgs({
+      ...videoConfig,
+      ffmpegLinuxPath: "ffmpeg",
+      ffmpegWindowsPath: "ffmpeg",
+    }, () => stableFfmpeg)).toEqual(["--ffmpeg-location", stableFfmpeg]);
+    expect(createYtDlpFfmpegLocationArgs(videoConfig)).toEqual([
+      "--ffmpeg-location",
+      path.resolve(process.platform === "win32" ? "tools/ffmpeg.exe" : "tools/ffmpeg"),
+    ]);
   });
 });
 
@@ -180,59 +294,170 @@ describe("video delivery timeout", () => {
 });
 
 describe("video delivery fallback", () => {
-  test("uses the ordinary video message when it succeeds", async () => {
+  test("uses the NapCat-readable shared file URL first", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
+    const videoPath = path.join(directory, "video.mp4");
+    const sentFiles: string[] = [];
     let forwards = 0;
+    try {
+      await writeFile(videoPath, Buffer.from([0, 1, 2]));
+      const result = await deliverVideoWithFallback(
+        videoPath,
+        videoConfig,
+        async (message) => {
+          sentFiles.push(message.data.file);
+        },
+        async () => {
+          forwards += 1;
+        },
+      );
 
-    const result = await deliverVideoWithForwardFallback(
-      async () => undefined,
-      async () => {
-        forwards += 1;
-      },
-    );
-
-    expect(result).toEqual({ mode: "message", encounteredTimeout: false });
-    expect(forwards).toBe(0);
+      expect(result).toEqual({ mode: "file" });
+      expect(sentFiles).toEqual([`file:///app/media/${path.basename(videoPath)}`]);
+      expect(forwards).toBe(0);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
-  test("uses one forward attempt after ordinary delivery fails", async () => {
+  test("stops fallback after a timeout because the send result is unknown", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
+    const videoPath = path.join(directory, "video.mp4");
+    const sentFiles: string[] = [];
     let forwards = 0;
+    try {
+      await writeFile(videoPath, Buffer.from([0, 1, 2]));
+      const delivery = deliverVideoWithFallback(
+        videoPath,
+        videoConfig,
+        async (message) => {
+          sentFiles.push(message.data.file);
+          if (message.data.file.startsWith("file:")) {
+            throw { code: "E_API_TIMEOUT" };
+          }
+        },
+        async () => {
+          forwards += 1;
+        },
+      );
 
-    const result = await deliverVideoWithForwardFallback(
-      async () => {
-        throw new Error("ordinary send failed");
-      },
-      async () => {
-        forwards += 1;
-      },
-    );
-
-    expect(result).toEqual({ mode: "forward", encounteredTimeout: false });
-    expect(forwards).toBe(1);
+      const error = await delivery.catch((deliveryError: unknown) => deliveryError);
+      expect(isVideoDeliveryUnknownError(error)).toBeTrue();
+      expect(error).toMatchObject({ mode: "file" });
+      expect(sentFiles).toEqual([`file:///app/media/${path.basename(videoPath)}`]);
+      expect(forwards).toBe(0);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
-  test("preserves an unknown timeout result for delayed cleanup", async () => {
-    const result = await deliverVideoWithForwardFallback(
-      async () => {
-        throw { code: "E_API_TIMEOUT" };
-      },
-      async () => undefined,
-    );
+  test("falls back to Base64 after a definite shared-file failure", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
+    const videoPath = path.join(directory, "video.mp4");
+    const sentFiles: string[] = [];
+    let forwards = 0;
+    try {
+      await writeFile(videoPath, Buffer.from([0, 1, 2]));
+      const result = await deliverVideoWithFallback(
+        videoPath,
+        videoConfig,
+        async (message) => {
+          sentFiles.push(message.data.file);
+          if (message.data.file.startsWith("file:")) {
+            throw new Error("shared file is unavailable");
+          }
+        },
+        async () => {
+          forwards += 1;
+        },
+      );
 
-    expect(result).toEqual({ mode: "forward", encounteredTimeout: true });
+      expect(result).toEqual({ mode: "data-url" });
+      expect(sentFiles).toEqual([
+        `file:///app/media/${path.basename(videoPath)}`,
+        "data:video/mp4;base64,AAEC",
+      ]);
+      expect(forwards).toBe(0);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
-  test("reports delivery failure after both attempts fail", async () => {
-    const delivery = deliverVideoWithForwardFallback(
-      async () => {
-        throw new Error("ordinary send failed");
-      },
-      async () => {
-        throw new Error("forward send failed");
-      },
-    );
+  test("uses the shared file URL without constructing Base64 for oversized videos", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
+    const videoPath = path.join(directory, "video.mp4");
+    const sentFiles: string[] = [];
+    try {
+      await writeFile(videoPath, Buffer.alloc(0));
+      await truncate(videoPath, MAX_NAPCAT_DATA_URL_VIDEO_BYTES + 1);
+      const result = await deliverVideoWithFallback(
+        videoPath,
+        { ...videoConfig, runtimeMode: "docker" },
+        async (message) => {
+          sentFiles.push(message.data.file);
+        },
+        async () => undefined,
+      );
 
-    const error = await delivery.catch((deliveryError: unknown) => deliveryError);
-    expect(isVideoDeliveryError(error)).toBeTrue();
-    expect((error as AggregateError).errors).toHaveLength(2);
+      expect(result).toEqual({ mode: "file" });
+      expect(sentFiles).toEqual([`file:///app/media/${path.basename(videoPath)}`]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
+
+  test("uses a file-backed forward after ordinary file and Base64 delivery fail", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
+    const videoPath = path.join(directory, "video.mp4");
+    const sentFiles: string[] = [];
+    const forwardedFiles: string[] = [];
+    try {
+      await writeFile(videoPath, Buffer.from([0, 1, 2]));
+      const result = await deliverVideoWithFallback(
+        videoPath,
+        videoConfig,
+        async (message) => {
+          sentFiles.push(message.data.file);
+          throw new Error("ordinary send failed");
+        },
+        async (message) => {
+          forwardedFiles.push(message.data.file);
+        },
+      );
+
+      expect(result).toEqual({ mode: "forward" });
+      expect(sentFiles).toEqual([
+        `file:///app/media/${path.basename(videoPath)}`,
+        "data:video/mp4;base64,AAEC",
+      ]);
+      expect(forwardedFiles).toEqual([`file:///app/media/${path.basename(videoPath)}`]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("reports all three delivery errors after every transport fails", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
+    const videoPath = path.join(directory, "video.mp4");
+    try {
+      await writeFile(videoPath, Buffer.from([0, 1, 2]));
+      const delivery = deliverVideoWithFallback(
+        videoPath,
+        { ...videoConfig, runtimeMode: "docker" },
+        async () => {
+          throw new Error("ordinary send failed");
+        },
+        async () => {
+          throw new Error("forward send failed");
+        },
+      );
+
+      const error = await delivery.catch((deliveryError: unknown) => deliveryError);
+      expect(isVideoDeliveryError(error)).toBeTrue();
+      expect((error as AggregateError).errors).toHaveLength(3);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
 });

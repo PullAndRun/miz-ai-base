@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { BilibiliConfig, NetworkConfig, VideoConfig } from "@/config";
@@ -12,7 +12,22 @@ const MAX_CAPTURED_PROCESS_OUTPUT_BYTES = 1024 * 1024;
 const YT_DLP_DOWNLOAD_RETRY_COUNT = 20;
 const YT_DLP_OUTER_RETRY_COUNT = 1;
 const YT_DLP_OUTER_RETRY_DELAY_MS = 2_000;
+export const STALE_VIDEO_ARTIFACT_MAX_AGE_MS = 24 * 60 * 60_000;
+const VIDEO_ARTIFACT_NAME_PATTERN = /^miz-video-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?:-source)?\./i;
+export const BILIBILI_QQ_VIDEO_FORMAT = [
+  "30080+30280",
+  "30064+30280",
+  "30032+30280",
+  "30016+30280",
+  "bv*[vcodec^=avc1][height<=1080]+ba[acodec^=mp4a]",
+  "b[ext=mp4][vcodec^=avc1][height<=1080]",
+].join("/");
 export const MAX_VIDEO_DURATION_SECONDS = 10 * 60;
+const NAPCAT_WEBSOCKET_MAX_PAYLOAD_BYTES = 50 * 1024 * 1024;
+const NAPCAT_DATA_URL_PAYLOAD_HEADROOM_BYTES = 1024 * 1024;
+export const MAX_NAPCAT_DATA_URL_VIDEO_BYTES = Math.floor(
+  (NAPCAT_WEBSOCKET_MAX_PAYLOAD_BYTES - NAPCAT_DATA_URL_PAYLOAD_HEADROOM_BYTES) * 3 / 4,
+);
 
 export const isVideoDurationAllowed = (durationSeconds: number) =>
   Number.isFinite(durationSeconds) && durationSeconds > 0 && durationSeconds <= MAX_VIDEO_DURATION_SECONDS;
@@ -60,6 +75,7 @@ export const downloadVideo = async ({
   const downloadStartedAt = Date.now();
   const requestId = crypto.randomUUID();
   const transcodedVideoPath = createTranscodedVideoPath(downloadDirectory, requestId);
+  const preserveBilibiliStreams = isBilibiliUrl(url, config.bilibiliHosts);
 
   const args = [
     "--no-playlist",
@@ -75,12 +91,8 @@ export const downloadVideo = async ({
     "fragment:exp=1:20",
     "--output",
     createVideoSourcePathTemplate(downloadDirectory, requestId),
-    "--format",
-    "bv*+ba/b",
-    "--merge-output-format",
-    "mkv",
-    "--ffmpeg-location",
-    getFfmpegPath(config),
+    ...createYtDlpVideoFormatArgs(preserveBilibiliStreams),
+    ...createYtDlpFfmpegLocationArgs(config),
     "--print",
     "after_move:filepath",
   ];
@@ -92,11 +104,14 @@ export const downloadVideo = async ({
       throw new Error("yt-dlp returned a missing video file");
     }
 
-    await runFfmpeg(config, createFfmpegTranscodeArgs(sourceVideoPath, transcodedVideoPath));
-    const transcodedFile = await stat(transcodedVideoPath).catch(() => undefined);
-    if (!transcodedFile?.isFile() || transcodedFile.size === 0) {
-      throw new Error("ffmpeg returned a missing or empty video file");
+    if (preserveBilibiliStreams && path.extname(sourceVideoPath).toLowerCase() === ".mp4") {
+      await rename(sourceVideoPath, transcodedVideoPath);
+      await assertUsableVideoFile(transcodedVideoPath, "yt-dlp returned a missing or empty video file");
+      return transcodedVideoPath;
     }
+
+    await runFfmpeg(config, createFfmpegTranscodeArgs(sourceVideoPath, transcodedVideoPath));
+    await assertUsableVideoFile(transcodedVideoPath, "ffmpeg returned a missing or empty video file");
 
     await rm(sourceVideoPath, { force: true });
     return transcodedVideoPath;
@@ -131,7 +146,35 @@ export const getNapcatVideoFile = (videoPath: string, config: VideoConfig) => {
   return fileUrl.href;
 };
 
+export const getNapcatVideoDataUrl = async (videoPath: string) =>
+  `data:video/mp4;base64,${(await readFile(videoPath)).toString("base64")}`;
+
+export const canSendNapcatVideoAsDataUrl = async (videoPath: string) =>
+  (await stat(videoPath)).size <= MAX_NAPCAT_DATA_URL_VIDEO_BYTES;
+
 export const deleteDownloadedVideo = (videoPath: string) => rm(videoPath, { force: true });
+
+export const cleanupStaleVideoArtifacts = async (
+  config: VideoConfig,
+  maxAgeMs = STALE_VIDEO_ARTIFACT_MAX_AGE_MS,
+) => {
+  const downloadDirectory = getDownloadDirectory(config);
+  const cutoff = Date.now() - maxAgeMs;
+  const entries = await readdir(downloadDirectory, { withFileTypes: true }).catch(() => []);
+  const removed = (await Promise.all(entries.map(async (entry) => {
+    if (!entry.isFile() || !VIDEO_ARTIFACT_NAME_PATTERN.test(entry.name)) {
+      return undefined;
+    }
+    const artifactPath = path.join(downloadDirectory, entry.name);
+    const artifact = await stat(artifactPath).catch(() => undefined);
+    if (!artifact || artifact.mtimeMs > cutoff) {
+      return undefined;
+    }
+    await rm(artifactPath, { force: true });
+    return artifactPath;
+  }))).filter((artifactPath): artifactPath is string => artifactPath !== undefined);
+  return removed;
+};
 
 export const createYtDlpUpdateArgs = (network: NetworkConfig) => [
   "-U",
@@ -143,6 +186,18 @@ export const createVideoSourcePathTemplate = (downloadDirectory: string, request
 
 export const createTranscodedVideoPath = (downloadDirectory: string, requestId: string) =>
   path.join(downloadDirectory, `miz-video-${requestId}.mp4`);
+
+export const createYtDlpVideoFormatArgs = (preserveBilibiliStreams: boolean) => [
+  "--format",
+  preserveBilibiliStreams ? BILIBILI_QQ_VIDEO_FORMAT : "bv*+ba/b",
+  "--merge-output-format",
+  preserveBilibiliStreams ? "mp4" : "mkv",
+];
+
+export const createYtDlpFfmpegLocationArgs = (
+  config: VideoConfig,
+  findExecutable: (name: string) => string | null = Bun.which,
+) => ["--ffmpeg-location", resolveFfmpegExecutable(config, findExecutable)];
 
 export const createFfmpegTranscodeArgs = (sourceVideoPath: string, outputVideoPath: string) => [
   "-nostdin",
@@ -326,6 +381,7 @@ const runProcess = (
       forceKillTimeout = setTimeout(() => {
         if (!settled) {
           child.kill("SIGKILL");
+          settle(() => reject(new Error(`${processName} timed out`)));
         }
       }, PROCESS_FORCE_KILL_DELAY_MS);
     }, timeoutMs);
@@ -333,11 +389,11 @@ const runProcess = (
     child.stdout.on("data", (chunk: Buffer) => appendCapturedOutput(stdout, chunk));
     // Consume stderr so verbose extractor errors cannot block the child process.
     child.stderr.on("data", (chunk: Buffer) => appendCapturedOutput(stderr, chunk));
-    child.once("error", () => {
-      settle(() => reject(new Error(`Unable to start ${processName}`)));
+    child.once("error", (error) => {
+      settle(() => reject(new Error(`Unable to start ${processName}: ${error.message}`, { cause: error })));
     });
     child.once("close", (code) => {
-      if (code === 0) {
+      if (code === 0 && !timedOut) {
         settle(() => resolve(Buffer.concat(stdout.chunks).toString("utf8")));
         return;
       }
@@ -378,17 +434,31 @@ const getYtDlpPath = (config: VideoConfig) => {
     throw new Error("yt-dlp path is not configured for this operating system");
   }
 
-  return executable;
+  return resolveExecutable(executable);
 };
 
-const getFfmpegPath = (config: VideoConfig) => {
-  const executable = process.platform === "win32" ? config.ffmpegWindowsPath : config.ffmpegLinuxPath;
+const getFfmpegPath = (config: VideoConfig) => resolveFfmpegExecutable(config);
+
+const getConfiguredFfmpegExecutable = (config: VideoConfig) =>
+  process.platform === "win32" ? config.ffmpegWindowsPath : config.ffmpegLinuxPath;
+
+const resolveFfmpegExecutable = (
+  config: VideoConfig,
+  findExecutable: (name: string) => string | null = Bun.which,
+) => {
+  const executable = getConfiguredFfmpegExecutable(config);
   if (!executable) {
     throw new Error("ffmpeg path is not configured for this operating system");
   }
-
-  return path.resolve(executable);
+  return resolveExecutable(executable, findExecutable);
 };
+
+const resolveExecutable = (
+  executable: string,
+  findExecutable: (name: string) => string | null = Bun.which,
+) => /[\\/]/.test(executable) || path.isAbsolute(executable)
+  ? path.resolve(executable)
+  : findExecutable(executable) ?? executable;
 
 const getDownloadDirectory = (config: VideoConfig) =>
   config.runtimeMode === "docker"
@@ -449,6 +519,13 @@ const deleteDownloadArtifacts = async (downloadDirectory: string, requestId: str
       .filter((entry) => entry.isFile() && entry.name.includes(requestId))
       .map((entry) => rm(path.join(downloadDirectory, entry.name), { force: true }).catch(() => undefined)),
   );
+};
+
+const assertUsableVideoFile = async (videoPath: string, message: string) => {
+  const videoFile = await stat(videoPath).catch(() => undefined);
+  if (!videoFile?.isFile() || videoFile.size === 0) {
+    throw new Error(message);
+  }
 };
 
 const isFinalDownloadedPath = (value: string) =>

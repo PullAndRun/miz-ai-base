@@ -20,7 +20,7 @@ miz 面向群聊协作和内容订阅场景，内置提醒、日程、活动报�
 - TypeScript：机器人、插件和脚本的实现语言。
 - [NapLink](https://www.npmjs.com/package/@naplink/naplink)：连接 NapCat OneBot WebSocket 网关。
 - PostgreSQL + Prisma：保存订阅状态、提醒、日程、活动、FAQ、待办和消息投递记录。
-- yt-dlp + FFmpeg：视频下载、合并和 H.264/AAC 转码。
+- yt-dlp + 稳定版 FFmpeg：视频下载、合并和 H.264/AAC 转码。
 
 ## 快速开始
 
@@ -30,6 +30,7 @@ miz 面向群聊协作和内容订阅场景，内置提醒、日程、活动报�
 - 已启用 OneBot WebSocket 的 NapCat
 - PostgreSQL
 - 视频功能需要 `yt-dlp` 和 `ffmpeg`
+- FFmpeg 请使用稳定发行版（已验证 8.1.2）；不要使用 Git master/nightly 开发版，后者生成的 MP4 可能被 QQ 富媒体上传拒绝
 
 建议先确认 NapCat WebSocket、访问令牌和 PostgreSQL 均可从 miz 的运行环境访问。
 
@@ -68,12 +69,28 @@ FF14 低价提醒和 VTB 群订阅分别参考：
 
 ### 3. 准备视频工具（可选）
 
-如果启用视频功能，将工具放到以下默认位置，或在 `[miz.video]` 中改为实际路径：
+如果启用视频功能，需要先将 yt-dlp 放到以下默认位置，或在 `[miz.video]` 中改为实际路径：
 
 | 系统 | yt-dlp | FFmpeg |
 | --- | --- | --- |
 | Windows | `tools/yt-dlp.exe` | `tools/ffmpeg.exe` |
 | Linux / Docker | `tools/yt-dlp` | `tools/ffmpeg` |
+
+FFmpeg 默认不需要手动下载。启动时 miz 会执行 `ffmpeg -version`；缺失或不是已验证的 8.1 系列时，会通过 `[miz.network].proxyUrl` 下载稳定构建，校验 SHA-256 后安全替换。已经是 8.1.x 时只做版本检查，不会重复下载。支持 Windows x64/ARM64 和 Linux x64/ARM64。
+
+| 运行平台 | 自动选择的构建 |
+| --- | --- |
+| Windows x64 | Gyan FFmpeg 8.1.2 release essentials（ZIP） |
+| Windows ARM64 | BtbN FFmpeg n8.1 GPL（ZIP） |
+| Linux x64 | BtbN FFmpeg n8.1 GPL（tar.xz） |
+| Linux ARM64 | BtbN FFmpeg n8.1 GPL（tar.xz） |
+
+也可以手动触发安装；`--force` 会强制重新下载：
+
+```bash
+bun run ffmpeg:install
+bun run ffmpeg:install -- --force
+```
 
 Linux 下需要为两个文件添加执行权限：
 
@@ -136,7 +153,7 @@ Docker 模式最后再合并：
 | `[miz.faq]` | 每群词条上限、答案长度上限和管理白名单。 |
 | `[miz.todo]` | 群待办提醒、批量处理数量和管理白名单。 |
 | `[miz.broadcast]` | 可以向机器人所在全部群发送广播的用户白名单。 |
-| `[miz.video]` | 视频开关、白名单、B 站域名、下载目录、NapCat 媒体目录和工具路径。 |
+| `[miz.video]` | 视频开关、白名单、B 站域名、下载目录、NapCat 媒体目录、工具路径、FFmpeg 自动下载开关 `ffmpegAutoDownload`，以及视频任务并发上限 `maxConcurrentJobs`（默认 2，最大 8）。 |
 | `[miz.news]` | 财经新闻接口、目标群和定时表达式。 |
 | `[miz.wallpaper]` | Bing 官方元数据接口、图片基址、开关和定时表达式。 |
 | `[miz.ff14]` | 市场接口、返回条数、低价提醒开关和定时表达式。 |
@@ -183,9 +200,9 @@ docker compose up -d
 
 这些名称只是默认容器名，请按实际环境修改。文件创建后不会被后续启动覆盖。
 
-Docker 模式发送视频时，miz 先通过 `[miz.network].proxyUrl` 调用 yt-dlp 下载视频（B 站同时使用 `[miz.bilibili].cookie`），再用 FFmpeg 转码为 H.264/AAC MP4 并写入项目的 `temp` 目录。随后把 `napcatMediaDirectory` 下的文件 URL 交给 NapCat。NapCat 容器必须把同一个宿主机 `temp` 目录挂载为该路径，例如：
+Docker 模式发送视频时，miz 先通过 `[miz.network].proxyUrl` 调用 yt-dlp 下载视频（B 站同时使用 `[miz.bilibili].cookie`）。B 站优先选择标准清晰度的 H.264/AAC 流并无损合并为 MP4；其他站点再用稳定版 FFmpeg 转码为 H.264/AAC MP4，结果写入项目的 `temp` 目录。
 
-发送时先使用 NapLink 的普通消息接口提交一个 NapCat `video` 消息段，`file` 指向上述共享目录中的 `file:///` URL。普通发送失败后，会把同一个视频段作为单节点合并转发再尝试一次；不会改用 Base64。
+视频发送依次尝试三种方式：先把 `napcatMediaDirectory` 下的 `file:///` 路径作为普通视频消息交给 NapCat；确定失败后，在 OneBot WebSocket 负载限制允许时，改用与 NapCat 面板一致的 `data:video/mp4;base64,...`；仍失败时，再把文件视频消息段作为单节点合并转发发送。三种发送均禁用自动重试；如果请求超时，由于结果无法确认，miz 会停止降级并提示先检查聊天记录，避免重复发送。使用文件和转发方式时，NapCat 必须能读取 `napcatMediaDirectory`，Docker 部署需要把同一个宿主机 `temp` 目录挂载到该路径。
 
 ```yaml
 services:
@@ -327,7 +344,7 @@ bun audit
 
 ### 视频下载成功但 QQ 发送失败
 
-确认 miz 的项目 `temp` 目录与 NapCat 的 `napcatMediaDirectory` 指向同一份宿主机目录，并确认 NapCat 容器有读取权限。
+先检查 NapCat 日志中的具体富媒体错误，并确认 miz 的项目 `temp` 目录与 NapCat 的 `napcatMediaDirectory` 指向同一份宿主机目录、NapCat 有读取权限；文件路径发送失败后，miz 还会自动尝试 Base64 和单节点合并转发。
 
 ### VTB、新闻、壁纸或 FF14 功能提示未配置
 
