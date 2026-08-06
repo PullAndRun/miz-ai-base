@@ -145,13 +145,15 @@ describe("FF14 price alert commands", () => {
 
     expect(forwarded).toHaveLength(1);
     expect(forwarded[0]).toHaveLength(1);
-    expect(String(forwarded[0][0])).toContain("⏸️ 水之碎晶");
-    expect(String(forwarded[0][0])).toContain("目前已暂停 · 猫小胖");
-    expect(String(forwarded[0][0])).toContain("到价后提醒：@123");
+    expect(String(forwarded[0][0])).toContain("📦 第 1–1 个商品（共 1 个）");
+    expect(String(forwarded[0][0])).toContain("这组有 0 个正在关注，1 个已暂停");
+    expect(String(forwarded[0][0])).toContain("1. ⏸️ 水之碎晶");
+    expect(String(forwarded[0][0])).toContain("原本关注 猫小胖");
+    expect(String(forwarded[0][0])).toContain("恢复后会提醒：@123");
     expect(String(forwarded[0][0])).not.toContain("火之碎晶");
   });
 
-  test("sends alert lists in forward-message batches of ten products", async () => {
+  test("sends one forward message with ten products in each node", async () => {
     const config = createConfig(Array.from({ length: 21 }, (_, index) => ({
       groupId: 100,
       region: "猫" as const,
@@ -159,8 +161,7 @@ describe("FF14 price alert commands", () => {
       minimumPrice: 1000 + index,
       priceAlertAtUserIds: [],
     })));
-    const batchSizes: number[] = [];
-    const summaries: string[] = [];
+    const forwarded: Array<{ messages: unknown[]; summary: string }> = [];
     const plugin = createFf14Plugin({
       loadCurrentConfig: async () => config,
       getRepository: async () => ({
@@ -174,17 +175,22 @@ describe("FF14 price alert commands", () => {
       message: adminMessage,
       reply: async () => undefined,
       replyForward: async (messages: unknown[], options?: { summary?: string }) => {
-        batchSizes.push(messages.length);
-        summaries.push(options?.summary ?? "");
+        forwarded.push({ messages, summary: options?.summary ?? "" });
       },
     } as never);
 
-    expect(batchSizes).toEqual([10, 10, 1]);
-    expect(summaries).toEqual([
-      "本群共 21 条 · 这里是第 1–10 条",
-      "本群共 21 条 · 这里是第 11–20 条",
-      "本群共 21 条 · 这里是第 21–21 条",
-    ]);
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0].messages).toHaveLength(3);
+    expect(String(forwarded[0].messages[0])).toContain("📦 第 1–10 个商品（共 21 个）");
+    expect(String(forwarded[0].messages[0])).toContain("这组 10 个商品都在正常关注");
+    expect(String(forwarded[0].messages[0])).toContain("商品1");
+    expect(String(forwarded[0].messages[0])).toContain("商品10");
+    expect(String(forwarded[0].messages[0])).not.toContain("商品11\n");
+    expect(String(forwarded[0].messages[1])).toContain("📦 第 11–20 个商品（共 21 个）");
+    expect(String(forwarded[0].messages[1])).toContain("商品20");
+    expect(String(forwarded[0].messages[2])).toContain("📦 第 21–21 个商品（共 21 个）");
+    expect(String(forwarded[0].messages[2])).toContain("商品21");
+    expect(forwarded[0].summary).toBe("本群共 21 条商品推送 · 每 10 条分为一个节点");
   });
 
   test("does not let an ordinary member mutate group alerts", async () => {

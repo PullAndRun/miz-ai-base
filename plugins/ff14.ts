@@ -96,23 +96,31 @@ export const createFf14Plugin = ({
               createFf14PriceAlertKey(disabled.groupId, disabled.itemName)),
           );
           const batches = chunkFf14PriceAlerts(groupAlerts, FF14_ALERT_LIST_BATCH_SIZE);
-          for (const [batchIndex, batch] of batches.entries()) {
-            const firstItemNumber = batchIndex * FF14_ALERT_LIST_BATCH_SIZE + 1;
-            const lastItemNumber = firstItemNumber + batch.length - 1;
-            await replyForward(
-              batch.map((alert) => formatFf14PriceAlertListItem(
-                alert,
-                !disabledKeys.has(createFf14PriceAlertKey(alert.groupId, alert.itemName)),
-              )),
-              {
-                title: batches.length === 1
-                  ? "🪙 FF14 商品推送"
-                  : `🪙 FF14 商品推送 · 第 ${batchIndex + 1}/${batches.length} 组`,
-                source: "miz ff14 list",
-                summary: `本群共 ${groupAlerts.length} 条 · 这里是第 ${firstItemNumber}–${lastItemNumber} 条`,
-              },
-            );
-          }
+          await replyForward(
+            batches.map((batch, batchIndex) => {
+              const firstItemNumber = batchIndex * FF14_ALERT_LIST_BATCH_SIZE + 1;
+              const lastItemNumber = firstItemNumber + batch.length - 1;
+              const enabledCount = batch.filter((alert) =>
+                !disabledKeys.has(createFf14PriceAlertKey(alert.groupId, alert.itemName))).length;
+              const disabledCount = batch.length - enabledCount;
+              return [
+                `📦 第 ${firstItemNumber}–${lastItemNumber} 个商品（共 ${groupAlerts.length} 个）`,
+                disabledCount === 0
+                  ? `这组 ${batch.length} 个商品都在正常关注。`
+                  : `这组有 ${enabledCount} 个正在关注，${disabledCount} 个已暂停。`,
+                ...batch.map((alert, itemIndex) => formatFf14PriceAlertListItem(
+                  alert,
+                  !disabledKeys.has(createFf14PriceAlertKey(alert.groupId, alert.itemName)),
+                  firstItemNumber + itemIndex,
+                )),
+              ].join("\n\n");
+            }),
+            {
+              title: "🪙 FF14 商品推送",
+              source: "miz ff14 list",
+              summary: `本群共 ${groupAlerts.length} 条商品推送 · 每 10 条分为一个节点`,
+            },
+          );
           return;
         }
 
@@ -314,18 +322,16 @@ const chunkFf14PriceAlerts = (
 export const formatFf14PriceAlertListItem = (
   alert: Ff14PriceAlertInput,
   enabled: boolean,
+  itemNumber?: number,
 ) => {
   const mentionLine = alert.priceAlertAtUserIds.length > 0
-    ? `到价后提醒：${alert.priceAlertAtUserIds.map((id) => `@${id}`).join("、")}`
-    : "到价后直接发到群里，不额外提醒成员";
+    ? `${enabled ? "到价时会提醒" : "恢复后会提醒"}：${alert.priceAlertAtUserIds.map((id) => `@${id}`).join("、")}`
+    : `${enabled ? "到价时" : "恢复后"}只发群消息，不额外 at 成员。`;
   return [
-    `${enabled ? "✅" : "⏸️"} ${alert.itemName}`,
+    `${itemNumber === undefined ? "" : `${itemNumber}. `}${enabled ? "✅" : "⏸️"} ${alert.itemName}`,
     enabled
-      ? `正在关注 ${FF14_REGION_NAMES[alert.region]} 的市场价格`
-      : `这条推送目前已暂停 · ${FF14_REGION_NAMES[alert.region]}`,
-    enabled
-      ? `价格降到 ${alert.minimumPrice.toLocaleString("zh-CN")} gil 或更低时推送`
-      : `暂停前的提醒线：${alert.minimumPrice.toLocaleString("zh-CN")} gil 或更低`,
+      ? `正在看 ${FF14_REGION_NAMES[alert.region]} 的价格，降到 ${alert.minimumPrice.toLocaleString("zh-CN")} gil 或更低就通知。`
+      : `目前已暂停；原本关注 ${FF14_REGION_NAMES[alert.region]}，目标价是 ${alert.minimumPrice.toLocaleString("zh-CN")} gil 或更低。`,
     mentionLine,
   ].join("\n");
 };
