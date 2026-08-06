@@ -29,10 +29,9 @@ cookie = ""
 [miz.ff14]
 priceAlertEnabled = true
 priceAlertCron = ""
-priceAlertAtUserIds = []
 maxListingCount = 0
-itemSearchApiUrl = ""
-marketApiUrl = ""
+itemSearchApiUrl = "https://tc-ffxiv-item-search-service.onrender.com/items/search"
+marketApiUrl = "https://universalis.app/api/v2"
 
 [miz.wallpaper]
 enabled = true

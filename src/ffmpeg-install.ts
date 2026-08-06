@@ -319,6 +319,12 @@ const resolveLatestFfmpegRelease = async (proxyUrl: string): Promise<FfmpegRelea
     throw new Error(`FFmpeg release lookup failed with HTTP ${response.status}`);
   }
   const payload = await response.json() as { assets?: Array<{ name?: string }> };
+  return parseLatestFfmpegRelease(payload);
+};
+
+export const parseLatestFfmpegRelease = (
+  payload: { assets?: Array<{ name?: string }> },
+): FfmpegRelease => {
   const releases = (payload.assets ?? [])
     .map((asset) => /^ffmpeg-n(\d+\.\d+)-latest-(?:win64|winarm64|linux64|linuxarm64)-gpl-\1\.(?:zip|tar\.xz)$/.exec(asset.name ?? "")?.[1])
     .filter((release): release is FfmpegRelease => release !== undefined);

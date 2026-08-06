@@ -3,3 +3,4 @@ groupId = ""
 region = ""
 itemName = ""
 minimumPrice = 0
+priceAlertAtUserIds = []

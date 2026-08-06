@@ -8,6 +8,7 @@ import {
   isSupportedFfmpegVersion,
   parseExpectedSha256,
   parseFfmpegVersion,
+  parseLatestFfmpegRelease,
 } from "@/ffmpeg-install";
 import type { VideoConfig } from "@/config";
 
@@ -62,6 +63,16 @@ describe("manual FFmpeg download", () => {
       "ffmpeg-n8.1-latest-winarm64-gpl-8.1.zip",
     );
     expect(() => getFfmpegAsset("darwin", "arm64", "8.1")).toThrow("not supported");
+  });
+
+  test("finds the newest stable branch from release assets", () => {
+    expect(parseLatestFfmpegRelease({
+      assets: [
+        { name: "ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz" },
+        { name: "ffmpeg-n8.2-latest-win64-gpl-8.2.zip" },
+        { name: "checksums.sha256" },
+      ],
+    })).toBe("8.2");
   });
 
   test("accepts 8.1 patch releases and skips unrelated versions", () => {

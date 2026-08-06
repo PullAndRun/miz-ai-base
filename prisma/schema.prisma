@@ -48,6 +48,16 @@ model NewsDelivery {
   @@map("news_deliveries")
 }
 
+model Ff14Item {
+  queryName String   @id @map("query_name")
+  itemId    Int      @map("item_id")
+  name      String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([itemId])
+  @@map("ff14_items")
+}
+
 model Reminder {
   id          Int      @id @default(autoincrement())
   groupId     String   @map("group_id")

@@ -76,11 +76,11 @@ FF14 低价提醒和 VTB 群订阅分别参考：
 | Windows | `tools/yt-dlp.exe` | `tools/ffmpeg.exe` |
 | Linux / Docker | `tools/yt-dlp` | `tools/ffmpeg` |
 
-FFmpeg 和 yt-dlp 需要先自行安装。执行 `bun run start` 或 `bun run dev` 时，应用启动前仍会检查并更新 npm 依赖，但不会查询、下载或更新 FFmpeg 和 yt-dlp；只会读取当前系统所配置工具的本地版本并输出：
+FFmpeg 和 yt-dlp 需要先自行安装。执行 `bun run start` 或 `bun run dev` 时，应用启动前仍会检查并更新 npm 依赖，同时查询 FFmpeg 和 yt-dlp 的最新版本，但不会下载或更新这两个工具。没有更新时只显示本地版本；发现更新时显示 `本地版本 -> 最新版本`：
 
 ```text
-FFmpeg: 8.1.2
-yt-dlp: 2026.07.04
+FFmpeg: 8.1.2 -> 8.2
+yt-dlp: 2026.07.04 -> 2026.08.01
 ```
 
 需要主动检测并更新 npm 依赖、FFmpeg 和 yt-dlp 时，仍使用完整更新命令。它会按当前 CPU 架构查询和准备 Windows 与 Linux 两套工具文件；下载支持 `[miz.network].proxyUrl`，FFmpeg 会校验 SHA-256：
@@ -153,7 +153,7 @@ Docker 模式最后再合并：
 | `[miz.video]` | 视频开关、白名单、B 站域名、下载目录、NapCat 媒体目录、工具路径，以及视频任务并发上限 `maxConcurrentJobs`（默认 2，最大 8）。 |
 | `[miz.news]` | 财经新闻接口、目标群和定时表达式。 |
 | `[miz.wallpaper]` | Bing 官方元数据接口、图片基址、开关和定时表达式。 |
-| `[miz.ff14]` | 市场接口、返回条数、低价提醒开关、定时表达式和提醒成员列表 `priceAlertAtUserIds`。 |
+| `[miz.ff14]` | Universalis 市场接口及其前端使用的物品搜索接口、返回条数、低价提醒开关和定时表达式；每条 `priceAlerts` 可单独配置提醒成员列表 `priceAlertAtUserIds`。 |
 | `[miz.vtb]` | B 站数据接口、网页与直播基址、轮询策略、缓存及管理白名单。 |
 
 未填写对应接口地址时，依赖该接口的命令会提示尚未配置，相关定时任务会自动停用并记录原因。示例配置已填写 Bing 官方地址。
@@ -266,9 +266,9 @@ napcatMediaDirectory = "/app/media"
 | VTB 直播 | 每 3 分钟批量检查直播状态。 |
 | VTB 动态 | 分片轮转，默认约 15 分钟覆盖全部订阅主播。 |
 | VTB 资料同步 | 默认每周日 00:00。 |
-| FF14 低价提醒 | 默认每小时检查，实际目标由 `config/ff14.toml` 配置。 |
+| FF14 低价提醒 | 默认每小时检查，实际目标及每条提醒的 `priceAlertAtUserIds` 由 `config/ff14.toml` 配置。 |
 
-同一个定时任务不会重叠执行：前一次还未结束时，下一次会跳过并写入日志。短暂的事件循环或容器调度延迟会被容忍；确实错过 cron 时刻时，任务恢复调度后会自动补跑一次。VTB 上游请求还会合并相同并发查询、限制请求间隔，并在遇到 429、412 或连续故障时暂时熔断，冷却后自动恢复。
+同一个定时任务不会重叠执行：前一次还未结束时，下一次会跳过并写入日志。短暂的事件循环或容器调度延迟会被容忍；确实错过 cron 时刻时，任务恢复调度后会自动补跑一次。VTB 上游请求还会合并相同并发查询、限制请求间隔，并在遇到 429、412 或连续故障时暂时熔断，冷却后自动恢复。FF14 道具名称与 ID 会保存在 PostgreSQL，命中后只查询动态市场价格；所有 FF14 外部请求共用保守的请求间隔，并在限流时按 `Retry-After` 退避重试。
 
 ## 插件开发
 
@@ -322,10 +322,10 @@ bun audit
 
 | 脚本 | 作用 |
 | --- | --- |
-| `bun run start` | 更新 npm 依赖、显示媒体工具版本后，以普通模式启动、生成 Prisma Client 并执行迁移。 |
-| `bun run start:docker` | 更新 npm 依赖、显示媒体工具版本后，以 Docker 模式启动并加载 `app.docker.toml`。 |
-| `bun run dev` | 更新 npm 依赖、显示媒体工具版本后，以普通模式监听源文件变化。 |
-| `bun run dev:docker` | 更新 npm 依赖、显示媒体工具版本后，以 Docker 配置监听源文件变化。 |
+| `bun run start` | 更新 npm 依赖、检查并显示媒体工具版本后，以普通模式启动、生成 Prisma Client 并执行迁移。 |
+| `bun run start:docker` | 更新 npm 依赖、检查并显示媒体工具版本后，以 Docker 模式启动并加载 `app.docker.toml`。 |
+| `bun run dev` | 更新 npm 依赖、检查并显示媒体工具版本后，以普通模式监听源文件变化。 |
+| `bun run dev:docker` | 更新 npm 依赖、检查并显示媒体工具版本后，以 Docker 配置监听源文件变化。 |
 | `bun run dependencies:update -- normal` | 使用本机 `app.local.toml` 的代理检测并更新 npm 依赖、FFmpeg 和 yt-dlp。 |
 | `bun run dependencies:update -- docker` | 使用 Docker `app.docker.toml` 的代理检测并更新 npm 依赖、FFmpeg 和 yt-dlp。 |
 | `bun run prisma:migrate` | 使用当前配置执行 `prisma migrate deploy`。 |

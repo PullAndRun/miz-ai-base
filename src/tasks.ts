@@ -1103,6 +1103,7 @@ const runFf14PriceAlerts = async (
   gateway: Gateway,
   logger: Logger,
 ) => {
+  const itemStore = await getVtbRepository(config);
   for (const alert of config.ff14.priceAlerts) {
     try {
       const result = await queryFf14Market({
@@ -1110,6 +1111,9 @@ const runFf14PriceAlerts = async (
         itemName: alert.itemName,
         itemSearchApiUrl: config.ff14.itemSearchApiUrl,
         marketApiUrl: config.ff14.marketApiUrl,
+        proxyUrl: config.network.proxyUrl,
+        maxListingCount: config.ff14.maxListingCount,
+        itemStore,
       });
 
       if (!result) {
@@ -1149,10 +1153,10 @@ const runFf14PriceAlerts = async (
         },
       );
 
-      if (config.ff14.priceAlertAtUserIds.length > 0) {
+      if (alert.priceAlertAtUserIds.length > 0) {
         await gateway.sendGroupMessage(
           alert.groupId,
-          createFf14PriceAlertMentionMessage(config.ff14.priceAlertAtUserIds),
+          createFf14PriceAlertMentionMessage(alert.priceAlertAtUserIds),
         );
       }
 

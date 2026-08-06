@@ -12,6 +12,7 @@ export const createHttpRequestError = (status: number, statusText: string, retry
   });
 
 export type RetryRequestInit = RequestInit & {
+  proxy?: string;
   timeoutMs?: number;
   retryCount?: number;
   retryDelayMs?: number;

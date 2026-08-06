@@ -21,6 +21,8 @@ describe("package dependency updates", () => {
     expect(updateScript).toContain("updatePackageDependencies");
     expect(updateScript).toContain("if (displayToolVersionsOnly)");
     expect(updateScript).toContain("readMediaToolVersions");
+    expect(updateScript).toContain("lookupLatestMediaToolVersions");
+    expect(updateScript).toContain("formatMediaToolVersion");
     expect(updateScript).toContain("installFfmpegForWindowsAndLinux");
     expect(updateScript).toContain("updateYtDlpBinaries");
   });

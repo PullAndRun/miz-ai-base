@@ -671,6 +671,19 @@ const createVtbRepository = (prisma: PrismaClient) => {
     });
   };
 
+  const findFf14Item = async (queryName: string) => {
+    const item = await prisma.ff14Item.findUnique({ where: { queryName } });
+    return item ? { id: item.itemId, name: item.name } : undefined;
+  };
+
+  const upsertFf14Item = async (queryName: string, item: { id: number; name: string }) => {
+    await prisma.ff14Item.upsert({
+      where: { queryName },
+      create: { queryName, itemId: item.id, name: item.name },
+      update: { itemId: item.id, name: item.name },
+    });
+  };
+
   const recordLiveEndDelivery = async (mid: string, groupIds: readonly string[]) => {
     if (groupIds.length === 0) return;
     await prisma.vtbLiveSession.update({
@@ -1233,7 +1246,8 @@ const createVtbRepository = (prisma: PrismaClient) => {
   const close = () => prisma.$disconnect();
 
   return {
-    initialize, findStreamerByName, listStreamers, deleteStreamersNotInNames, deleteStreamerByName,
+    initialize, findFf14Item, upsertFf14Item,
+    findStreamerByName, listStreamers, deleteStreamersNotInNames, deleteStreamerByName,
     upsertStreamer, getLiveSession, startLiveSession, recordLiveDelivery, markLiveSessionEnded, recordLiveEndDelivery,
     getDynamicDeliveryState, startDynamicDelivery, recordDynamicDelivery,
     getDeliveredNewsIds, recordNewsDeliveries, ensureReminderStorage, createReminder, claimDueReminders,

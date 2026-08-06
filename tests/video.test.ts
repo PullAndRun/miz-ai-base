@@ -17,6 +17,7 @@ import {
   isRetryableYtDlpError,
   isVideoDurationAllowed,
   MAX_VIDEO_DURATION_SECONDS,
+  formatMediaToolVersion,
   parseFfmpegDisplayVersion,
   parseYtDlpDisplayVersion,
   readMediaToolVersions,
@@ -263,6 +264,15 @@ describe("yt-dlp transient failures", () => {
 });
 
 describe("media tool versions", () => {
+  test("shows an available upgrade without treating patch builds as downgrades", () => {
+    expect(formatMediaToolVersion("8.1.2", "8.2")).toBe("8.1.2 -> 8.2");
+    expect(formatMediaToolVersion("8.1.2", "8.1")).toBe("8.1.2");
+    expect(formatMediaToolVersion("2026.07.04", "2026.08.01")).toBe(
+      "2026.07.04 -> 2026.08.01",
+    );
+    expect(formatMediaToolVersion("unavailable", "2026.08.01")).toBe("unavailable");
+  });
+
   test("displays installed versions without checking for updates", async () => {
     const calls: Array<{ executable: string; args: readonly string[]; processName: string }> = [];
     const versions = await readMediaToolVersions(videoConfig, async (executable, args, processName) => {
@@ -282,9 +292,31 @@ describe("media tool versions", () => {
   test("formats version output and tolerates unavailable tools", async () => {
     expect(parseFfmpegDisplayVersion("ffmpeg version 8.1.3-full_build\n")).toBe("8.1.3");
     expect(parseYtDlpDisplayVersion("2026.07.04\nPython details")).toBe("2026.07.04");
-    await expect(readMediaToolVersions(videoConfig, async () => {
+    await expect(readMediaToolVersions({
+      ...videoConfig,
+      ytDlpLinuxPath: "missing/yt-dlp",
+      ytDlpWindowsPath: "missing/yt-dlp.exe",
+    }, async () => {
       throw new Error("missing");
     })).resolves.toEqual({ ffmpeg: "unavailable", ytDlp: "unavailable" });
+  });
+
+  test("uses the verified update marker when Linux cannot execute yt-dlp", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "miz-yt-dlp-version-"));
+    const executablePath = path.join(directory, "yt-dlp");
+    try {
+      await writeFile(`${executablePath}.miz-update.json`, JSON.stringify({ tag: "2026.07.04" }));
+      const config = {
+        ...videoConfig,
+        ytDlpLinuxPath: executablePath,
+        ytDlpWindowsPath: executablePath,
+      };
+      await expect(readMediaToolVersions(config, async () => {
+        throw new Error("permission denied");
+      })).resolves.toEqual({ ffmpeg: "unavailable", ytDlp: "2026.07.04" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

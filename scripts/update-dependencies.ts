@@ -2,8 +2,8 @@ import { updatePackageDependencies } from "@/dependency-update";
 import { chmod, mkdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "@/config";
-import { installFfmpegForWindowsAndLinux } from "@/ffmpeg-install";
-import { readMediaToolVersions } from "@/video";
+import { installFfmpegForWindowsAndLinux, parseLatestFfmpegRelease } from "@/ffmpeg-install";
+import { formatMediaToolVersion, readMediaToolVersions } from "@/video";
 
 const requestedRuntimeMode = process.argv[2];
 const displayToolVersionsOnly = process.argv.includes("--display-tool-versions");
@@ -41,10 +41,27 @@ const fetchWithTimeout = (url: string, init: DependencyFetchInit = {}) =>
     throw error;
   });
 
+type ToolReleasePayload = {
+  tag_name?: string;
+  assets?: Array<{ name?: string; browser_download_url?: string }>;
+};
+
 const fetchJson = async (url: string, proxyUrl: string) => {
   const response = await fetchWithTimeout(url, { ...(proxyUrl ? { proxy: proxyUrl } : {}), headers: githubHeaders });
   if (!response.ok) throw new Error(`Tool release lookup failed with HTTP ${response.status}`);
-  return response.json() as Promise<{ tag_name?: string; assets?: Array<{ name?: string; browser_download_url?: string }> }>;
+  return response.json() as Promise<ToolReleasePayload>;
+};
+
+const lookupLatestMediaToolVersions = async (proxyUrl: string) => {
+  const [ffmpeg, ytDlp] = await Promise.all([
+    fetchJson("https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest", proxyUrl)
+      .then(parseLatestFfmpegRelease)
+      .catch(() => undefined),
+    fetchJson("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest", proxyUrl)
+      .then((release) => release.tag_name?.trim() || undefined)
+      .catch(() => undefined),
+  ]);
+  return { ffmpeg, ytDlp } as const;
 };
 
 const calculateSha256 = async (filePath: string) => {
@@ -125,9 +142,12 @@ if (result.changes.length === 0) {
 }
 
 if (displayToolVersionsOnly) {
-  const toolVersions = await readMediaToolVersions(config.video);
-  console.log(`FFmpeg: ${toolVersions.ffmpeg}`);
-  console.log(`yt-dlp: ${toolVersions.ytDlp}`);
+  const [currentVersions, latestVersions] = await Promise.all([
+    readMediaToolVersions(config.video),
+    lookupLatestMediaToolVersions(config.network.proxyUrl),
+  ]);
+  console.log(`FFmpeg: ${formatMediaToolVersion(currentVersions.ffmpeg, latestVersions.ffmpeg)}`);
+  console.log(`yt-dlp: ${formatMediaToolVersion(currentVersions.ytDlp, latestVersions.ytDlp)}`);
 } else {
   const ffmpegResults = await installFfmpegForWindowsAndLinux(config.video, config.network);
   for (const result of ffmpegResults) {

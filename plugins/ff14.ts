@@ -5,6 +5,7 @@ import {
   queryFf14Market,
 } from "@/ff14";
 import type { MizPlugin } from "@/plugins";
+import { getVtbRepository } from "@/vtb";
 
 const ff14Plugin: MizPlugin = {
   name: "ff14",
@@ -34,10 +35,14 @@ const ff14Plugin: MizPlugin = {
     });
 
     try {
+      const itemStore = await getVtbRepository(config);
       const result = await queryFf14Market({
         ...request,
         itemSearchApiUrl: config.ff14.itemSearchApiUrl,
         marketApiUrl: config.ff14.marketApiUrl,
+        proxyUrl: config.network.proxyUrl,
+        maxListingCount: config.ff14.maxListingCount,
+        itemStore,
       });
       if (!result) {
         await reply(`市场板里没找到“${request.itemName}”。检查一下道具名和分区，再搜一次吧。`);

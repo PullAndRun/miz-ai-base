@@ -49,7 +49,6 @@ const rawMizConfigSchema = z.object({
     .object({
       priceAlertEnabled: z.boolean().optional(),
       priceAlertCron: nonEmptyStringSchema.optional(),
-      priceAlertAtUserIds: z.array(targetIdSchema).optional(),
       maxListingCount: z.number().int().positive().optional(),
       itemSearchApiUrl: nonEmptyStringSchema.optional(),
       marketApiUrl: nonEmptyStringSchema.optional(),
@@ -60,6 +59,7 @@ const rawMizConfigSchema = z.object({
             region: ff14RegionKeySchema,
             itemName: nonEmptyStringSchema,
             minimumPrice: nonNegativeIntegerSchema,
+            priceAlertAtUserIds: z.array(targetIdSchema).optional(),
           }),
         )
         .optional(),
@@ -198,11 +198,13 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
   ff14: {
     priceAlertEnabled: config.ff14?.priceAlertEnabled ?? true,
     priceAlertCron: config.ff14?.priceAlertCron ?? "0 * * * *",
-    priceAlertAtUserIds: config.ff14?.priceAlertAtUserIds ?? [],
     maxListingCount: config.ff14?.maxListingCount ?? 10,
-    itemSearchApiUrl: config.ff14?.itemSearchApiUrl ?? "",
-    marketApiUrl: config.ff14?.marketApiUrl ?? "",
-    priceAlerts: config.ff14?.priceAlerts ?? [],
+    itemSearchApiUrl: config.ff14?.itemSearchApiUrl ?? "https://tc-ffxiv-item-search-service.onrender.com/items/search",
+    marketApiUrl: config.ff14?.marketApiUrl ?? "https://universalis.app/api/v2",
+    priceAlerts: (config.ff14?.priceAlerts ?? []).map((alert) => ({
+      ...alert,
+      priceAlertAtUserIds: alert.priceAlertAtUserIds ?? [],
+    })),
   },
   wallpaper: {
     enabled: config.wallpaper?.enabled ?? true,

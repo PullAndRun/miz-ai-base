@@ -322,14 +322,16 @@ export const readMediaToolVersions = async (
   runVersionCommand: MediaToolVersionRunner = (executable, args, processName) =>
     runProcess(executable, [...args], processName, 10_000),
 ) => {
+  const ytDlpPath = getYtDlpPath(config);
   const [ffmpeg, ytDlp] = await Promise.all([
     readMediaToolVersion(
       () => runVersionCommand(getFfmpegPath(config), ["-version"], "ffmpeg"),
       parseFfmpegDisplayVersion,
     ),
     readMediaToolVersion(
-      () => runVersionCommand(getYtDlpPath(config), ["--version"], "yt-dlp"),
+      () => runVersionCommand(ytDlpPath, ["--version"], "yt-dlp"),
       parseYtDlpDisplayVersion,
+      () => readYtDlpUpdateMarkerVersion(ytDlpPath),
     ),
   ]);
   return { ffmpeg, ytDlp } as const;
@@ -338,12 +340,21 @@ export const readMediaToolVersions = async (
 const readMediaToolVersion = async (
   readOutput: () => Promise<string>,
   parseVersion: (output: string) => string | undefined,
+  readFallbackVersion?: () => Promise<string | undefined>,
 ) => {
   try {
-    return parseVersion(await readOutput()) ?? "unknown";
-  } catch {
-    return "unavailable";
-  }
+    const version = parseVersion(await readOutput());
+    if (version) {
+      return version;
+    }
+  } catch {}
+
+  return await readFallbackVersion?.().catch(() => undefined) ?? "unavailable";
+};
+
+const readYtDlpUpdateMarkerVersion = async (executablePath: string) => {
+  const marker = await Bun.file(`${executablePath}.miz-update.json`).json() as { tag?: unknown };
+  return typeof marker.tag === "string" && marker.tag.trim() ? marker.tag.trim() : undefined;
 };
 
 export const parseFfmpegDisplayVersion = (output: string) =>
@@ -351,6 +362,33 @@ export const parseFfmpegDisplayVersion = (output: string) =>
 
 export const parseYtDlpDisplayVersion = (output: string) =>
   output.split(/\r?\n/, 1)[0]?.trim() || undefined;
+
+export const formatMediaToolVersion = (
+  currentVersion: string,
+  latestVersion: string | undefined,
+) => isNewerNumericVersion(latestVersion, currentVersion)
+  ? `${currentVersion} -> ${latestVersion}`
+  : currentVersion;
+
+const isNewerNumericVersion = (
+  candidate: string | undefined,
+  current: string,
+) => {
+  if (!candidate || !/^\d+(?:\.\d+)*$/.test(candidate) || !/^\d+(?:\.\d+)*$/.test(current)) {
+    return false;
+  }
+
+  const candidateParts = candidate.split(".").map(Number);
+  const currentParts = current.split(".").map(Number);
+  const length = Math.max(candidateParts.length, currentParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = (candidateParts[index] ?? 0) - (currentParts[index] ?? 0);
+    if (difference !== 0) {
+      return difference > 0;
+    }
+  }
+  return false;
+};
 
 const runProcess = (
   executable: string,

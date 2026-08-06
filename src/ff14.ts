@@ -8,7 +8,15 @@ const itemSearchResultSchema = z.looseObject({
 });
 
 const searchResponseSchema = z.looseObject({
-  Results: z.array(itemSearchResultSchema).optional().default([]),
+  items: z
+    .array(
+      z.looseObject({
+        id: z.number().int().positive(),
+        name: z.string().min(1),
+      }),
+    )
+    .optional()
+    .default([]),
 });
 
 const listingSchema = z.looseObject({
@@ -58,6 +66,14 @@ export type Ff14MarketQuery = {
   itemName: string;
   itemSearchApiUrl: string;
   marketApiUrl: string;
+  proxyUrl?: string;
+  maxListingCount?: number;
+  itemStore?: Ff14ItemStore;
+};
+
+export type Ff14ItemStore = {
+  findFf14Item(queryName: string): Promise<{ id: number; name: string } | undefined>;
+  upsertFf14Item(queryName: string, item: { id: number; name: string }): Promise<void>;
 };
 
 export type Ff14MarketResult = {
@@ -86,6 +102,8 @@ export const createFf14PriceAlertMentionMessage = (
 const DEFAULT_MAX_LISTING_COUNT = 10;
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_FF14_RESPONSE_BYTES = 5 * 1024 * 1024;
+export const FF14_REQUEST_INTERVAL_MS = 200;
+const waitForFf14RequestSlot = createFf14RequestGate(FF14_REQUEST_INTERVAL_MS);
 
 export const isFf14RegionKey = (value: string | undefined): value is Ff14RegionKey =>
   value !== undefined && value in FF14_REGION_NAMES;
@@ -95,14 +113,30 @@ export const queryFf14Market = async ({
   itemName,
   itemSearchApiUrl,
   marketApiUrl,
+  proxyUrl = "",
+  maxListingCount = DEFAULT_MAX_LISTING_COUNT,
+  itemStore,
 }: Ff14MarketQuery): Promise<Ff14MarketResult | undefined> => {
-  const item = await searchItem(itemName, itemSearchApiUrl);
+  const queryName = normalizeFf14ItemQueryName(itemName);
+  const storedItem = await itemStore?.findFf14Item(queryName);
+  const item = storedItem
+    ? { ID: storedItem.id, Name: storedItem.name }
+    : await searchItem(queryName, itemSearchApiUrl, proxyUrl);
   if (!item) {
     return undefined;
   }
+  if (!storedItem) {
+    await itemStore?.upsertFf14Item(queryName, { id: item.ID, name: item.Name });
+  }
 
   const regionName = FF14_REGION_NAMES[regionKey];
-  const market = await fetchMarket(marketApiUrl, regionName, item.ID);
+  const market = await fetchMarket(
+    marketApiUrl,
+    regionName,
+    item.ID,
+    proxyUrl,
+    maxListingCount,
+  );
 
   return {
     item,
@@ -153,28 +187,56 @@ export const formatFf14MarketMessages = ({
   ];
 };
 
-const searchItem = async (itemName: string, itemSearchApiUrl: string) => {
+const searchItem = async (itemName: string, itemSearchApiUrl: string, proxyUrl: string) => {
   const url = new URL(itemSearchApiUrl);
   url.search = new URLSearchParams({
-    indexes: "item",
-    sort_order: "asc",
-    limit: "1",
-    columns: "ID,Name",
-    string: itemName,
+    sheets: "Items",
+    query: itemName,
+    language: "chs",
+    limit: "10",
+    field: "Name,ItemSearchCategory.Name,Icon,LevelItem.todo,Rarity",
   }).toString();
 
-  const data = await fetchJson(url, searchResponseSchema);
-  return data.Results[0];
+  const data = await fetchJson(url, searchResponseSchema, {
+    ...(proxyUrl ? { proxy: proxyUrl } : {}),
+    headers: {
+      Origin: "https://universalis.app",
+      Referer: "https://universalis.app/",
+    },
+  });
+  const normalizedItemName = itemName.trim().normalize();
+  const item = data.items.find((candidate) => candidate.name.trim().normalize() === normalizedItemName)
+    ?? data.items[0];
+  return item ? { ID: item.id, Name: item.name } : undefined;
 };
 
-const fetchMarket = (marketApiUrl: string, regionName: string, itemId: number) =>
-  fetchJson(
-    `${marketApiUrl.replace(/\/+$/, "")}/${encodeURIComponent(regionName)}/${itemId}`,
-    marketResponseSchema,
-  );
+const normalizeFf14ItemQueryName = (itemName: string) => itemName.trim().normalize("NFKC");
 
-const fetchJsonOnce = async <T>(url: string | URL, schema: z.ZodType<T>): Promise<T> => {
+const fetchMarket = (
+  marketApiUrl: string,
+  regionName: string,
+  itemId: number,
+  proxyUrl: string,
+  maxListingCount: number,
+) => {
+  const url = new URL(
+    `${marketApiUrl.replace(/\/+$/, "")}/${encodeURIComponent(regionName)}/${itemId}`,
+  );
+  url.search = new URLSearchParams({
+    listings: String(Math.max(1, Math.floor(maxListingCount))),
+    entries: "0",
+  }).toString();
+  return fetchJson(url, marketResponseSchema, proxyUrl ? { proxy: proxyUrl } : {});
+};
+
+const fetchJsonOnce = async <T>(
+  url: string | URL,
+  schema: z.ZodType<T>,
+  init: RequestInit & { proxy?: string } = {},
+): Promise<T> => {
+  await waitForFf14RequestSlot();
   const response = await fetchWithRetry(url, {
+    ...init,
     timeoutMs: FETCH_TIMEOUT_MS,
   });
 
@@ -182,6 +244,22 @@ const fetchJsonOnce = async <T>(url: string | URL, schema: z.ZodType<T>): Promis
 };
 
 const fetchJson = fetchJsonOnce;
+
+function createFf14RequestGate(intervalMs: number) {
+  let queue = Promise.resolve();
+  let nextRequestAt = 0;
+  return () => {
+    const slot = queue.then(async () => {
+      const waitMs = Math.max(0, nextRequestAt - Date.now());
+      if (waitMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+      }
+      nextRequestAt = Date.now() + intervalMs;
+    });
+    queue = slot.catch(() => undefined);
+    return slot;
+  };
+}
 
 const selectDisplayListings = (listings: Listing[], maxListingCount: number): GroupedListing[] => [
   ...sortListingsByPrice(listings.filter((listing) => listing.hq === true)).map((listing) => ({
