@@ -210,7 +210,10 @@ const searchItem = async (itemName: string, itemSearchApiUrl: string, proxyUrl: 
   return item ? { ID: item.id, Name: item.name } : undefined;
 };
 
-const normalizeFf14ItemQueryName = (itemName: string) => itemName.trim().normalize("NFKC");
+export const normalizeFf14ItemQueryName = (itemName: string) => itemName.trim().normalize("NFKC");
+
+export const createFf14PriceAlertKey = (groupId: string | number, itemName: string) =>
+  `${String(groupId)}\0${normalizeFf14ItemQueryName(itemName)}`;
 
 const fetchMarket = (
   marketApiUrl: string,

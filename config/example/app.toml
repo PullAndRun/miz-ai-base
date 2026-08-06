@@ -27,6 +27,7 @@ proxyUrl = ""
 cookie = ""
 
 [miz.ff14]
+manageWhitelistUserIds = []
 priceAlertEnabled = true
 priceAlertCron = ""
 maxListingCount = 0

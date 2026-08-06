@@ -5,6 +5,7 @@ import { isGroupMessageUnavailableError, type Gateway } from "@/gateway";
 import type { Logger } from "@/logger";
 import {
   createFf14PriceAlertMentionMessage,
+  createFf14PriceAlertKey,
   FF14_REGION_NAMES,
   formatFf14MarketMessages,
   getLowestMarketPrice,
@@ -1104,8 +1105,17 @@ const runFf14PriceAlerts = async (
   logger: Logger,
 ) => {
   const itemStore = await getVtbRepository(config);
+  const disabledAlertKeys = new Set(
+    (await itemStore.listDisabledFf14PriceAlerts()).map((alert) =>
+      createFf14PriceAlertKey(alert.groupId, alert.itemName)),
+  );
   for (const alert of config.ff14.priceAlerts) {
     try {
+      if (disabledAlertKeys.has(createFf14PriceAlertKey(alert.groupId, alert.itemName))) {
+        logger.info("plugin", "ff14 price alert skipped: disabled for group", alert);
+        continue;
+      }
+
       const result = await queryFf14Market({
         regionKey: alert.region,
         itemName: alert.itemName,

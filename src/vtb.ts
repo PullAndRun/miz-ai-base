@@ -684,6 +684,39 @@ const createVtbRepository = (prisma: PrismaClient) => {
     });
   };
 
+  const disableFf14PriceAlert = async (
+    groupId: string | number,
+    itemName: string,
+    disabledBy?: string | number,
+  ) => {
+    const key = { groupId: String(groupId), itemName };
+    const existing = await prisma.ff14PriceAlertSuppression.findUnique({
+      where: { groupId_itemName: key },
+    });
+    await prisma.ff14PriceAlertSuppression.upsert({
+      where: { groupId_itemName: key },
+      create: {
+        ...key,
+        disabledBy: disabledBy === undefined ? null : String(disabledBy),
+      },
+      update: {},
+    });
+    return existing === null;
+  };
+
+  const enableFf14PriceAlert = async (groupId: string | number, itemName: string) => {
+    const result = await prisma.ff14PriceAlertSuppression.deleteMany({
+      where: { groupId: String(groupId), itemName },
+    });
+    return result.count > 0;
+  };
+
+  const listDisabledFf14PriceAlerts = async (groupId?: string | number) =>
+    prisma.ff14PriceAlertSuppression.findMany({
+      where: groupId === undefined ? undefined : { groupId: String(groupId) },
+      orderBy: { createdAt: "asc" },
+    });
+
   const recordLiveEndDelivery = async (mid: string, groupIds: readonly string[]) => {
     if (groupIds.length === 0) return;
     await prisma.vtbLiveSession.update({
@@ -1247,6 +1280,7 @@ const createVtbRepository = (prisma: PrismaClient) => {
 
   return {
     initialize, findFf14Item, upsertFf14Item,
+    disableFf14PriceAlert, enableFf14PriceAlert, listDisabledFf14PriceAlerts,
     findStreamerByName, listStreamers, deleteStreamersNotInNames, deleteStreamerByName,
     upsertStreamer, getLiveSession, startLiveSession, recordLiveDelivery, markLiveSessionEnded, recordLiveEndDelivery,
     getDynamicDeliveryState, startDynamicDelivery, recordDynamicDelivery,

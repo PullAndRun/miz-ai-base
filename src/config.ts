@@ -7,6 +7,13 @@ const nonNegativeIntegerSchema = z.number().int().nonnegative();
 const targetIdSchema = z.union([z.string().trim().min(1), z.number().int().nonnegative()]);
 const runtimeModeSchema = z.enum(["normal", "docker"]);
 const ff14RegionKeySchema = z.enum(["猫", "猪", "狗", "鸟"]);
+const ff14PriceAlertSchema = z.object({
+  groupId: targetIdSchema,
+  region: ff14RegionKeySchema,
+  itemName: nonEmptyStringSchema,
+  minimumPrice: nonNegativeIntegerSchema,
+  priceAlertAtUserIds: z.array(targetIdSchema).optional(),
+});
 
 const rawMizConfigSchema = z.object({
   gateway: z.object({
@@ -52,17 +59,8 @@ const rawMizConfigSchema = z.object({
       maxListingCount: z.number().int().positive().optional(),
       itemSearchApiUrl: nonEmptyStringSchema.optional(),
       marketApiUrl: nonEmptyStringSchema.optional(),
-      priceAlerts: z
-        .array(
-          z.object({
-            groupId: targetIdSchema,
-            region: ff14RegionKeySchema,
-            itemName: nonEmptyStringSchema,
-            minimumPrice: nonNegativeIntegerSchema,
-            priceAlertAtUserIds: z.array(targetIdSchema).optional(),
-          }),
-        )
-        .optional(),
+      manageWhitelistUserIds: z.array(targetIdSchema).optional(),
+      priceAlerts: z.array(ff14PriceAlertSchema).optional(),
     })
     .optional(),
   wallpaper: z
@@ -201,6 +199,7 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     maxListingCount: config.ff14?.maxListingCount ?? 10,
     itemSearchApiUrl: config.ff14?.itemSearchApiUrl ?? "https://tc-ffxiv-item-search-service.onrender.com/items/search",
     marketApiUrl: config.ff14?.marketApiUrl ?? "https://universalis.app/api/v2",
+    manageWhitelistUserIds: config.ff14?.manageWhitelistUserIds ?? [],
     priceAlerts: (config.ff14?.priceAlerts ?? []).map((alert) => ({
       ...alert,
       priceAlertAtUserIds: alert.priceAlertAtUserIds ?? [],
@@ -425,6 +424,7 @@ const DOCKER_CONFIG_PATH = "config/app.docker.toml";
 const FF14_CONFIG_PATH = "config/ff14.toml";
 const VTB_CONFIG_PATH = "config/vtb.toml";
 let vtbSubscriptionUpdateQueue = Promise.resolve();
+let ff14PriceAlertUpdateQueue = Promise.resolve();
 
 export const loadConfig = async (): Promise<MizConfig> => {
   const configFile = Bun.file(CONFIG_PATH);
@@ -497,6 +497,78 @@ export const removeVtbSubscription = (groupId: string | number, streamerName: st
     return { changed: true, streamers };
   });
 
+export type Ff14PriceAlertInput = MizConfig["ff14"]["priceAlerts"][number];
+
+export const addFf14PriceAlert = (alert: Ff14PriceAlertInput) =>
+  queueFf14PriceAlertUpdate(async () => {
+    const source = await readFf14PriceAlertConfig();
+    const result = addFf14PriceAlertToSource(source, alert);
+    if (result.changed) {
+      await writeFf14PriceAlertConfig(result.source);
+    }
+    return { changed: result.changed, alert: result.alert };
+  });
+
+export const removeFf14PriceAlerts = (groupId: string | number, itemName: string) =>
+  queueFf14PriceAlertUpdate(async () => {
+    const source = await readFf14PriceAlertConfig();
+    const result = removeFf14PriceAlertsFromSource(source, groupId, itemName);
+    if (result.changed) {
+      await writeFf14PriceAlertConfig(result.source);
+    }
+    return { changed: result.changed, removed: result.removed };
+  });
+
+export const addFf14PriceAlertToSource = (source: string, alert: Ff14PriceAlertInput) => {
+  const existing = findFf14PriceAlertBlocks(source).find((block) =>
+    String(block.alert.groupId) === String(alert.groupId) &&
+    block.alert.region === alert.region &&
+    normalizeFf14ItemName(block.alert.itemName) === normalizeFf14ItemName(alert.itemName));
+  if (existing) {
+    return { changed: false, source, alert: existing.alert };
+  }
+
+  const normalizedAlert = {
+    ...alert,
+    itemName: normalizeFf14ItemName(alert.itemName),
+    priceAlertAtUserIds: [...alert.priceAlertAtUserIds],
+  };
+  const separator = getSubscriptionBlockSeparator(source);
+  const block = [
+    "[[miz.ff14.priceAlerts]]",
+    `groupId = ${JSON.stringify(normalizedAlert.groupId)}`,
+    `region = ${JSON.stringify(normalizedAlert.region)}`,
+    `itemName = ${JSON.stringify(normalizedAlert.itemName)}`,
+    `minimumPrice = ${normalizedAlert.minimumPrice}`,
+    `priceAlertAtUserIds = ${JSON.stringify(normalizedAlert.priceAlertAtUserIds)}`,
+    "",
+  ].join("\n");
+  return { changed: true, source: `${source}${separator}${block}`, alert: normalizedAlert };
+};
+
+export const removeFf14PriceAlertsFromSource = (
+  source: string,
+  groupId: string | number,
+  itemName: string,
+) => {
+  const matches = findFf14PriceAlertBlocks(source).filter((block) =>
+    String(block.alert.groupId) === String(groupId) &&
+    normalizeFf14ItemName(block.alert.itemName) === normalizeFf14ItemName(itemName));
+  if (matches.length === 0) {
+    return { changed: false, source, removed: [] as Ff14PriceAlertInput[] };
+  }
+
+  let updated = source;
+  for (const block of [...matches].reverse()) {
+    updated = `${updated.slice(0, block.start)}${updated.slice(block.end)}`;
+  }
+  return {
+    changed: true,
+    source: updated,
+    removed: matches.map((block) => block.alert),
+  };
+};
+
 const writeVtbSubscriptionNames = async (renames: ReadonlyMap<string, string>) => {
   if (renames.size === 0) {
     return false;
@@ -543,6 +615,57 @@ type VtbSubscriptionBlock = {
   streamers: string[];
   atAllStreamers?: string[];
 };
+
+const queueFf14PriceAlertUpdate = <T>(operation: () => Promise<T>) => {
+  const update = ff14PriceAlertUpdateQueue.then(operation);
+  ff14PriceAlertUpdateQueue = update.then(
+    () => undefined,
+    () => undefined,
+  );
+  return update;
+};
+
+type Ff14PriceAlertBlock = {
+  start: number;
+  end: number;
+  alert: Ff14PriceAlertInput;
+};
+
+const findFf14PriceAlertBlocks = (source: string): Ff14PriceAlertBlock[] => {
+  const marker = "[[miz.ff14.priceAlerts]]";
+  const blocks: Ff14PriceAlertBlock[] = [];
+  let start = source.indexOf(marker);
+  while (start >= 0) {
+    const nextStart = source.indexOf(marker, start + marker.length);
+    const end = nextStart >= 0 ? nextStart : source.length;
+    const text = source.slice(start, end);
+    const groupId = parseTomlAssignment(text, "groupId");
+    const region = parseTomlAssignment(text, "region");
+    const itemName = parseTomlAssignment(text, "itemName");
+    const minimumPrice = parseTomlAssignment(text, "minimumPrice");
+    const rawAtUserIds = parseTomlAssignment(text, "priceAlertAtUserIds") ?? [];
+    const parsed = ff14PriceAlertSchema.safeParse({
+      groupId,
+      region,
+      itemName,
+      minimumPrice,
+      priceAlertAtUserIds: rawAtUserIds,
+    });
+    if (!parsed.success) {
+      throw new Error(`Invalid FF14 price alert block: ${parsed.error.message}`);
+    }
+    const alert = parsed.data;
+    blocks.push({
+      start,
+      end,
+      alert: { ...alert, priceAlertAtUserIds: alert.priceAlertAtUserIds ?? [] },
+    });
+    start = nextStart;
+  }
+  return blocks;
+};
+
+const normalizeFf14ItemName = (itemName: string) => itemName.trim().normalize("NFKC");
 
 const findVtbSubscriptionBlock = (source: string, groupId: string | number): VtbSubscriptionBlock | undefined => {
   const marker = "[[miz.vtb.subscriptions]]";
@@ -624,6 +747,22 @@ const loadOptionalConfig = async (path: string) => {
 const readVtbSubscriptionConfig = async () => {
   const configFile = Bun.file(VTB_CONFIG_PATH);
   return (await configFile.exists()) ? configFile.text() : "";
+};
+
+const readFf14PriceAlertConfig = async () => {
+  const configFile = Bun.file(FF14_CONFIG_PATH);
+  return (await configFile.exists()) ? configFile.text() : "";
+};
+
+const writeFf14PriceAlertConfig = async (source: string) => {
+  const temporaryPath = `${FF14_CONFIG_PATH}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await Bun.write(temporaryPath, source);
+    await rename(temporaryPath, FF14_CONFIG_PATH);
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
 };
 
 const writeVtbSubscriptionConfig = async (source: string) => {

@@ -58,6 +58,16 @@ model Ff14Item {
   @@map("ff14_items")
 }
 
+model Ff14PriceAlertSuppression {
+  groupId    String   @map("group_id")
+  itemName   String   @map("item_name")
+  disabledBy String?  @map("disabled_by")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@id([groupId, itemName])
+  @@map("ff14_price_alert_suppressions")
+}
+
 model Reminder {
   id          Int      @id @default(autoincrement())
   groupId     String   @map("group_id")
