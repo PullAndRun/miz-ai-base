@@ -122,7 +122,7 @@ describe("FF14 price alert commands", () => {
         priceAlertAtUserIds: [],
       },
     ]);
-    let replyText = "";
+    const forwarded: unknown[][] = [];
     const plugin = createFf14Plugin({
       loadCurrentConfig: async () => config,
       getRepository: async () => ({
@@ -139,12 +139,52 @@ describe("FF14 price alert commands", () => {
       command: { name: "ff14", args: "list", raw: "ff14 list" },
       config,
       message: { groupId: 100, userId: 2, raw: { sender: { role: "member" } } },
-      reply: async (message: unknown) => { replyText = String(message); },
+      reply: async () => undefined,
+      replyForward: async (messages: unknown[]) => { forwarded.push(messages); },
     } as never);
 
-    expect(replyText).toContain("禁用 · 猫(猫小胖) · 水之碎晶");
-    expect(replyText).toContain("@123");
-    expect(replyText).not.toContain("火之碎晶");
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0]).toHaveLength(1);
+    expect(String(forwarded[0][0])).toContain("⏸️ 水之碎晶");
+    expect(String(forwarded[0][0])).toContain("目前已暂停 · 猫小胖");
+    expect(String(forwarded[0][0])).toContain("到价后提醒：@123");
+    expect(String(forwarded[0][0])).not.toContain("火之碎晶");
+  });
+
+  test("sends alert lists in forward-message batches of ten products", async () => {
+    const config = createConfig(Array.from({ length: 21 }, (_, index) => ({
+      groupId: 100,
+      region: "猫" as const,
+      itemName: `商品${index + 1}`,
+      minimumPrice: 1000 + index,
+      priceAlertAtUserIds: [],
+    })));
+    const batchSizes: number[] = [];
+    const summaries: string[] = [];
+    const plugin = createFf14Plugin({
+      loadCurrentConfig: async () => config,
+      getRepository: async () => ({
+        listDisabledFf14PriceAlerts: async () => [],
+      } as never),
+    });
+
+    await plugin.handle!({
+      command: { name: "ff14", args: "list", raw: "ff14 list" },
+      config,
+      message: adminMessage,
+      reply: async () => undefined,
+      replyForward: async (messages: unknown[], options?: { summary?: string }) => {
+        batchSizes.push(messages.length);
+        summaries.push(options?.summary ?? "");
+      },
+    } as never);
+
+    expect(batchSizes).toEqual([10, 10, 1]);
+    expect(summaries).toEqual([
+      "本群共 21 条 · 这里是第 1–10 条",
+      "本群共 21 条 · 这里是第 11–20 条",
+      "本群共 21 条 · 这里是第 21–21 条",
+    ]);
   });
 
   test("does not let an ordinary member mutate group alerts", async () => {
