@@ -273,7 +273,7 @@ await reply({
 });
 ```
 
-发送视频等大媒体时，应参考 [`plugins/video.ts`](plugins/video.ts) 处理路径映射、超时和清理。视频先通过 NapCat 的 `video` 消息段发送，失败后只使用包含同一消息段的单节点合并转发降级，不使用 Base64。
+发送视频等大媒体时，应参考 [`plugins/video.ts`](plugins/video.ts) 处理路径映射、超时和清理。视频依次使用文件路径 `video` 消息段、Base64 `video` 消息段和包含文件 `video` 消息段的单节点合并转发降级。
 
 ### 合并转发
 

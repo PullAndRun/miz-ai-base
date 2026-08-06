@@ -1,10 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm, truncate, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
-  BILIBILI_QQ_VIDEO_FORMAT,
-  canSendNapcatVideoAsDataUrl,
   cleanupStaleVideoArtifacts,
   createFfmpegTranscodeArgs,
   createTranscodedVideoPath,
@@ -14,22 +12,19 @@ import {
   createYtDlpRequestArgs,
   createYtDlpVideoFormatArgs,
   createYtDlpUpdateArgs,
-  getNapcatVideoDataUrl,
+  getNapcatVideoBase64,
   getNapcatVideoFile,
   isBilibiliUrl,
   isRetryableYtDlpError,
   isVideoDurationAllowed,
-  MAX_NAPCAT_DATA_URL_VIDEO_BYTES,
   MAX_VIDEO_DURATION_SECONDS,
 } from "@/video";
 import type { VideoConfig } from "@/config";
 import {
-  createNapcatDataUrlVideoMessage,
+  createNapcatBase64VideoMessage,
   createNapcatVideoMessage,
   deliverVideoWithFallback,
   isVideoDeliveryError,
-  isVideoDeliveryUnknownError,
-  isVideoSendTimeoutError,
 } from "@/video-delivery";
 
 const videoConfig: VideoConfig = {
@@ -91,19 +86,19 @@ describe("video download filenames", () => {
     });
   });
 
-  test("matches the Data URL produced by NapCat's video picker", async () => {
+  test("creates a NapCat Base64 video resource", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
     const videoPath = path.join(directory, "video.mp4");
     try {
       await writeFile(videoPath, Buffer.from([0, 1, 2, 253, 254, 255]));
 
-      expect(await getNapcatVideoDataUrl(videoPath)).toBe(
-        "data:video/mp4;base64,AAEC/f7/",
+      expect(await getNapcatVideoBase64(videoPath)).toBe(
+        "base64://AAEC/f7/",
       );
-      expect(await createNapcatDataUrlVideoMessage(videoPath)).toEqual({
+      expect(await createNapcatBase64VideoMessage(videoPath)).toEqual({
         type: "video",
         data: {
-          file: "data:video/mp4;base64,AAEC/f7/",
+          file: "base64://AAEC/f7/",
         },
       });
     } finally {
@@ -111,19 +106,6 @@ describe("video download filenames", () => {
     }
   });
 
-  test("keeps Data URL payloads below NapCat's WebSocket limit", async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
-    const videoPath = path.join(directory, "video.mp4");
-    try {
-      await writeFile(videoPath, Buffer.from([0, 1, 2]));
-      expect(await canSendNapcatVideoAsDataUrl(videoPath)).toBeTrue();
-
-      await truncate(videoPath, MAX_NAPCAT_DATA_URL_VIDEO_BYTES + 1);
-      expect(await canSendNapcatVideoAsDataUrl(videoPath)).toBeFalse();
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("stale video artifact cleanup", () => {
@@ -174,14 +156,8 @@ describe("ffmpeg video transcoding", () => {
     expect(args.at(-1)).toBe("output.mp4");
   });
 
-  test("preserves Bilibili's QQ-compatible H.264/AAC streams", () => {
-    expect(createYtDlpVideoFormatArgs(true)).toEqual([
-      "--format",
-      BILIBILI_QQ_VIDEO_FORMAT,
-      "--merge-output-format",
-      "mp4",
-    ]);
-    expect(createYtDlpVideoFormatArgs(false)).toEqual([
+  test("downloads the best source before FFmpeg transcodes it", () => {
+    expect(createYtDlpVideoFormatArgs()).toEqual([
       "--format",
       "bv*+ba/b",
       "--merge-output-format",
@@ -257,6 +233,20 @@ describe("Bilibili download authentication", () => {
       "https://example.com/video.mp4",
     ]);
   });
+
+  test("combines the miz.network proxy and Bilibili cookie file", () => {
+    expect(createYtDlpRequestArgs(
+      "https://www.bilibili.com/video/BV1",
+      { proxyUrl: "http://proxy.example.test:7890" },
+      "/temp/miz.cookies",
+    )).toEqual([
+      "--proxy",
+      "http://proxy.example.test:7890",
+      "--cookies",
+      "/temp/miz.cookies",
+      "https://www.bilibili.com/video/BV1",
+    ]);
+  });
 });
 
 describe("yt-dlp transient failures", () => {
@@ -282,13 +272,6 @@ describe("yt-dlp updates", () => {
 
   test("does not pass a proxy option when miz.network has no proxy", () => {
     expect(createYtDlpUpdateArgs({ proxyUrl: "" })).toEqual(["-U"]);
-  });
-});
-
-describe("video delivery timeout", () => {
-  test("treats an API timeout as an unknown send result", () => {
-    expect(isVideoSendTimeoutError({ code: "E_API_TIMEOUT" })).toBeTrue();
-    expect(isVideoSendTimeoutError(new Error("download failed"))).toBeFalse();
   });
 });
 
@@ -319,14 +302,14 @@ describe("video delivery fallback", () => {
     }
   });
 
-  test("stops fallback after a timeout because the send result is unknown", async () => {
+  test("falls back to Base64 after a file send timeout", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
     const videoPath = path.join(directory, "video.mp4");
     const sentFiles: string[] = [];
     let forwards = 0;
     try {
       await writeFile(videoPath, Buffer.from([0, 1, 2]));
-      const delivery = deliverVideoWithFallback(
+      const result = await deliverVideoWithFallback(
         videoPath,
         videoConfig,
         async (message) => {
@@ -340,10 +323,12 @@ describe("video delivery fallback", () => {
         },
       );
 
-      const error = await delivery.catch((deliveryError: unknown) => deliveryError);
-      expect(isVideoDeliveryUnknownError(error)).toBeTrue();
-      expect(error).toMatchObject({ mode: "file" });
-      expect(sentFiles).toEqual([`file:///app/media/${path.basename(videoPath)}`]);
+      expect(result.mode).toBe("base64");
+      expect(result.attempts).toHaveLength(1);
+      expect(sentFiles).toEqual([
+        `file:///app/media/${path.basename(videoPath)}`,
+        "base64://AAEC",
+      ]);
       expect(forwards).toBe(0);
     } finally {
       await rm(directory, { recursive: true, force: true });
@@ -371,38 +356,15 @@ describe("video delivery fallback", () => {
         },
       );
 
-      expect(result.mode).toBe("data-url");
+      expect(result.mode).toBe("base64");
       expect(result.attempts).toHaveLength(1);
       expect(result.attempts[0]).toMatchObject({ mode: "file" });
       expect(result.attempts[0]?.error).toBeInstanceOf(Error);
       expect(sentFiles).toEqual([
         `file:///app/media/${path.basename(videoPath)}`,
-        "data:video/mp4;base64,AAEC",
+        "base64://AAEC",
       ]);
       expect(forwards).toBe(0);
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
-
-  test("uses the shared file URL without constructing Base64 for oversized videos", async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
-    const videoPath = path.join(directory, "video.mp4");
-    const sentFiles: string[] = [];
-    try {
-      await writeFile(videoPath, Buffer.alloc(0));
-      await truncate(videoPath, MAX_NAPCAT_DATA_URL_VIDEO_BYTES + 1);
-      const result = await deliverVideoWithFallback(
-        videoPath,
-        { ...videoConfig, runtimeMode: "docker" },
-        async (message) => {
-          sentFiles.push(message.data.file);
-        },
-        async () => undefined,
-      );
-
-      expect(result).toEqual({ mode: "file", attempts: [] });
-      expect(sentFiles).toEqual([`file:///app/media/${path.basename(videoPath)}`]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -428,10 +390,10 @@ describe("video delivery fallback", () => {
       );
 
       expect(result.mode).toBe("forward");
-      expect(result.attempts.map((attempt) => attempt.mode)).toEqual(["file", "data-url"]);
+      expect(result.attempts.map((attempt) => attempt.mode)).toEqual(["file", "base64"]);
       expect(sentFiles).toEqual([
         `file:///app/media/${path.basename(videoPath)}`,
-        "data:video/mp4;base64,AAEC",
+        "base64://AAEC",
       ]);
       expect(forwardedFiles).toEqual([`file:///app/media/${path.basename(videoPath)}`]);
     } finally {

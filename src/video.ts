@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { BilibiliConfig, NetworkConfig, VideoConfig } from "@/config";
@@ -14,20 +14,7 @@ const YT_DLP_OUTER_RETRY_COUNT = 1;
 const YT_DLP_OUTER_RETRY_DELAY_MS = 2_000;
 export const STALE_VIDEO_ARTIFACT_MAX_AGE_MS = 24 * 60 * 60_000;
 const VIDEO_ARTIFACT_NAME_PATTERN = /^miz-video-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?:-source)?\./i;
-export const BILIBILI_QQ_VIDEO_FORMAT = [
-  "30080+30280",
-  "30064+30280",
-  "30032+30280",
-  "30016+30280",
-  "bv*[vcodec^=avc1][height<=1080]+ba[acodec^=mp4a]",
-  "b[ext=mp4][vcodec^=avc1][height<=1080]",
-].join("/");
 export const MAX_VIDEO_DURATION_SECONDS = 10 * 60;
-const NAPCAT_WEBSOCKET_MAX_PAYLOAD_BYTES = 50 * 1024 * 1024;
-const NAPCAT_DATA_URL_PAYLOAD_HEADROOM_BYTES = 1024 * 1024;
-export const MAX_NAPCAT_DATA_URL_VIDEO_BYTES = Math.floor(
-  (NAPCAT_WEBSOCKET_MAX_PAYLOAD_BYTES - NAPCAT_DATA_URL_PAYLOAD_HEADROOM_BYTES) * 3 / 4,
-);
 
 export const isVideoDurationAllowed = (durationSeconds: number) =>
   Number.isFinite(durationSeconds) && durationSeconds > 0 && durationSeconds <= MAX_VIDEO_DURATION_SECONDS;
@@ -75,8 +62,6 @@ export const downloadVideo = async ({
   const downloadStartedAt = Date.now();
   const requestId = crypto.randomUUID();
   const transcodedVideoPath = createTranscodedVideoPath(downloadDirectory, requestId);
-  const preserveBilibiliStreams = isBilibiliUrl(url, config.bilibiliHosts);
-
   const args = [
     "--no-playlist",
     "--no-progress",
@@ -91,7 +76,7 @@ export const downloadVideo = async ({
     "fragment:exp=1:20",
     "--output",
     createVideoSourcePathTemplate(downloadDirectory, requestId),
-    ...createYtDlpVideoFormatArgs(preserveBilibiliStreams),
+    ...createYtDlpVideoFormatArgs(),
     ...createYtDlpFfmpegLocationArgs(config),
     "--print",
     "after_move:filepath",
@@ -102,12 +87,6 @@ export const downloadVideo = async ({
     const sourceVideoPath = await findDownloadedVideo(output, downloadDirectory, downloadStartedAt, requestId);
     if (!sourceVideoPath) {
       throw new Error("yt-dlp returned a missing video file");
-    }
-
-    if (preserveBilibiliStreams && path.extname(sourceVideoPath).toLowerCase() === ".mp4") {
-      await rename(sourceVideoPath, transcodedVideoPath);
-      await assertUsableVideoFile(transcodedVideoPath, "yt-dlp returned a missing or empty video file");
-      return transcodedVideoPath;
     }
 
     await runFfmpeg(config, createFfmpegTranscodeArgs(sourceVideoPath, transcodedVideoPath));
@@ -146,11 +125,8 @@ export const getNapcatVideoFile = (videoPath: string, config: VideoConfig) => {
   return fileUrl.href;
 };
 
-export const getNapcatVideoDataUrl = async (videoPath: string) =>
-  `data:video/mp4;base64,${(await readFile(videoPath)).toString("base64")}`;
-
-export const canSendNapcatVideoAsDataUrl = async (videoPath: string) =>
-  (await stat(videoPath)).size <= MAX_NAPCAT_DATA_URL_VIDEO_BYTES;
+export const getNapcatVideoBase64 = async (videoPath: string) =>
+  `base64://${(await readFile(videoPath)).toString("base64")}`;
 
 export const deleteDownloadedVideo = (videoPath: string) => rm(videoPath, { force: true });
 
@@ -187,11 +163,11 @@ export const createVideoSourcePathTemplate = (downloadDirectory: string, request
 export const createTranscodedVideoPath = (downloadDirectory: string, requestId: string) =>
   path.join(downloadDirectory, `miz-video-${requestId}.mp4`);
 
-export const createYtDlpVideoFormatArgs = (preserveBilibiliStreams: boolean) => [
+export const createYtDlpVideoFormatArgs = () => [
   "--format",
-  preserveBilibiliStreams ? BILIBILI_QQ_VIDEO_FORMAT : "bv*+ba/b",
+  "bv*+ba/b",
   "--merge-output-format",
-  preserveBilibiliStreams ? "mp4" : "mkv",
+  "mkv",
 ];
 
 export const createYtDlpFfmpegLocationArgs = (

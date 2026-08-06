@@ -1,10 +1,8 @@
 import type { Logger } from "@/logger";
 import type { MizPlugin } from "@/plugins";
-import { hasRichMediaTransferFailure } from "@/rich-media-error";
 import {
   deliverVideoWithFallback,
   isVideoDeliveryError,
-  isVideoDeliveryUnknownError,
   type VideoDeliveryError,
 } from "@/video-delivery";
 import { tryAcquireVideoJob } from "@/video-jobs";
@@ -17,15 +15,8 @@ import {
   isVideoUrl,
   isWhitelistedVideoUser,
 } from "@/video";
-import {
-  formatVideoCircuitBreakerMessage,
-  getVideoCircuitBreakerStatus,
-  recordVideoDeliverySuccess,
-  recordVideoRichMediaTransferFailure,
-} from "@/video-circuit-breaker";
 
 const VIDEO_SEND_TIMEOUT_MS = 10 * 60_000;
-const VIDEO_SEND_CLEANUP_GRACE_MS = 10 * 60_000;
 
 const videoPlugin: MizPlugin = {
   name: "video",
@@ -51,12 +42,6 @@ const videoPlugin: MizPlugin = {
 
     if (!config.video.enabled) {
       await reply("视频搬运通道还没开启，喊管理员来接通一下吧。");
-      return;
-    }
-
-    const circuitBreakerStatus = getVideoCircuitBreakerStatus();
-    if (circuitBreakerStatus.disabled) {
-      await reply(formatVideoCircuitBreakerMessage(circuitBreakerStatus));
       return;
     }
 
@@ -142,53 +127,22 @@ const processVideo = async ({
       network: config.network,
       bilibili: config.bilibili,
     });
-    let delayedCleanup = false;
     try {
       deliveryAttempted = true;
-      const delivery = await deliverVideoWithFallback(
+      await deliverVideoWithFallback(
         downloadedVideoPath,
         config.video,
         sendVideo,
         sendForward,
       );
-      if (delivery.attempts.some((attempt) => hasRichMediaTransferFailure(attempt.error))) {
-        const status = recordVideoRichMediaTransferFailure();
-        logger.warn("plugin", "video rich-media circuit breaker recorded a failure", status);
-        if (status.disabled) {
-          await reply(formatVideoCircuitBreakerMessage(status));
-        }
-      } else {
-        recordVideoDeliverySuccess();
-      }
-    } catch (error) {
-      delayedCleanup = isVideoDeliveryUnknownError(error);
-      throw error;
     } finally {
-      if (delayedCleanup) {
-        scheduleVideoCleanup(downloadedVideoPath, logger);
-      } else {
-        await cleanupVideoFile(downloadedVideoPath, logger);
-      }
+      await cleanupVideoFile(downloadedVideoPath, logger);
     }
   } catch (error) {
-    if (isVideoDeliveryUnknownError(error)) {
-      logger.warn("plugin", "video delivery timed out with an unknown result", {
-        mode: error.mode,
-        error: describeError(error.cause),
-      });
-      await reply("视频发送请求超时了，结果暂时无法确认。请先看看聊天里是否已经出现视频，避免重复发送。");
-      return;
-    }
     if (isVideoDeliveryError(error)) {
       logger.warn("plugin", "all video delivery strategies failed", {
         attempts: describeDeliveryAttempts(error),
       });
-      if (error.attempts.some((attempt) => hasRichMediaTransferFailure(attempt.error))) {
-        const status = recordVideoRichMediaTransferFailure();
-        logger.warn("plugin", "video rich-media circuit breaker recorded a failure", status);
-        await reply(formatVideoCircuitBreakerMessage(status));
-        return;
-      }
     } else {
       logger.error("plugin", "video processing failed", error);
     }
@@ -218,11 +172,4 @@ const cleanupVideoFile = async (videoPath: string, logger: Logger) => {
   await deleteDownloadedVideo(videoPath).catch((error) => {
     logger.warn("plugin", "video cleanup failed", { videoPath, error });
   });
-};
-
-const scheduleVideoCleanup = (videoPath: string, logger: Logger) => {
-  const timer = setTimeout(() => {
-    void cleanupVideoFile(videoPath, logger);
-  }, VIDEO_SEND_CLEANUP_GRACE_MS);
-  timer.unref?.();
 };

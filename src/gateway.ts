@@ -4,7 +4,6 @@ import { createExpiringCache, readExpiringCache, writeExpiringCache } from "@/ca
 import type { MizConfig } from "@/config";
 import type { Logger } from "@/logger";
 import type { ForwardMessageContent } from "@/plugins";
-import { hasRichMediaTransferFailure } from "@/rich-media-error";
 
 export type IncomingMessage = {
   text: string;
@@ -318,7 +317,7 @@ const createNapLinkLogger = (logger: Logger): NapLinkLogger => ({
   debug: (message, ...metadata) => logger.debug("gateway", message, metadataOrUndefined(metadata)),
   info: (message, ...metadata) => logger.info("gateway", message, metadataOrUndefined(metadata)),
   warn: (message, ...metadata) => {
-    if (isIgnorableNapLinkWarning(message, metadata)) {
+    if (isIgnorableNapLinkWarning(message)) {
       return;
     }
 
@@ -330,13 +329,8 @@ const createNapLinkLogger = (logger: Logger): NapLinkLogger => ({
 
 const metadataOrUndefined = (metadata: unknown[]) => (metadata.length === 0 ? undefined : metadata);
 
-export const isIgnorableNapLinkWarning = (message: string, metadata: readonly unknown[] = []) =>
-  message === "收到未知请求的响应: undefined" ||
-  (
-    ["send_group_msg", "send_private_msg", "send_forward_msg"]
-      .some((action) => message.endsWith(`: ${action}`)) &&
-    metadata.some(hasRichMediaTransferFailure)
-  );
+export const isIgnorableNapLinkWarning = (message: string) =>
+  message === "收到未知请求的响应: undefined";
 
 const registerEvents = (
   client: NapLink,
