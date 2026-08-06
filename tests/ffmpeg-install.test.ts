@@ -23,7 +23,6 @@ const videoConfig: VideoConfig = {
   ffmpegLinuxPath: "tools/ffmpeg",
   ffmpegWindowsPath: "tools/ffmpeg.exe",
   maxConcurrentJobs: 2,
-  updateCron: "0 0 * * *",
 };
 
 describe("manual FFmpeg download", () => {

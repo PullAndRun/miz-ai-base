@@ -76,14 +76,14 @@ FF14 低价提醒和 VTB 群订阅分别参考：
 | Windows | `tools/yt-dlp.exe` | `tools/ffmpeg.exe` |
 | Linux / Docker | `tools/yt-dlp` | `tools/ffmpeg` |
 
-应用启动时不会检查或下载 FFmpeg。需要时请运行统一的依赖更新脚本；它会更新 npm 依赖，并按当前 CPU 架构同时查询和准备 Windows 与 Linux 两套最新稳定版 FFmpeg、yt-dlp 文件。已有文件会先检查上游版本，只有版本落后时才替换；下载支持 `[miz.network].proxyUrl`，FFmpeg 会校验 SHA-256。
+FFmpeg 和 yt-dlp 需要先自行安装。执行 `bun run start` 或 `bun run dev` 时，应用启动前仍会检查并更新 npm 依赖，但不会查询、下载或更新 FFmpeg 和 yt-dlp；只会读取当前系统所配置工具的本地版本并输出：
 
-| 目标平台 | 自动更新的构建 |
-| --- | --- |
-| Windows x64 / ARM64 | BtbN 最新稳定版 GPL（ZIP） |
-| Linux x64 / ARM64 | BtbN 最新稳定版 GPL（tar.xz） |
+```text
+FFmpeg: 8.1.2
+yt-dlp: 2026.07.04
+```
 
-运行统一更新脚本：
+需要主动检测并更新 npm 依赖、FFmpeg 和 yt-dlp 时，仍使用完整更新命令。它会按当前 CPU 架构查询和准备 Windows 与 Linux 两套工具文件；下载支持 `[miz.network].proxyUrl`，FFmpeg 会校验 SHA-256：
 
 ```bash
 bun run dependencies:update -- normal
@@ -267,7 +267,6 @@ napcatMediaDirectory = "/app/media"
 | VTB 动态 | 分片轮转，默认约 15 分钟覆盖全部订阅主播。 |
 | VTB 资料同步 | 默认每周日 00:00。 |
 | FF14 低价提醒 | 默认每小时检查，实际目标由 `config/ff14.toml` 配置。 |
-| yt-dlp 更新 | 默认每天 00:00。 |
 
 同一个定时任务不会重叠执行：前一次还未结束时，下一次会跳过并写入日志。短暂的事件循环或容器调度延迟会被容忍；确实错过 cron 时刻时，任务恢复调度后会自动补跑一次。VTB 上游请求还会合并相同并发查询、限制请求间隔，并在遇到 429、412 或连续故障时暂时熔断，冷却后自动恢复。
 
@@ -323,12 +322,12 @@ bun audit
 
 | 脚本 | 作用 |
 | --- | --- |
-| `bun run start` | 更新依赖后，以普通模式启动、生成 Prisma Client 并执行迁移。 |
-| `bun run start:docker` | 更新依赖后，以 Docker 模式启动并加载 `app.docker.toml`。 |
-| `bun run dev` | 更新依赖后，以普通模式监听源文件变化。 |
-| `bun run dev:docker` | 更新依赖后，以 Docker 配置监听源文件变化。 |
-| `bun run dependencies:update -- normal` | 使用本机 `app.local.toml` 的代理更新 npm 依赖、FFmpeg 和 yt-dlp。 |
-| `bun run dependencies:update -- docker` | 使用 Docker `app.docker.toml` 的代理更新 npm 依赖、FFmpeg 和 yt-dlp。 |
+| `bun run start` | 更新 npm 依赖、显示媒体工具版本后，以普通模式启动、生成 Prisma Client 并执行迁移。 |
+| `bun run start:docker` | 更新 npm 依赖、显示媒体工具版本后，以 Docker 模式启动并加载 `app.docker.toml`。 |
+| `bun run dev` | 更新 npm 依赖、显示媒体工具版本后，以普通模式监听源文件变化。 |
+| `bun run dev:docker` | 更新 npm 依赖、显示媒体工具版本后，以 Docker 配置监听源文件变化。 |
+| `bun run dependencies:update -- normal` | 使用本机 `app.local.toml` 的代理检测并更新 npm 依赖、FFmpeg 和 yt-dlp。 |
+| `bun run dependencies:update -- docker` | 使用 Docker `app.docker.toml` 的代理检测并更新 npm 依赖、FFmpeg 和 yt-dlp。 |
 | `bun run prisma:migrate` | 使用当前配置执行 `prisma migrate deploy`。 |
 | `bun run prisma:push` | 将 Schema 直接推送到数据库，适合本地开发验证。 |
 

@@ -11,13 +11,15 @@ import {
   createYtDlpFfmpegLocationArgs,
   createYtDlpRequestArgs,
   createYtDlpVideoFormatArgs,
-  createYtDlpUpdateArgs,
   getNapcatVideoBase64,
   getNapcatVideoFile,
   isBilibiliUrl,
   isRetryableYtDlpError,
   isVideoDurationAllowed,
   MAX_VIDEO_DURATION_SECONDS,
+  parseFfmpegDisplayVersion,
+  parseYtDlpDisplayVersion,
+  readMediaToolVersions,
 } from "@/video";
 import type { VideoConfig } from "@/config";
 import {
@@ -39,7 +41,6 @@ const videoConfig: VideoConfig = {
   ffmpegLinuxPath: "tools/ffmpeg",
   ffmpegWindowsPath: "tools/ffmpeg.exe",
   maxConcurrentJobs: 2,
-  updateCron: "0 0 * * *",
 };
 const networkConfig = { proxyUrl: "" };
 const bilibiliConfig = { cookie: "SESSDATA=test-cookie" };
@@ -261,17 +262,29 @@ describe("yt-dlp transient failures", () => {
   });
 });
 
-describe("yt-dlp updates", () => {
-  test("uses the proxy configured in miz.network", () => {
-    expect(createYtDlpUpdateArgs({ proxyUrl: "http://proxy.example.test:7890" })).toEqual([
-      "-U",
-      "--proxy",
-      "http://proxy.example.test:7890",
+describe("media tool versions", () => {
+  test("displays installed versions without checking for updates", async () => {
+    const calls: Array<{ executable: string; args: readonly string[]; processName: string }> = [];
+    const versions = await readMediaToolVersions(videoConfig, async (executable, args, processName) => {
+      calls.push({ executable, args, processName });
+      return processName === "ffmpeg"
+        ? "ffmpeg version n8.1.2-34-g9b6c8969e0\n"
+        : "2026.07.04\n";
+    });
+
+    expect(versions).toEqual({ ffmpeg: "8.1.2", ytDlp: "2026.07.04" });
+    expect(calls.map(({ args, processName }) => ({ args, processName }))).toEqual([
+      { args: ["-version"], processName: "ffmpeg" },
+      { args: ["--version"], processName: "yt-dlp" },
     ]);
   });
 
-  test("does not pass a proxy option when miz.network has no proxy", () => {
-    expect(createYtDlpUpdateArgs({ proxyUrl: "" })).toEqual(["-U"]);
+  test("formats version output and tolerates unavailable tools", async () => {
+    expect(parseFfmpegDisplayVersion("ffmpeg version 8.1.3-full_build\n")).toBe("8.1.3");
+    expect(parseYtDlpDisplayVersion("2026.07.04\nPython details")).toBe("2026.07.04");
+    await expect(readMediaToolVersions(videoConfig, async () => {
+      throw new Error("missing");
+    })).resolves.toEqual({ ffmpeg: "unavailable", ytDlp: "unavailable" });
   });
 });
 

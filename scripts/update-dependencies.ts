@@ -3,13 +3,18 @@ import { chmod, mkdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "@/config";
 import { installFfmpegForWindowsAndLinux } from "@/ffmpeg-install";
+import { readMediaToolVersions } from "@/video";
 
 const requestedRuntimeMode = process.argv[2];
+const displayToolVersionsOnly = process.argv.includes("--display-tool-versions");
 if (requestedRuntimeMode === "normal" || requestedRuntimeMode === "docker") {
   process.env.MIZ_RUNTIME_MODE = requestedRuntimeMode;
 }
 if (requestedRuntimeMode !== undefined && requestedRuntimeMode !== "normal" && requestedRuntimeMode !== "docker") {
-  throw new Error("Usage: bun run scripts/update-dependencies.ts [normal|docker]");
+  throw new Error("Usage: bun run scripts/update-dependencies.ts [normal|docker] [--display-tool-versions]");
+}
+if (process.argv.slice(3).some((argument) => argument !== "--display-tool-versions")) {
+  throw new Error("Usage: bun run scripts/update-dependencies.ts [normal|docker] [--display-tool-versions]");
 }
 
 if (requestedRuntimeMode === "docker" && !await Bun.file("config/app.docker.toml").exists()) {
@@ -119,10 +124,16 @@ if (result.changes.length === 0) {
   }
 }
 
-const ffmpegResults = await installFfmpegForWindowsAndLinux(config.video, config.network);
-for (const result of ffmpegResults) {
-  console.log(`FFmpeg ${result.platform}: ${result.status} ${result.version ?? "unknown"} (${result.path})`);
+if (displayToolVersionsOnly) {
+  const toolVersions = await readMediaToolVersions(config.video);
+  console.log(`FFmpeg: ${toolVersions.ffmpeg}`);
+  console.log(`yt-dlp: ${toolVersions.ytDlp}`);
+} else {
+  const ffmpegResults = await installFfmpegForWindowsAndLinux(config.video, config.network);
+  for (const result of ffmpegResults) {
+    console.log(`FFmpeg ${result.platform}: ${result.status} ${result.version ?? "unknown"} (${result.path})`);
+  }
+  await updateYtDlpBinaries(config.network.proxyUrl, process.arch);
 }
-await updateYtDlpBinaries(config.network.proxyUrl, process.arch);
 
 export {};

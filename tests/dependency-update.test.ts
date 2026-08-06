@@ -9,6 +9,22 @@ import {
 } from "@/dependency-update";
 
 describe("package dependency updates", () => {
+  test("keeps package checks in startup while media tools are display-only", async () => {
+    const [packageJson, updateScript] = await Promise.all([
+      Bun.file("package.json").json() as Promise<{ scripts: Record<string, string> }>,
+      Bun.file("scripts/update-dependencies.ts").text(),
+    ]);
+
+    expect(packageJson.scripts.start).toStartWith(
+      "bun run dependencies:update -- normal --display-tool-versions",
+    );
+    expect(updateScript).toContain("updatePackageDependencies");
+    expect(updateScript).toContain("if (displayToolVersionsOnly)");
+    expect(updateScript).toContain("readMediaToolVersions");
+    expect(updateScript).toContain("installFfmpegForWindowsAndLinux");
+    expect(updateScript).toContain("updateYtDlpBinaries");
+  });
+
   test("uses the default package registry during startup updates", () => {
     expect(createBunUpdateArgs()).toEqual([
       "bun",

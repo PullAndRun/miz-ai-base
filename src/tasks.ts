@@ -14,7 +14,6 @@ import { createWallpaperMessage, getDailyWallpaper } from "@/wallpaper";
 import { settleWithConcurrency, startWithConcurrency } from "@/concurrency";
 import { getGroupIds } from "@/group-ids";
 import { deliverUnsentNews, fetchFinanceNews, formatScheduledNewsItems } from "@/news";
-import { updateYtDlp } from "@/video";
 import { createExclusiveCronTask, type ScheduledTaskRuntime } from "@/scheduled-task";
 import { serializeError } from "@/errors";
 import {
@@ -62,7 +61,6 @@ export const startScheduledTasks = async (
     startedTasks.push(await startScheduleTask(config, gateway, logger));
     startedTasks.push(await startActivityTask(config, gateway, logger));
     startedTasks.push(await startTodoTask(config, gateway, logger));
-    startedTasks.push(startYtDlpUpdateTask(config, logger));
     startedTasks.push(startVtbNameSyncTask(config, logger));
     startedTasks.push(await startVtbTask(config, gateway, logger));
     return { stop: () => stopTaskRuntime(startedTasks) };
@@ -874,37 +872,6 @@ const isVtbLiveStartRecent = (
 ) =>
   liveStartedAt === undefined ||
   nowMs - liveStartedAt.getTime() < getVtbPollingIntervalMs(cronExpression) + 60_000;
-
-const startYtDlpUpdateTask = (config: MizConfig, logger: Logger): TaskRuntime => {
-  if (!config.video.enabled) {
-    logger.info("plugin", "yt-dlp update task disabled: video plugin is off");
-    return createNoopTask();
-  }
-
-  const cronExpression = config.video.updateCron;
-  if (!cron.validate(cronExpression)) {
-    logger.warn("plugin", "yt-dlp update task disabled: invalid cron expression", {
-      cronExpression,
-    });
-    return createNoopTask();
-  }
-
-  const runTask = async () => {
-    await updateYtDlp(config.video, config.network);
-    logger.info("plugin", "yt-dlp updated");
-  };
-
-  logger.info("plugin", "yt-dlp update task started", { cronExpression });
-  return createExclusiveCronTask({
-    cronExpression,
-    taskName: "yt-dlp update task",
-    logger,
-    run: runTask,
-    skippedMessage: "yt-dlp update task skipped: previous run is still active",
-    failureMessage: "yt-dlp update failed",
-    shutdownFailureMessage: "yt-dlp update ended with an error during shutdown",
-  });
-};
 
 const startNewsTask = (config: MizConfig, gateway: Gateway, logger: Logger): TaskRuntime => {
   if (!config.news.enabled) {

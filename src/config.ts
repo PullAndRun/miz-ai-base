@@ -141,7 +141,6 @@ const rawMizConfigSchema = z.object({
       ffmpegLinuxPath: nonEmptyStringSchema.optional(),
       ffmpegWindowsPath: nonEmptyStringSchema.optional(),
       maxConcurrentJobs: z.number().int().positive().max(8).optional(),
-      updateCron: nonEmptyStringSchema.optional(),
     })
     .optional(),
   vtb: z
@@ -265,7 +264,6 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     ffmpegLinuxPath: config.video?.ffmpegLinuxPath ?? "tools/ffmpeg",
     ffmpegWindowsPath: config.video?.ffmpegWindowsPath ?? "tools/ffmpeg.exe",
     maxConcurrentJobs: config.video?.maxConcurrentJobs ?? 2,
-    updateCron: config.video?.updateCron ?? "0 0 * * *",
   },
   vtb: {
     enabled: config.vtb?.enabled ?? true,
@@ -372,7 +370,6 @@ export type VideoConfig = {
   ffmpegLinuxPath: string;
   ffmpegWindowsPath: string;
   maxConcurrentJobs: number;
-  updateCron: string;
 };
 
 export type VtbConfig = {

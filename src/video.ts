@@ -152,11 +152,6 @@ export const cleanupStaleVideoArtifacts = async (
   return removed;
 };
 
-export const createYtDlpUpdateArgs = (network: NetworkConfig) => [
-  "-U",
-  ...(network.proxyUrl ? ["--proxy", network.proxyUrl] : []),
-];
-
 export const createVideoSourcePathTemplate = (downloadDirectory: string, requestId: string) =>
   path.join(downloadDirectory, `miz-video-${requestId}-source.%(ext)s`);
 
@@ -209,10 +204,6 @@ export const createFfmpegTranscodeArgs = (sourceVideoPath: string, outputVideoPa
   "+faststart",
   outputVideoPath,
 ];
-
-export const updateYtDlp = async (config: VideoConfig, network: NetworkConfig) => {
-  await runYtDlp(config, createYtDlpUpdateArgs(network));
-};
 
 export const createYtDlpRequestArgs = (
   url: string,
@@ -319,6 +310,47 @@ const runYtDlp = (config: VideoConfig, args: string[]) =>
 
 const runFfmpeg = (config: VideoConfig, args: string[]) =>
   runProcess(getFfmpegPath(config), args, "ffmpeg", TRANSCODE_TIMEOUT_MS);
+
+type MediaToolVersionRunner = (
+  executable: string,
+  args: readonly string[],
+  processName: string,
+) => Promise<string>;
+
+export const readMediaToolVersions = async (
+  config: VideoConfig,
+  runVersionCommand: MediaToolVersionRunner = (executable, args, processName) =>
+    runProcess(executable, [...args], processName, 10_000),
+) => {
+  const [ffmpeg, ytDlp] = await Promise.all([
+    readMediaToolVersion(
+      () => runVersionCommand(getFfmpegPath(config), ["-version"], "ffmpeg"),
+      parseFfmpegDisplayVersion,
+    ),
+    readMediaToolVersion(
+      () => runVersionCommand(getYtDlpPath(config), ["--version"], "yt-dlp"),
+      parseYtDlpDisplayVersion,
+    ),
+  ]);
+  return { ffmpeg, ytDlp } as const;
+};
+
+const readMediaToolVersion = async (
+  readOutput: () => Promise<string>,
+  parseVersion: (output: string) => string | undefined,
+) => {
+  try {
+    return parseVersion(await readOutput()) ?? "unknown";
+  } catch {
+    return "unavailable";
+  }
+};
+
+export const parseFfmpegDisplayVersion = (output: string) =>
+  /^ffmpeg version (?:n)?(\d+(?:\.\d+){1,2})/im.exec(output)?.[1];
+
+export const parseYtDlpDisplayVersion = (output: string) =>
+  output.split(/\r?\n/, 1)[0]?.trim() || undefined;
 
 const runProcess = (
   executable: string,
