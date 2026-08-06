@@ -4,6 +4,7 @@ import { updateVtbSubscriptionNames, type MizConfig } from "@/config";
 import { isGroupMessageUnavailableError, type Gateway } from "@/gateway";
 import type { Logger } from "@/logger";
 import {
+  createFf14PriceAlertMentionMessage,
   FF14_REGION_NAMES,
   formatFf14MarketMessages,
   getLowestMarketPrice,
@@ -1180,6 +1181,13 @@ const runFf14PriceAlerts = async (
           summary: `${FF14_REGION_NAMES[alert.region]} · 好价出现，已到 ${alert.minimumPrice.toLocaleString("zh-CN")} gil 以下`,
         },
       );
+
+      if (config.ff14.priceAlertAtUserIds.length > 0) {
+        await gateway.sendGroupMessage(
+          alert.groupId,
+          createFf14PriceAlertMentionMessage(config.ff14.priceAlertAtUserIds),
+        );
+      }
 
       logger.info("plugin", "ff14 price alert sent", {
         ...alert,

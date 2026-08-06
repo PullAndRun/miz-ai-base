@@ -49,6 +49,7 @@ const rawMizConfigSchema = z.object({
     .object({
       priceAlertEnabled: z.boolean().optional(),
       priceAlertCron: nonEmptyStringSchema.optional(),
+      priceAlertAtUserIds: z.array(targetIdSchema).optional(),
       maxListingCount: z.number().int().positive().optional(),
       itemSearchApiUrl: nonEmptyStringSchema.optional(),
       marketApiUrl: nonEmptyStringSchema.optional(),
@@ -198,6 +199,7 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
   ff14: {
     priceAlertEnabled: config.ff14?.priceAlertEnabled ?? true,
     priceAlertCron: config.ff14?.priceAlertCron ?? "0 * * * *",
+    priceAlertAtUserIds: config.ff14?.priceAlertAtUserIds ?? [],
     maxListingCount: config.ff14?.maxListingCount ?? 10,
     itemSearchApiUrl: config.ff14?.itemSearchApiUrl ?? "",
     marketApiUrl: config.ff14?.marketApiUrl ?? "",

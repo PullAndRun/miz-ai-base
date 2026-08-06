@@ -29,6 +29,7 @@ cookie = ""
 [miz.ff14]
 priceAlertEnabled = true
 priceAlertCron = ""
+priceAlertAtUserIds = []
 maxListingCount = 0
 itemSearchApiUrl = ""
 marketApiUrl = ""

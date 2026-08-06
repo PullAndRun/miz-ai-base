@@ -66,6 +66,23 @@ export type Ff14MarketResult = {
   regionName: string;
 };
 
+export const createFf14PriceAlertMentionMessage = (
+  userIds: readonly (string | number)[],
+) => {
+  const uniqueUserIds = [...new Map(userIds.map((userId) => [String(userId), userId])).values()];
+  return uniqueUserIds.flatMap((userId, index) => [
+    { type: "at", data: { qq: userId } },
+    {
+      type: "text",
+      data: {
+        text: index === uniqueUserIds.length - 1
+          ? " FF14 低价提醒已触发，请查看上方行情。"
+          : " ",
+      },
+    },
+  ]);
+};
+
 const DEFAULT_MAX_LISTING_COUNT = 10;
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_FF14_RESPONSE_BYTES = 5 * 1024 * 1024;
