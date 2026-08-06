@@ -2,9 +2,8 @@ import { chmod, copyFile, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promi
 import path from "node:path";
 import type { NetworkConfig, VideoConfig } from "@/config";
 
-export const SUPPORTED_FFMPEG_RELEASE = "8.1";
-const GYAN_BASE_URL = "https://www.gyan.dev/ffmpeg/builds/packages";
 const BTBN_BASE_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest";
+const BTBN_RELEASES_API_URL = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest";
 const MAX_FFMPEG_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const DOWNLOAD_PROGRESS_PERCENT_STEP = 5;
 const DOWNLOAD_PROGRESS_BYTES_STEP = 5 * 1024 * 1024;
@@ -33,7 +32,11 @@ export type FfmpegInstallOptions = Readonly<{
   onDownloadProgress?: (progress: FfmpegDownloadProgress) => void;
   platform?: "win32" | "linux";
   arch?: "x64" | "arm64";
+  resolveRelease?: (proxyUrl: string) => Promise<string>;
+  resolveChecksum?: (asset: FfmpegAsset, proxyUrl: string) => Promise<string | undefined>;
 }>;
+
+type FfmpegRelease = `${number}.${number}`;
 
 export type FfmpegDownloadProgress = Readonly<{
   archiveName: string;
@@ -46,28 +49,16 @@ export type FfmpegDownloadProgress = Readonly<{
 export const getFfmpegAsset = (
   platform: NodeJS.Platform = process.platform,
   arch: string = process.arch,
+  release: string,
 ): FfmpegAsset => {
-  if (platform === "win32" && arch === "x64") {
-    const archiveName = "ffmpeg-8.1.2-essentials_build.zip";
-    return {
-      archiveName,
-      archiveUrl: `${GYAN_BASE_URL}/${archiveName}`,
-      checksumUrl: `${GYAN_BASE_URL}/${archiveName}.sha256`,
-      checksumMode: "single",
-      executableName: "ffmpeg.exe",
-      probeName: "ffprobe.exe",
-      version: "8.1.2",
-    };
-  }
-
   const platformName = platform === "win32" ? "win" : platform === "linux" ? "linux" : undefined;
   const archName = arch === "x64" ? "64" : arch === "arm64" ? "arm64" : undefined;
-  if (!platformName || !archName) {
+  if (!platformName || !archName || !release || !/^\d+\.\d+$/.test(release)) {
     throw new Error(`FFmpeg download is not supported on ${platform}-${arch}`);
   }
 
   const extension = platform === "win32" ? "zip" : "tar.xz";
-  const archiveName = `ffmpeg-n8.1-latest-${platformName}${archName}-gpl-8.1.${extension}`;
+  const archiveName = `ffmpeg-n${release}-latest-${platformName}${archName}-gpl-${release}.${extension}`;
   return {
     archiveName,
     archiveUrl: `${BTBN_BASE_URL}/${archiveName}`,
@@ -75,16 +66,18 @@ export const getFfmpegAsset = (
     checksumMode: "manifest",
     executableName: platform === "win32" ? "ffmpeg.exe" : "ffmpeg",
     probeName: platform === "win32" ? "ffprobe.exe" : "ffprobe",
-    version: SUPPORTED_FFMPEG_RELEASE,
+    version: release,
   };
 };
 
 export const parseFfmpegVersion = (output: string) =>
   /^ffmpeg version (?:n)?(\d+\.\d+(?:\.\d+)?)/im.exec(output)?.[1];
 
-export const isSupportedFfmpegVersion = (output: string) => {
+export const isSupportedFfmpegVersion = (output: string, release?: string) => {
   const version = parseFfmpegVersion(output);
-  return version === SUPPORTED_FFMPEG_RELEASE || version?.startsWith(`${SUPPORTED_FFMPEG_RELEASE}.`) === true;
+  if (!release) return version !== undefined;
+  const expectedRelease = release;
+  return version === expectedRelease || version?.startsWith(`${expectedRelease}.`) === true;
 };
 
 export const parseExpectedSha256 = (
@@ -115,7 +108,9 @@ export const ensureFfmpeg = async (
 ): Promise<FfmpegInstallResult> => {
   const platform = options.platform ?? normalizeTargetPlatform(process.platform);
   const arch = options.arch ?? normalizeTargetArch(process.arch);
-  const asset = getFfmpegAsset(platform, arch);
+  const release = await (options.resolveRelease ?? resolveLatestFfmpegRelease)(network.proxyUrl);
+  const asset = getFfmpegAsset(platform, arch, release);
+  const expectedChecksum = await (options.resolveChecksum ?? resolveAssetChecksum)(asset, network.proxyUrl);
   const configuredPath = getConfiguredFfmpegPath(config, platform);
   const targetPath = resolveInstallTarget(configuredPath, asset.executableName);
   const nativeTarget = platform === process.platform && arch === process.arch;
@@ -123,7 +118,9 @@ export const ensureFfmpeg = async (
 
   if (!options.force && nativeTarget && currentPath) {
     const versionOutput = await (options.readCurrentVersion ?? readFfmpegVersion)(currentPath).catch(() => "");
-    if (isSupportedFfmpegVersion(versionOutput)) {
+    if (isSupportedFfmpegVersion(versionOutput, asset.version) &&
+      (expectedChecksum === undefined ||
+        await hasCurrentInstallMarker(currentPath, asset, platform, arch, expectedChecksum))) {
       return {
         status: "current",
         platform,
@@ -133,7 +130,7 @@ export const ensureFfmpeg = async (
       };
     }
   }
-  if (!options.force && !nativeTarget && await hasCurrentInstallMarker(targetPath, asset, platform, arch)) {
+  if (!options.force && !nativeTarget && await hasCurrentInstallMarker(targetPath, asset, platform, arch, expectedChecksum)) {
     return { status: "current", platform, arch, path: targetPath, version: asset.version };
   }
 
@@ -170,7 +167,7 @@ export const ensureFfmpeg = async (
     let installedVersion = asset.version;
     if (nativeTarget) {
       const installedVersionOutput = await readFfmpegVersion(stagedFfmpeg);
-      if (!isSupportedFfmpegVersion(installedVersionOutput)) {
+      if (!isSupportedFfmpegVersion(installedVersionOutput, asset.version)) {
         throw new Error(`Downloaded FFmpeg has unsupported version: ${installedVersionOutput.split(/\r?\n/)[0] ?? "unknown"}`);
       }
       installedVersion = parseFfmpegVersion(installedVersionOutput) ?? asset.version;
@@ -263,6 +260,7 @@ const hasCurrentInstallMarker = async (
   asset: FfmpegAsset,
   platform: "win32" | "linux",
   arch: "x64" | "arm64",
+  expectedChecksum?: string,
 ) => {
   const target = await stat(targetPath).catch(() => undefined);
   if (!target?.isFile() || target.size === 0) {
@@ -274,6 +272,7 @@ const hasCurrentInstallMarker = async (
       marker.arch === arch &&
       marker.archiveName === asset.archiveName &&
       marker.version === asset.version &&
+      (expectedChecksum === undefined || marker.archiveSha256 === expectedChecksum) &&
       /^[a-f0-9]{64}$/.test(marker.archiveSha256) &&
       /^[a-f0-9]{64}$/.test(marker.binarySha256) &&
       await calculateFileSha256(targetPath) === marker.binarySha256;
@@ -311,6 +310,29 @@ const resolveInstallTarget = (configuredPath: string, executableName: string) =>
 const createFetchOptions = (proxyUrl: string) =>
   proxyUrl ? { proxy: proxyUrl } : {};
 
+const resolveLatestFfmpegRelease = async (proxyUrl: string): Promise<FfmpegRelease> => {
+  const response = await fetch(BTBN_RELEASES_API_URL, {
+    ...createFetchOptions(proxyUrl),
+    headers: { Accept: "application/vnd.github+json", "User-Agent": "miz-ffmpeg-downloader" },
+  });
+  if (!response.ok) {
+    throw new Error(`FFmpeg release lookup failed with HTTP ${response.status}`);
+  }
+  const payload = await response.json() as { assets?: Array<{ name?: string }> };
+  const releases = (payload.assets ?? [])
+    .map((asset) => /^ffmpeg-n(\d+\.\d+)-latest-(?:win64|winarm64|linux64|linuxarm64)-gpl-\1\.(?:zip|tar\.xz)$/.exec(asset.name ?? "")?.[1])
+    .filter((release): release is FfmpegRelease => release !== undefined);
+  const latest = [...new Set(releases)].sort((a, b) => {
+    const [aMajor, aMinor] = a.split(".").map(Number);
+    const [bMajor, bMinor] = b.split(".").map(Number);
+    return bMajor - aMajor || bMinor - aMinor;
+  })[0];
+  if (!latest) {
+    throw new Error("FFmpeg release lookup returned no stable release assets");
+  }
+  return latest;
+};
+
 const fetchText = async (url: string, proxyUrl: string) => {
   const response = await fetch(url, createFetchOptions(proxyUrl));
   if (!response.ok) {
@@ -318,6 +340,13 @@ const fetchText = async (url: string, proxyUrl: string) => {
   }
   return response.text();
 };
+
+const resolveAssetChecksum = async (asset: FfmpegAsset, proxyUrl: string) =>
+  parseExpectedSha256(
+    await fetchText(asset.checksumUrl, proxyUrl),
+    asset.archiveName,
+    asset.checksumMode,
+  );
 
 const downloadFile = async (
   url: string,

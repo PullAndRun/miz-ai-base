@@ -4,22 +4,18 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   createBunUpdateArgs,
-  DEPENDENCY_UPDATE_REGISTRY,
   findDependencyVersionChanges,
   updatePackageDependencies,
 } from "@/dependency-update";
 
 describe("package dependency updates", () => {
-  test("uses the npmmirror registry during startup updates", () => {
-    expect(DEPENDENCY_UPDATE_REGISTRY).toBe("https://registry.npmmirror.com");
+  test("uses the default package registry during startup updates", () => {
     expect(createBunUpdateArgs()).toEqual([
       "bun",
       "update",
       "--latest",
       "--ignore-scripts",
       "--no-progress",
-      "--registry",
-      "https://registry.npmmirror.com",
     ]);
   });
 

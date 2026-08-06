@@ -8,7 +8,6 @@ import {
   isSupportedFfmpegVersion,
   parseExpectedSha256,
   parseFfmpegVersion,
-  SUPPORTED_FFMPEG_RELEASE,
 } from "@/ffmpeg-install";
 import type { VideoConfig } from "@/config";
 
@@ -29,52 +28,49 @@ const videoConfig: VideoConfig = {
 
 describe("manual FFmpeg download", () => {
   test("is isolated from the application startup path", async () => {
-    const [appStartup, runtimeStartup, downloader, packageJson] = await Promise.all([
+    const [appStartup, runtimeStartup, packageJson] = await Promise.all([
       Bun.file("scripts/start.ts").text(),
       Bun.file("src/index.ts").text(),
-      Bun.file("scripts/download-ffmpeg.ts").text(),
       Bun.file("package.json").json() as Promise<{ scripts: Record<string, string> }>,
     ]);
 
     expect(appStartup).not.toContain("ffmpeg");
     expect(runtimeStartup).not.toContain("ensureFfmpeg");
-    expect(downloader).not.toMatch(/prisma|NapLink|src\/index/);
-    expect(packageJson.scripts["ffmpeg:download"]).toBe("bun run scripts/download-ffmpeg.ts");
+    expect(packageJson.scripts["dependencies:update"]).toBe("bun run scripts/update-dependencies.ts");
   });
 
   test("the manual downloader targets both Windows and Linux", () => {
     expect(getManualFfmpegPlatforms()).toEqual(["win32", "linux"]);
   });
-  test("pins Windows x64 to the verified Gyan 8.1.2 release", () => {
-    const asset = getFfmpegAsset("win32", "x64");
-    expect(asset.archiveName).toBe("ffmpeg-8.1.2-essentials_build.zip");
+  test("builds the requested stable release asset", () => {
+    const asset = getFfmpegAsset("win32", "x64", "8.1");
+    expect(asset.archiveName).toBe("ffmpeg-n8.1-latest-win64-gpl-8.1.zip");
     expect(asset.archiveUrl).toBe(
-      "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.zip",
+      "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-8.1.zip",
     );
-    expect(asset.checksumMode).toBe("single");
+    expect(asset.checksumMode).toBe("manifest");
     expect(asset.executableName).toBe("ffmpeg.exe");
   });
 
   test("uses the stable 8.1 branch for supported BtbN platforms", () => {
-    expect(getFfmpegAsset("linux", "x64").archiveName).toBe(
+    expect(getFfmpegAsset("linux", "x64", "8.1").archiveName).toBe(
       "ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz",
     );
-    expect(getFfmpegAsset("linux", "arm64").archiveName).toBe(
+    expect(getFfmpegAsset("linux", "arm64", "8.1").archiveName).toBe(
       "ffmpeg-n8.1-latest-linuxarm64-gpl-8.1.tar.xz",
     );
-    expect(getFfmpegAsset("win32", "arm64").archiveName).toBe(
+    expect(getFfmpegAsset("win32", "arm64", "8.1").archiveName).toBe(
       "ffmpeg-n8.1-latest-winarm64-gpl-8.1.zip",
     );
-    expect(() => getFfmpegAsset("darwin", "arm64")).toThrow("not supported");
+    expect(() => getFfmpegAsset("darwin", "arm64", "8.1")).toThrow("not supported");
   });
 
   test("accepts 8.1 patch releases and skips unrelated versions", () => {
-    expect(SUPPORTED_FFMPEG_RELEASE).toBe("8.1");
     expect(parseFfmpegVersion("ffmpeg version 8.1.2-full_build-www.gyan.dev\n")).toBe("8.1.2");
     expect(parseFfmpegVersion("ffmpeg version n8.1.3-12-gabcdef\n")).toBe("8.1.3");
-    expect(isSupportedFfmpegVersion("ffmpeg version 8.1.2\n")).toBeTrue();
-    expect(isSupportedFfmpegVersion("ffmpeg version n8.1.3-12-gabcdef\n")).toBeTrue();
-    expect(isSupportedFfmpegVersion("ffmpeg version 8.0.1\n")).toBeFalse();
+    expect(isSupportedFfmpegVersion("ffmpeg version 8.1.2\n", "8.1")).toBeTrue();
+    expect(isSupportedFfmpegVersion("ffmpeg version n8.1.3-12-gabcdef\n", "8.1")).toBeTrue();
+    expect(isSupportedFfmpegVersion("ffmpeg version 8.0.1\n", "8.1")).toBeFalse();
     expect(isSupportedFfmpegVersion("ffmpeg version 2026-07-09-git-main\n")).toBeFalse();
   });
 
@@ -82,6 +78,8 @@ describe("manual FFmpeg download", () => {
     let versionChecks = 0;
     let progressEvents = 0;
     const result = await ensureFfmpeg(videoConfig, { proxyUrl: "http://proxy.example.test:7890" }, {
+      resolveRelease: async () => "8.1",
+      resolveChecksum: async () => undefined,
       readCurrentVersion: async () => {
         versionChecks += 1;
         return "ffmpeg version 8.1.2-essentials_build-www.gyan.dev\n";

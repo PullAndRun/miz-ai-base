@@ -5,8 +5,6 @@ const DEPENDENCY_SECTIONS = [
   "peerDependencies",
 ] as const;
 
-export const DEPENDENCY_UPDATE_REGISTRY = "https://registry.npmmirror.com";
-
 type DependencySection = typeof DEPENDENCY_SECTIONS[number];
 
 type PackageManifest = Partial<Record<DependencySection, Record<string, string>>>;
@@ -25,6 +23,7 @@ export type DependencyUpdateResult = Readonly<{
 type DependencyUpdateOptions = Readonly<{
   packageJsonPath?: string;
   runUpdate?: () => Promise<void>;
+  proxyUrl?: string;
 }>;
 
 export const updatePackageDependencies = async (
@@ -32,7 +31,7 @@ export const updatePackageDependencies = async (
 ): Promise<DependencyUpdateResult> => {
   const packageJsonPath = options.packageJsonPath ?? "package.json";
   const before = await readPackageManifest(packageJsonPath);
-  await (options.runUpdate ?? runBunUpdate)();
+  await (options.runUpdate ?? (() => runBunUpdate(options.proxyUrl)))();
   const after = await readPackageManifest(packageJsonPath);
   return { changes: findDependencyVersionChanges(before, after) };
 };
@@ -61,10 +60,14 @@ const readPackageManifest = async (path: string): Promise<PackageManifest> => {
   return file.json() as Promise<PackageManifest>;
 };
 
-const runBunUpdate = async () => {
+const runBunUpdate = async (proxyUrl = "") => {
   const child = Bun.spawn(createBunUpdateArgs(), {
     cwd: process.cwd(),
-    env: { ...process.env, NO_COLOR: "1" },
+    env: {
+      ...process.env,
+      NO_COLOR: "1",
+      ...(proxyUrl ? { HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl, ALL_PROXY: proxyUrl } : {}),
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -84,8 +87,6 @@ export const createBunUpdateArgs = () => [
   "--latest",
   "--ignore-scripts",
   "--no-progress",
-  "--registry",
-  DEPENDENCY_UPDATE_REGISTRY,
 ];
 
 const formatProcessOutput = (output: string) =>

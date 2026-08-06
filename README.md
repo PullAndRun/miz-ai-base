@@ -30,7 +30,7 @@ miz 面向群聊协作和内容订阅场景，内置提醒、日程、活动报�
 - 已启用 OneBot WebSocket 的 NapCat
 - PostgreSQL
 - 视频功能需要 `yt-dlp` 和 `ffmpeg`
-- FFmpeg 请使用稳定发行版（已验证 8.1.2）；不要使用 Git master/nightly 开发版，后者生成的 MP4 可能被 QQ 富媒体上传拒绝
+- FFmpeg 请使用稳定发行版；不要使用 Git master/nightly 开发版，后者生成的 MP4 可能被 QQ 富媒体上传拒绝
 
 建议先确认 NapCat WebSocket、访问令牌和 PostgreSQL 均可从 miz 的运行环境访问。
 
@@ -76,20 +76,17 @@ FF14 低价提醒和 VTB 群订阅分别参考：
 | Windows | `tools/yt-dlp.exe` | `tools/ffmpeg.exe` |
 | Linux / Docker | `tools/yt-dlp` | `tools/ffmpeg` |
 
-应用启动时不会检查或下载 FFmpeg。需要时请显式运行下面的独立下载脚本；它只下载 FFmpeg，不会启动 miz、连接 NapCat 或执行数据库迁移。一次执行会按当前 CPU 架构同时准备 Windows 和 Linux 两套文件，并通过 `[miz.network].proxyUrl` 下载、校验 SHA-256 后安全替换。已经准备好的 8.1 版本不会重复下载；`--force` 可强制重新下载。
+应用启动时不会检查或下载 FFmpeg。需要时请运行统一的依赖更新脚本；它会更新 npm 依赖，并按当前 CPU 架构同时查询和准备 Windows 与 Linux 两套最新稳定版 FFmpeg、yt-dlp 文件。已有文件会先检查上游版本，只有版本落后时才替换；下载支持 `[miz.network].proxyUrl`，FFmpeg 会校验 SHA-256。
 
-| 目标平台 | 手动脚本选择的构建 |
+| 目标平台 | 自动更新的构建 |
 | --- | --- |
-| Windows x64 | Gyan FFmpeg 8.1.2 release essentials（ZIP） |
-| Windows ARM64 | BtbN FFmpeg n8.1 GPL（ZIP） |
-| Linux x64 | BtbN FFmpeg n8.1 GPL（tar.xz） |
-| Linux ARM64 | BtbN FFmpeg n8.1 GPL（tar.xz） |
+| Windows x64 / ARM64 | BtbN 最新稳定版 GPL（ZIP） |
+| Linux x64 / ARM64 | BtbN 最新稳定版 GPL（tar.xz） |
 
-运行独立下载脚本：
+运行统一更新脚本：
 
 ```bash
-bun run ffmpeg:download
-bun run ffmpeg:download -- --force
+bun run dependencies:update -- normal
 ```
 
 Linux 下需要为两个文件添加执行权限：
@@ -330,7 +327,8 @@ bun audit
 | `bun run start:docker` | 更新依赖后，以 Docker 模式启动并加载 `app.docker.toml`。 |
 | `bun run dev` | 更新依赖后，以普通模式监听源文件变化。 |
 | `bun run dev:docker` | 更新依赖后，以 Docker 配置监听源文件变化。 |
-| `bun run dependencies:update` | 通过 npmmirror 国内源检查并将 `package.json` 中的依赖更新到最新版本。 |
+| `bun run dependencies:update -- normal` | 使用本机 `app.local.toml` 的代理更新 npm 依赖、FFmpeg 和 yt-dlp。 |
+| `bun run dependencies:update -- docker` | 使用 Docker `app.docker.toml` 的代理更新 npm 依赖、FFmpeg 和 yt-dlp。 |
 | `bun run prisma:migrate` | 使用当前配置执行 `prisma migrate deploy`。 |
 | `bun run prisma:push` | 将 Schema 直接推送到数据库，适合本地开发验证。 |
 
