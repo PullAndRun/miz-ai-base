@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createFf14PriceAlertMentionMessage, queryFf14Market } from "@/ff14";
+import {
+  createFf14PriceAlertMentionMessage,
+  formatFf14MarketMessages,
+  queryFf14Market,
+} from "@/ff14";
 
 const originalFetch = globalThis.fetch;
 
@@ -111,5 +115,37 @@ describe("FF14 price alert mentions", () => {
   test("does not mention the same member twice", () => {
     const message = createFf14PriceAlertMentionMessage([123456789, "123456789"]);
     expect(message.filter((segment) => segment.type === "at")).toHaveLength(1);
+  });
+});
+
+describe("FF14 market message formatting", () => {
+  test("omits summary price entries that do not have a quote", () => {
+    const messages = formatFf14MarketMessages({
+      item: { ID: 7, Name: "水之碎晶" },
+      regionName: "猫小胖",
+      market: {
+        listings: [{
+          pricePerUnit: 9,
+          quantity: 10,
+          total: 90,
+          worldName: "紫水栈桥",
+          hq: false,
+        }],
+        minPrice: 9,
+        minPriceNQ: 9,
+        minPriceHQ: 0,
+        averagePrice: 10,
+        averagePriceNQ: 10,
+        listingsCount: 1,
+        unitsForSale: 10,
+        recentHistoryCount: 0,
+      },
+    });
+
+    expect(messages[0]).toContain("最低单价 · 9 gil");
+    expect(messages[0]).toContain("NQ 最低 · 9 gil");
+    expect(messages[0]).not.toContain("HQ 最低");
+    expect(messages[0]).not.toContain("HQ 平均");
+    expect(messages[0]).not.toContain("还没有报价");
   });
 });

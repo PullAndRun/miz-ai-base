@@ -309,16 +309,19 @@ const formatSummary = ({
     `道具 ID · ${item.ID}`,
     ...(minimumPrice === undefined ? [] : [`提醒线 · ${formatGil(minimumPrice)}`]),
     "",
-    `💰 最低单价 · ${formatGil(market.minPrice)}`,
-    `NQ 最低 · ${formatGil(market.minPriceNQ)}`,
-    `HQ 最低 · ${formatGil(market.minPriceHQ)}`,
-    `平均单价 · ${formatGil(market.averagePrice)}`,
-    `NQ 平均 · ${formatGil(market.averagePriceNQ)}`,
-    `HQ 平均 · ${formatGil(market.averagePriceHQ)}`,
+    ...formatPriceLine("💰 最低单价", market.minPrice),
+    ...formatPriceLine("NQ 最低", market.minPriceNQ),
+    ...formatPriceLine("HQ 最低", market.minPriceHQ),
+    ...formatPriceLine("平均单价", market.averagePrice),
+    ...formatPriceLine("NQ 平均", market.averagePriceNQ),
+    ...formatPriceLine("HQ 平均", market.averagePriceHQ),
     "",
     `📦 挂单 ${formatCount(market.listingsCount)} · 在售 ${formatCount(market.unitsForSale)} · 近期成交 ${formatCount(market.recentHistoryCount)}`,
     `🕒 更新于 ${formatUploadTime(market.lastUploadTime)}`,
   ].join("\n");
+
+const formatPriceLine = (label: string, value: number | undefined) =>
+  typeof value === "number" && value > 0 ? [`${label} · ${formatGil(value)}`] : [];
 
 const formatListing = (listing: Listing, index: number) =>
   [
