@@ -127,6 +127,11 @@ const rawMizConfigSchema = z.object({
       whitelistUserIds: z.array(targetIdSchema).optional(),
     })
     .optional(),
+  recall: z
+    .object({
+      whitelistUserIds: z.array(targetIdSchema).optional(),
+    })
+    .optional(),
   video: z
     .object({
       enabled: z.boolean().optional(),
@@ -253,6 +258,9 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
   broadcast: {
     whitelistUserIds: config.broadcast?.whitelistUserIds ?? [],
   },
+  recall: {
+    whitelistUserIds: config.recall?.whitelistUserIds ?? [],
+  },
   video: {
     enabled: config.video?.enabled ?? true,
     runtimeMode: getRuntimeMode(),
@@ -351,6 +359,10 @@ export type BroadcastConfig = {
   whitelistUserIds: Array<string | number>;
 };
 
+export type RecallConfig = {
+  whitelistUserIds: Array<string | number>;
+};
+
 export type NetworkConfig = {
   proxyUrl: string;
 };
@@ -412,6 +424,7 @@ export type MizConfig = z.infer<typeof mizConfigSchema> & {
   faq: FaqConfig;
   todo: TodoConfig;
   broadcast: BroadcastConfig;
+  recall: RecallConfig;
   video: VideoConfig;
   vtb: VtbConfig;
 };

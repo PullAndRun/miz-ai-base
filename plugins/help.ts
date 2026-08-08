@@ -10,6 +10,7 @@ const pluginDisplayNames: Readonly<Record<string, string>> = {
   joke: "笑话图",
   news: "新闻快讯",
   qrcode: "二维码",
+  recall: "消息撤回",
   remind: "群提醒",
   schedule: "群日程",
   todo: "群待办",

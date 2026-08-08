@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  createLastGroupMessageTracker,
   createGroupMessageUnavailableError,
   getGroupSendPermission,
   isGroupAtAllAvailable,
@@ -10,6 +11,38 @@ import {
 
 test("gateway reconnect attempts are unlimited", () => {
   expect(NAPLINK_RECONNECT_MAX_ATTEMPTS).toBe(Number.POSITIVE_INFINITY);
+});
+
+describe("last bot group message tracking", () => {
+  test("recalls the latest successfully sent message in the requested group", async () => {
+    const tracker = createLastGroupMessageTracker();
+    tracker.record(100, { data: { message_id: 11 } });
+    tracker.record(200, { messageId: "22" });
+    tracker.record(100, { message_id: 33 });
+    const deleted: string[] = [];
+
+    await expect(tracker.recall(100, async (messageId) => {
+      deleted.push(messageId);
+    })).resolves.toEqual({ status: "recalled", messageId: "33" });
+    expect(deleted).toEqual(["33"]);
+    await expect(tracker.recall(100, async () => undefined)).resolves.toEqual({ status: "not_found" });
+    await expect(tracker.recall(200, async (messageId) => {
+      deleted.push(messageId);
+    })).resolves.toEqual({ status: "recalled", messageId: "22" });
+  });
+
+  test("keeps the message available when the recall API fails", async () => {
+    const tracker = createLastGroupMessageTracker();
+    tracker.record("100", { message_id: "44" });
+
+    await expect(tracker.recall(100, async () => {
+      throw new Error("消息已超过撤回时间");
+    })).rejects.toThrow("消息已超过撤回时间");
+    await expect(tracker.recall(100, async () => undefined)).resolves.toEqual({
+      status: "recalled",
+      messageId: "44",
+    });
+  });
 });
 
 describe("gateway warning filtering", () => {

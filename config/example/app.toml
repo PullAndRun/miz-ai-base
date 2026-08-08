@@ -82,6 +82,9 @@ manageWhitelistUserIds = []
 [miz.broadcast]
 whitelistUserIds = []
 
+[miz.recall]
+whitelistUserIds = []
+
 [miz.video]
 enabled = true
 whitelistUserIds = []

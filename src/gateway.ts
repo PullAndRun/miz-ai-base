@@ -40,6 +40,10 @@ export type GroupSendPermission = Readonly<{
   mutedUntil?: number;
 }>;
 
+export type RecallLastGroupMessageResult =
+  | Readonly<{ status: "recalled"; messageId: string }>
+  | Readonly<{ status: "not_found" }>;
+
 export const createGroupMessageUnavailableError = (
   groupId: number | string,
 ): GroupMessageUnavailableError => Object.assign(
@@ -56,6 +60,7 @@ export type Gateway = {
   reportServerInfo(): Promise<void>;
   getGroupList(): Promise<unknown>;
   canMentionAllGroupMembers(groupId: number | string): Promise<boolean>;
+  recallLastGroupMessage(groupId: number | string): Promise<RecallLastGroupMessageResult>;
   sendGroupMessage(groupId: number | string, message: unknown): Promise<unknown>;
   sendGroupMessageWithoutRetry(
     groupId: number | string,
@@ -130,6 +135,7 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
   const messageHandlers = new Set<MessageHandler>();
   const canSendGroupMessage = createGroupSendPermissionChecker(client, logger);
   const canMentionAllGroupMembers = createAtAllPermissionChecker(client, logger);
+  const lastGroupMessages = createLastGroupMessageTracker();
   let cachedGroupList: unknown[] | undefined;
 
   registerEvents(
@@ -139,7 +145,17 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
     canSendGroupMessage,
     createMessageDeduplicator(),
     config.gateway.followedGroupMemberId,
+    lastGroupMessages.record,
   );
+
+  const sendTrackedGroupMessage = async (
+    groupId: number | string,
+    send: () => Promise<unknown>,
+  ) => {
+    const response = await send();
+    lastGroupMessages.record(groupId, response);
+    return response;
+  };
 
   return {
     connect: () => client.connect(),
@@ -161,21 +177,33 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
       }
     },
     canMentionAllGroupMembers,
+    recallLastGroupMessage: (groupId) => lastGroupMessages.recall(
+      groupId,
+      (messageId) => callApiWithoutRetry(
+        client,
+        "delete_msg",
+        { message_id: messageId },
+        config.naplink.apiTimeoutMs,
+      ),
+    ),
     sendGroupMessage: async (groupId, message) => {
       if (!await canSendGroupMessage(groupId)) {
         throw createGroupMessageUnavailableError(groupId);
       }
-      return client.sendGroupMessage(groupId, message);
+      return sendTrackedGroupMessage(groupId, () => client.sendGroupMessage(groupId, message));
     },
     sendGroupMessageWithoutRetry: async (groupId, message, options) => {
       if (!await canSendGroupMessage(groupId)) {
         throw createGroupMessageUnavailableError(groupId);
       }
-      return callApiWithoutRetry(
-        client,
-        "send_group_msg",
-        { group_id: groupId, message },
-        options?.timeoutMs,
+      return sendTrackedGroupMessage(
+        groupId,
+        () => callApiWithoutRetry(
+          client,
+          "send_group_msg",
+          { group_id: groupId, message },
+          options?.timeoutMs,
+        ),
       );
     },
     sendPrivateMessage: (userId, message) => client.sendPrivateMessage(userId, message),
@@ -186,10 +214,14 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
         { user_id: userId, message },
         options?.timeoutMs,
       ),
-    sendForwardMessage: (target, messages, options) =>
-      sendForwardMessage(client, target, messages, options, canSendGroupMessage),
-    sendForwardMessageWithoutRetry: (target, messages, options) =>
-      sendForwardMessageWithoutRetry(client, target, messages, options, canSendGroupMessage),
+    sendForwardMessage: async (target, messages, options) => {
+      const send = () => sendForwardMessage(client, target, messages, options, canSendGroupMessage);
+      return target.groupId === undefined ? send() : sendTrackedGroupMessage(target.groupId, send);
+    },
+    sendForwardMessageWithoutRetry: async (target, messages, options) => {
+      const send = () => sendForwardMessageWithoutRetry(client, target, messages, options, canSendGroupMessage);
+      return target.groupId === undefined ? send() : sendTrackedGroupMessage(target.groupId, send);
+    },
     onMessage: (handler) => {
       messageHandlers.add(handler);
       return () => {
@@ -339,6 +371,7 @@ const registerEvents = (
   canSendGroupMessage: (groupId: number | string) => Promise<boolean>,
   isDuplicateMessage: (message: IncomingMessage) => boolean,
   followedGroupMemberId: string | number | undefined,
+  recordGroupMessage: (groupId: number | string, response: unknown) => void,
 ) => {
   client.on("state_change", (state: ConnectionState) => {
     logger.info("gateway", `state=${state}`);
@@ -378,7 +411,7 @@ const registerEvents = (
     logger.info("gateway", `event=${parsedEvent.success ? formatEventName(parsedEvent.data) : "unknown"}`);
     if (!parsedEvent.success || !isFollowedMemberLeavingGroup(parsedEvent.data, followedGroupMemberId)) {
       if (parsedEvent.success && isNewGroupMember(parsedEvent.data)) {
-        void sendNewMemberWelcome(client, parsedEvent.data, logger, canSendGroupMessage).catch(
+        void sendNewMemberWelcome(client, parsedEvent.data, logger, canSendGroupMessage, recordGroupMessage).catch(
           (error) => logger.error("gateway", "failed to send new member welcome", {
             groupId: parsedEvent.data.group_id,
             userId: parsedEvent.data.user_id,
@@ -565,6 +598,7 @@ const sendNewMemberWelcome = async (
   event: NapCatEvent,
   logger: Logger,
   canSendGroupMessage: (groupId: number | string) => Promise<boolean>,
+  recordGroupMessage: (groupId: number | string, response: unknown) => void,
 ) => {
   const groupId = event.group_id!;
   const userId = event.user_id!;
@@ -578,7 +612,8 @@ const sendNewMemberWelcome = async (
   if (!await canSendGroupMessage(groupId)) {
     return;
   }
-  await client.sendGroupMessage(groupId, createWelcomeMessage(userId, memberName, groupName));
+  const response = await client.sendGroupMessage(groupId, createWelcomeMessage(userId, memberName, groupName));
+  recordGroupMessage(groupId, response);
   logger.info("gateway", "new member welcomed", { groupId, userId, groupName, memberName });
 };
 
@@ -828,6 +863,33 @@ const getOptionalNonZeroBooleanValue = (value: unknown, keys: readonly string[])
     }
   }
   return undefined;
+};
+
+export const createLastGroupMessageTracker = () => {
+  const messageIds = new Map<string, string>();
+  const record = (groupId: number | string, response: unknown) => {
+    const messageId = getIdValue(response, ["message_id", "messageId"]);
+    if (messageId !== undefined) {
+      messageIds.set(String(groupId), messageId);
+    }
+  };
+  const recall = async (
+    groupId: number | string,
+    deleteMessage: (messageId: string) => Promise<unknown>,
+  ): Promise<RecallLastGroupMessageResult> => {
+    const groupKey = String(groupId);
+    const messageId = messageIds.get(groupKey);
+    if (messageId === undefined) {
+      return { status: "not_found" };
+    }
+
+    await deleteMessage(messageId);
+    if (messageIds.get(groupKey) === messageId) {
+      messageIds.delete(groupKey);
+    }
+    return { status: "recalled", messageId };
+  };
+  return { record, recall };
 };
 
 const getOptionalBooleanValue = (value: unknown, keys: readonly string[]) => {
