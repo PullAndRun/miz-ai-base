@@ -252,7 +252,7 @@ napcatMediaDirectory = "/app/media"
 | `miz ff14 remove <道具名>` | 删除当前群中该商品的全部推送；需要管理权限。 |
 | `miz ff14 disable/enable <道具名>` | 暂时禁用或恢复当前群中该商品的推送，不删除配置；需要管理权限。 |
 | `miz broadcast <内容>` | 向机器人所在全部群发送最多 1000 字的广播；仅广播白名单可用。 |
-| `miz recall` / `miz 撤回` | 撤回机器人在当前群最后发送的一条消息；仅 `[miz.recall].whitelistUserIds` 中的 QQ 号可用。 |
+| `miz recall [数量]` / `miz 撤回 [数量]` | 撤回机器人在当前群最近发送的消息，数量默认为 1、单次最多 20；仅 `[miz.recall].whitelistUserIds` 中的 QQ 号可用。超时或部分失败时会分别提示结果。 |
 | `miz joke` | 随机发送 10 张不重复的米哈游笑话图。 |
 
 多数英文命令同时提供中文别名，具体以 `miz help` 的输出为准。

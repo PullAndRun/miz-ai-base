@@ -83,6 +83,7 @@ manageWhitelistUserIds = []
 whitelistUserIds = []
 
 [miz.recall]
+# 单次最多撤回最近 20 条；只有这里列出的 QQ 号可以执行。
 whitelistUserIds = []
 
 [miz.video]

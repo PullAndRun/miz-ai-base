@@ -1,22 +1,26 @@
 import type { MizPlugin } from "@/plugins";
 import { isWhitelistedUser } from "@/group-permissions";
 import { summarizeError } from "@/errors";
+import { isRecallTimeoutError } from "@/gateway";
+
+const MAX_RECALL_COUNT = 20;
 
 const recallPlugin: MizPlugin = {
   name: "recall",
   commands: ["recall", "撤回"],
   description: [
-    "撤回机器人在当前群最后发送的一条消息，仅限撤回白名单使用。",
-    "用法：miz recall",
-    "中文命令：miz 撤回",
+    "撤回机器人在当前群最近发送的消息，仅限撤回白名单使用。",
+    "用法：miz recall [数量]",
+    "例如：miz recall 2；中文命令：miz 撤回 2",
   ].join("\n"),
   async handle({ command, config, gateway, logger, message, reply }) {
     if (message.groupId === undefined) {
       await reply("撤回只对群消息生效，请到需要撤回消息的群里使用这个命令。");
       return;
     }
-    if (command.args.trim()) {
-      await reply("这个命令不需要附加内容，直接发送 miz recall 或 miz 撤回即可。");
+    const parsedCount = parseRecallCount(command.args);
+    if (!parsedCount.ok) {
+      await reply(parsedCount.reason);
       return;
     }
     if (!isWhitelistedUser(message.userId, config.recall.whitelistUserIds)) {
@@ -25,18 +29,31 @@ const recallPlugin: MizPlugin = {
     }
 
     try {
-      const result = await gateway.recallLastGroupMessage(message.groupId);
+      const result = await gateway.recallLastGroupMessage(message.groupId, parsedCount.count);
       if (result.status === "not_found") {
         await reply("本群暂时没有记录到可撤回的机器人消息。");
         return;
       }
 
-      logger.info("plugin", "last bot group message recalled", {
+      const timeoutFailures = result.failures.filter((failure) => isRecallTimeoutError(failure.error));
+      const otherFailures = result.failures.filter((failure) => !isRecallTimeoutError(failure.error));
+      logger.info("plugin", "recent bot group messages recall completed", {
         groupId: message.groupId,
-        messageId: result.messageId,
+        requestedCount: parsedCount.count,
+        recalledMessageIds: result.recalledMessageIds,
+        timeoutMessageIds: timeoutFailures.map((failure) => failure.messageId),
+        failedMessages: otherFailures.map((failure) => ({
+          messageId: failure.messageId,
+          error: summarizeError(failure.error),
+        })),
         operatorId: message.userId,
       });
-      await reply("已撤回机器人在本群的最后一条发言。");
+      await reply(formatRecallResult(
+        parsedCount.count,
+        result.recalledMessageIds.length,
+        timeoutFailures.length,
+        otherFailures.length,
+      ));
     } catch (error) {
       logger.warn("plugin", "last bot group message could not be recalled", {
         groupId: message.groupId,
@@ -54,21 +71,45 @@ const recallPlugin: MizPlugin = {
 
 export default recallPlugin;
 
-export const isRecallTimeoutError = (error: unknown) => {
-  const text = collectErrorText(error).join(" ");
-  return /超时|已过期|超过.{0,12}(?:撤回|时限|时间)|撤回.{0,12}(?:过期|时限)|too[ -]?old|expired|recall.{0,16}(?:time|limit)|E_API_TIMEOUT/i.test(text);
+export { isRecallTimeoutError } from "@/gateway";
+
+export const parseRecallCount = (args: string):
+  | Readonly<{ ok: true; count: number }>
+  | Readonly<{ ok: false; reason: string }> => {
+  const value = args.trim();
+  if (!value) {
+    return { ok: true, count: 1 };
+  }
+  if (!/^\d+$/.test(value) || Number(value) < 1) {
+    return { ok: false, reason: "撤回数量需要是正整数，例如：miz recall 2。" };
+  }
+
+  const count = Number(value);
+  return count <= MAX_RECALL_COUNT
+    ? { ok: true, count }
+    : { ok: false, reason: `一次最多撤回 ${MAX_RECALL_COUNT} 条消息。` };
 };
 
-const collectErrorText = (value: unknown, seen = new Set<object>()): string[] => {
-  if (typeof value === "string") {
-    return [value];
-  }
-  if (!value || typeof value !== "object" || seen.has(value)) {
-    return [];
+export const formatRecallResult = (
+  requestedCount: number,
+  recalledCount: number,
+  timeoutCount: number,
+  failedCount: number,
+) => {
+  const foundCount = recalledCount + timeoutCount + failedCount;
+  if (timeoutCount === 0 && failedCount === 0) {
+    if (recalledCount === 1 && requestedCount === 1) {
+      return "已撤回机器人在本群的最后一条发言。";
+    }
+    return foundCount < requestedCount
+      ? `本群只记录到 ${recalledCount} 条可撤回消息，已经全部撤回。`
+      : `已撤回机器人在本群最近的 ${recalledCount} 条发言。`;
   }
 
-  seen.add(value);
-  const record = value as Record<string, unknown>;
-  return [record.name, record.message, record.code, record.wording, record.details, record.cause]
-    .flatMap((item) => typeof item === "number" ? [String(item)] : collectErrorText(item, seen));
+  return [
+    recalledCount > 0 ? `已成功撤回 ${recalledCount} 条。` : "没有消息撤回成功。",
+    ...(timeoutCount > 0 ? [`${timeoutCount} 条已超过可撤回时限或撤回请求超时。`] : []),
+    ...(failedCount > 0 ? [`${failedCount} 条因权限或其他原因撤回失败。`] : []),
+    ...(foundCount < requestedCount ? [`本群只记录到最近 ${foundCount} 条机器人消息。`] : []),
+  ].join("\n");
 };

@@ -40,9 +40,19 @@ export type GroupSendPermission = Readonly<{
   mutedUntil?: number;
 }>;
 
-export type RecallLastGroupMessageResult =
-  | Readonly<{ status: "recalled"; messageId: string }>
+export type GroupMessageRecallFailure = Readonly<{ messageId: string; error: unknown }>;
+export type RecallGroupMessagesResult =
+  | Readonly<{
+      status: "completed";
+      recalledMessageIds: readonly string[];
+      failures: readonly GroupMessageRecallFailure[];
+    }>
   | Readonly<{ status: "not_found" }>;
+
+export const isRecallTimeoutError = (error: unknown) => {
+  const text = collectErrorText(error).join(" ");
+  return /超时|已过期|超过.{0,12}(?:撤回|时限|时间)|撤回.{0,12}(?:过期|时限)|too[ -]?old|expired|recall.{0,16}(?:time|limit)|E_API_TIMEOUT/i.test(text);
+};
 
 export const createGroupMessageUnavailableError = (
   groupId: number | string,
@@ -60,7 +70,7 @@ export type Gateway = {
   reportServerInfo(): Promise<void>;
   getGroupList(): Promise<unknown>;
   canMentionAllGroupMembers(groupId: number | string): Promise<boolean>;
-  recallLastGroupMessage(groupId: number | string): Promise<RecallLastGroupMessageResult>;
+  recallLastGroupMessage(groupId: number | string, count?: number): Promise<RecallGroupMessagesResult>;
   sendGroupMessage(groupId: number | string, message: unknown): Promise<unknown>;
   sendGroupMessageWithoutRetry(
     groupId: number | string,
@@ -92,6 +102,7 @@ const GROUP_PERMISSION_CHECK_TIMEOUT_MS = 5_000;
 const MAX_GROUP_PERMISSION_CACHE_ENTRIES = 5_000;
 const MESSAGE_DEDUPLICATION_WINDOW_MS = 10 * 60 * 1_000;
 const MAX_DEDUPLICATED_MESSAGE_IDS = 5_000;
+const MAX_TRACKED_GROUP_MESSAGES = 100;
 export const NAPLINK_RECONNECT_MAX_ATTEMPTS = Number.POSITIVE_INFINITY;
 
 const textSegmentSchema = z
@@ -177,8 +188,9 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
       }
     },
     canMentionAllGroupMembers,
-    recallLastGroupMessage: (groupId) => lastGroupMessages.recall(
+    recallLastGroupMessage: (groupId, count = 1) => lastGroupMessages.recall(
       groupId,
+      count,
       (messageId) => callApiWithoutRetry(
         client,
         "delete_msg",
@@ -866,28 +878,56 @@ const getOptionalNonZeroBooleanValue = (value: unknown, keys: readonly string[])
 };
 
 export const createLastGroupMessageTracker = () => {
-  const messageIds = new Map<string, string>();
+  const messageIds = new Map<string, string[]>();
   const record = (groupId: number | string, response: unknown) => {
     const messageId = getIdValue(response, ["message_id", "messageId"]);
     if (messageId !== undefined) {
-      messageIds.set(String(groupId), messageId);
+      const groupKey = String(groupId);
+      const history = messageIds.get(groupKey) ?? [];
+      messageIds.set(
+        groupKey,
+        [...history.filter((id) => id !== messageId), messageId].slice(-MAX_TRACKED_GROUP_MESSAGES),
+      );
     }
   };
   const recall = async (
     groupId: number | string,
+    count: number,
     deleteMessage: (messageId: string) => Promise<unknown>,
-  ): Promise<RecallLastGroupMessageResult> => {
+  ): Promise<RecallGroupMessagesResult> => {
     const groupKey = String(groupId);
-    const messageId = messageIds.get(groupKey);
-    if (messageId === undefined) {
+    const history = messageIds.get(groupKey) ?? [];
+    const targetCount = Number.isSafeInteger(count) && count > 0
+      ? Math.min(count, MAX_TRACKED_GROUP_MESSAGES)
+      : 0;
+    const targets = targetCount === 0 ? [] : history.slice(-targetCount).reverse();
+    if (targets.length === 0) {
       return { status: "not_found" };
     }
 
-    await deleteMessage(messageId);
-    if (messageIds.get(groupKey) === messageId) {
+    const recalledMessageIds: string[] = [];
+    const failures: GroupMessageRecallFailure[] = [];
+    for (const [index, messageId] of targets.entries()) {
+      try {
+        await deleteMessage(messageId);
+        recalledMessageIds.push(messageId);
+        const currentHistory = messageIds.get(groupKey) ?? [];
+        messageIds.set(groupKey, currentHistory.filter((id) => id !== messageId));
+      } catch (error) {
+        failures.push({ messageId, error });
+        if (isRecallTimeoutError(error)) {
+          failures.push(...targets.slice(index + 1).map((remainingMessageId) => ({
+            messageId: remainingMessageId,
+            error,
+          })));
+          break;
+        }
+      }
+    }
+    if (messageIds.get(groupKey)?.length === 0) {
       messageIds.delete(groupKey);
     }
-    return { status: "recalled", messageId };
+    return { status: "completed", recalledMessageIds, failures };
   };
   return { record, recall };
 };
@@ -923,4 +963,18 @@ const getValue = (value: unknown, keys: readonly string[], seen = new Set<object
     }
   }
   return getValue(record.data, keys, seen);
+};
+
+const collectErrorText = (value: unknown, seen = new Set<object>()): string[] => {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (!value || typeof value !== "object" || seen.has(value)) {
+    return [];
+  }
+
+  seen.add(value);
+  const record = value as Record<string, unknown>;
+  return [record.name, record.message, record.code, record.wording, record.details, record.cause]
+    .flatMap((item) => typeof item === "number" ? [String(item)] : collectErrorText(item, seen));
 };

@@ -14,33 +14,63 @@ test("gateway reconnect attempts are unlimited", () => {
 });
 
 describe("last bot group message tracking", () => {
-  test("recalls the latest successfully sent message in the requested group", async () => {
+  test("recalls the requested number of recent messages in newest-first order", async () => {
     const tracker = createLastGroupMessageTracker();
     tracker.record(100, { data: { message_id: 11 } });
     tracker.record(200, { messageId: "22" });
     tracker.record(100, { message_id: 33 });
     const deleted: string[] = [];
 
-    await expect(tracker.recall(100, async (messageId) => {
+    await expect(tracker.recall(100, 2, async (messageId) => {
       deleted.push(messageId);
-    })).resolves.toEqual({ status: "recalled", messageId: "33" });
-    expect(deleted).toEqual(["33"]);
-    await expect(tracker.recall(100, async () => undefined)).resolves.toEqual({ status: "not_found" });
-    await expect(tracker.recall(200, async (messageId) => {
+    })).resolves.toEqual({
+      status: "completed",
+      recalledMessageIds: ["33", "11"],
+      failures: [],
+    });
+    expect(deleted).toEqual(["33", "11"]);
+    await expect(tracker.recall(100, 1, async () => undefined)).resolves.toEqual({ status: "not_found" });
+    await expect(tracker.recall(200, 1, async (messageId) => {
       deleted.push(messageId);
-    })).resolves.toEqual({ status: "recalled", messageId: "22" });
+    })).resolves.toEqual({ status: "completed", recalledMessageIds: ["22"], failures: [] });
   });
 
   test("keeps the message available when the recall API fails", async () => {
     const tracker = createLastGroupMessageTracker();
     tracker.record("100", { message_id: "44" });
 
-    await expect(tracker.recall(100, async () => {
+    const failed = await tracker.recall(100, 1, async () => {
+      throw new Error("permission denied");
+    });
+    expect(failed).toMatchObject({
+      status: "completed",
+      recalledMessageIds: [],
+      failures: [{ messageId: "44" }],
+    });
+    await expect(tracker.recall(100, 1, async () => undefined)).resolves.toEqual({
+      status: "completed",
+      recalledMessageIds: ["44"],
+      failures: [],
+    });
+  });
+
+  test("stops after a timeout because older messages cannot have a longer recall window", async () => {
+    const tracker = createLastGroupMessageTracker();
+    tracker.record(100, { message_id: 1 });
+    tracker.record(100, { message_id: 2 });
+    tracker.record(100, { message_id: 3 });
+    const attempted: string[] = [];
+
+    const result = await tracker.recall(100, 3, async (messageId) => {
+      attempted.push(messageId);
       throw new Error("消息已超过撤回时间");
-    })).rejects.toThrow("消息已超过撤回时间");
-    await expect(tracker.recall(100, async () => undefined)).resolves.toEqual({
-      status: "recalled",
-      messageId: "44",
+    });
+
+    expect(attempted).toEqual(["3"]);
+    expect(result).toMatchObject({
+      status: "completed",
+      recalledMessageIds: [],
+      failures: [{ messageId: "3" }, { messageId: "2" }, { messageId: "1" }],
     });
   });
 });
