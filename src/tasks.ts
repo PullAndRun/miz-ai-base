@@ -23,6 +23,7 @@ import {
   formatDynamicMessage,
   formatLiveMessage,
   formatOfflineMessage,
+  findVtbNameChanges,
   getVtbRepository,
   getVtbCardInfos,
   getVtbDynamics,
@@ -31,6 +32,7 @@ import {
   prependVtbAtAllMention,
   resolveTrackedVtbStreamer,
   syncVtbSubscriptionNames,
+  type VtbCardInfo,
   type VtbDynamicFeed,
   type VtbLiveInfo,
   type VtbStreamer,
@@ -544,13 +546,22 @@ const pollVtbSubscriptions = async (
     ));
     const now = Date.now();
     const cardCacheMs = config.vtb.cardCacheMinutes * 60_000;
+    const liveNameChangedMids = new Set(
+      resolvedSubscriptions.flatMap(({ streamer }) => {
+        const liveName = liveInfos.get(streamer.mid)?.name.trim();
+        return liveName && liveName !== streamer.name ? [streamer.mid] : [];
+      }),
+    );
     const cardRefreshMids = streamerMids.filter((mid) => {
       const cached = pollState.cardInfos.get(mid);
-      return !cached || cached.expiresAt <= now;
+      // A live nickname mismatch bypasses the normal card cache. Confirm the
+      // current nickname against the stable MID before persisting anything.
+      return liveNameChangedMids.has(mid) || !cached || cached.expiresAt <= now;
     });
+    let refreshedCards = new Map<string, VtbCardInfo>();
     if (cardRefreshMids.length > 0) {
       try {
-        const refreshedCards = await getVtbCardInfos(cardRefreshMids, config.vtb);
+        refreshedCards = await getVtbCardInfos(cardRefreshMids, config.vtb);
         for (const mid of cardRefreshMids) {
           pollState.cardInfos.set(mid, {
             fans: refreshedCards.get(mid)?.fans,
@@ -561,6 +572,28 @@ const pollVtbSubscriptions = async (
       } catch (error) {
         logger.warn("plugin", "vtb batch card request failed; cached fan counts will be reused", normalizeError(error));
       }
+    }
+
+    const renamed = findVtbNameChanges(
+      resolvedSubscriptions.map((subscription) => subscription.streamer),
+      refreshedCards,
+    );
+    if (renamed.length > 0) {
+      await updateVtbSubscriptionNames(new Map(
+        renamed.map((item) => [item.previousName, item.name]),
+      ));
+      const namesByMid = new Map(renamed.map((item) => [item.mid, item.name]));
+      for (const subscription of resolvedSubscriptions) {
+        const latestName = namesByMid.get(subscription.streamer.mid);
+        if (!latestName) {
+          continue;
+        }
+        subscription.streamer = await repository.upsertStreamer({
+          ...subscription.streamer,
+          name: latestName,
+        });
+      }
+      logger.info("plugin", "vtb subscription names updated after polling detected changes", { renamed });
     }
     const cardInfos = new Map(
       streamerMids.map((mid) => [mid, {

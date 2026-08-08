@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { VtbConfig } from "@/config";
 import {
   createVtbNotificationMessage,
+  findVtbNameChanges,
   getVtbCardInfo,
   getVtbImageFile,
   getVtbLiveInfo,
@@ -24,6 +25,23 @@ afterEach(() => {
 });
 
 describe("Bilibili live lookup", () => {
+  test("uses the MID profile as the authoritative nickname after a change is detected", () => {
+    const changes = findVtbNameChanges(
+      [{ name: "旧昵称", mid: "123", roomId: "456" }],
+      new Map([["123", { name: "  最新昵称  " }]]),
+    );
+
+    expect(changes).toEqual([{
+      previousName: "旧昵称",
+      name: "最新昵称",
+      mid: "123",
+    }]);
+    expect(findVtbNameChanges(
+      [{ name: "旧昵称", mid: "123" }],
+      new Map([["999", { name: "其他主播" }]]),
+    )).toEqual([]);
+  });
+
   test("normalizes search result room_id 0 as no live room", async () => {
     const referers: Array<string | null> = [];
     globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {

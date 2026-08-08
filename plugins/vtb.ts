@@ -3,9 +3,11 @@ import { isGroupAdministrator, isWhitelistedUser } from "@/group-permissions";
 import { summarizeError } from "@/errors";
 import {
   createVtbNotificationMessage,
+  findVtbNameChanges,
   formatDynamicMessage,
   formatLiveQueryMessage,
   getVtbCardInfo,
+  getVtbCardInfos,
   getVtbRepository,
   getVtbDynamics,
   getVtbImageFile,
@@ -219,10 +221,22 @@ export const createVtbPlugin = ({
       }
 
       if (type === "live") {
-        const [live, card] = await Promise.all([
+        const [live, cachedCard] = await Promise.all([
           getVtbLiveInfo(streamer, config.vtb),
           getVtbCardInfo(streamer.mid, config.vtb),
         ]);
+        const card = live.name !== streamer.name
+          ? (await getVtbCardInfos([streamer.mid], config.vtb)).get(streamer.mid) ?? cachedCard
+          : cachedCard;
+        const renamed = findVtbNameChanges([streamer], new Map([[streamer.mid, card]]));
+        if (renamed.length > 0) {
+          const latestName = renamed[0].name;
+          await updateVtbSubscriptionNames(new Map([[streamer.name, latestName]]));
+          await repository.upsertStreamer({ ...streamer, name: latestName });
+          logger.info("plugin", "vtb subscription name updated after live query detected a change", {
+            renamed,
+          });
+        }
         let imageFile: string | undefined;
         try {
           imageFile = await getVtbImageFile(live.coverUrl ?? card.avatarUrl, config.vtb);

@@ -119,6 +119,7 @@ export type VtbDynamicDeliveryState = {
   deliveredGroupIds: string[];
 };
 export type VtbCardInfo = { fans?: number; name?: string; avatarUrl?: string };
+export type VtbNameChange = { previousName: string; name: string; mid: string };
 type ReminderClaim = Reminder & { claimedAt: Date; nextRemindAt?: Date };
 type ScheduleEventClaim = ScheduleEvent & { claimedAt: Date };
 type ActivityClaim = Activity & { claimedAt: Date; registrations: ActivityRegistration[] };
@@ -241,7 +242,7 @@ export const partitionAvailableVtbSubscriptions = (
 ) => partitionVtbSubscriptionsByGroup(subscriptions, availableGroupIds);
 
 export const syncVtbSubscriptionNames = async (config: MizConfig) => {
-  const renamed: Array<{ previousName: string; name: string; mid: string }> = [];
+  const renamed: VtbNameChange[] = [];
   const roomUpdated: Array<{ name: string; mid: string; roomId: string }> = [];
   const failed: Array<{ name: string; reason: string }> = [];
 
@@ -389,6 +390,20 @@ export const getVtbCardInfos = async (mids: readonly string[], config: VtbConfig
 
   return cards;
 };
+
+/**
+ * Treat the profile returned for a MID as authoritative. Search and live APIs
+ * may still expose an old or transient nickname, while the MID remains stable.
+ */
+export const findVtbNameChanges = (
+  streamers: readonly VtbStreamer[],
+  cardInfos: ReadonlyMap<string, VtbCardInfo>,
+): VtbNameChange[] => streamers.flatMap((streamer) => {
+  const latestName = cardInfos.get(streamer.mid)?.name?.trim();
+  return latestName && latestName !== streamer.name
+    ? [{ previousName: streamer.name, name: latestName, mid: streamer.mid }]
+    : [];
+});
 
 export const getVtbLiveInfo = async (streamer: VtbStreamer, config: VtbConfig): Promise<VtbLiveInfo> => {
   const cacheKey = getVtbLiveCacheKey(config, streamer.mid);
