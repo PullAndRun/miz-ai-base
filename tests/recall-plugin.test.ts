@@ -52,7 +52,7 @@ describe("recall command", () => {
     await recallPlugin.handle!(testContext.context as never);
 
     expect(testContext.getRecallCalls()).toBe(1);
-    expect(testContext.replies).toEqual(["已撤回机器人在本群的最后一条发言。"]);
+    expect(testContext.replies).toEqual(["迷子已经撤回了自己在本群的最后一条发言。"]);
   });
 
   test("does not call the gateway for a user outside the recall whitelist", async () => {
@@ -90,7 +90,7 @@ describe("recall command", () => {
 
     await recallPlugin.handle!(testContext.context as never);
 
-    expect(testContext.replies[0]).toContain("没有记录到可撤回");
+    expect(testContext.replies[0]).toContain("迷子暂时没有记录到");
   });
 
   test("parses an optional count and rejects unsafe batch sizes", async () => {
