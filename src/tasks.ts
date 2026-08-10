@@ -8,6 +8,7 @@ import {
   createFf14PriceAlertKey,
   FF14_REGION_NAMES,
   formatFf14MarketMessages,
+  getFf14LowPriceListingKeys,
   getLowestMarketPrice,
   queryFf14Market,
 } from "@/ff14";
@@ -42,6 +43,7 @@ const ALL_GROUPS_DELIVERED_MARKER = "*";
 const SCHEDULED_DELIVERY_CONCURRENCY = 5;
 const WALLPAPER_DELIVERY_CONCURRENCY = 3;
 const WALLPAPER_SEND_INTERVAL_MS = 2_000;
+const FF14_PRICE_ALERT_DELIVERY_RETENTION_MS = 3 * 24 * 60 * 60_000;
 
 type VtbPollState = {
   dynamicCursor: number;
@@ -1178,6 +1180,25 @@ const runFf14PriceAlerts = async (
         continue;
       }
 
+      const listingKeys = getFf14LowPriceListingKeys(result.market, alert.minimumPrice);
+      const deliveredListingKeys = new Set(
+        await itemStore.listDeliveredFf14PriceAlertListingKeys(
+          alert.groupId,
+          alert.region,
+          result.item.ID,
+          listingKeys,
+        ),
+      );
+      const newListingKeys = listingKeys.filter((listingKey) => !deliveredListingKeys.has(listingKey));
+      if (newListingKeys.length === 0) {
+        logger.info("plugin", "ff14 price alert skipped: low-price listings already delivered", {
+          ...alert,
+          lowestPrice,
+          listingCount: listingKeys.length,
+        });
+        continue;
+      }
+
       await gateway.sendForwardMessage(
         {
           text: "",
@@ -1196,6 +1217,16 @@ const runFf14PriceAlerts = async (
         },
       );
 
+      // The forwarded market message is the alert itself. Persist immediately
+      // after it succeeds so a secondary mention failure cannot make the same
+      // listings appear as a new alert during the next scheduled run.
+      await itemStore.recordFf14PriceAlertDeliveries(
+        alert.groupId,
+        alert.region,
+        result.item.ID,
+        newListingKeys,
+      );
+
       if (alert.priceAlertAtUserIds.length > 0) {
         await gateway.sendGroupMessage(
           alert.groupId,
@@ -1206,12 +1237,25 @@ const runFf14PriceAlerts = async (
       logger.info("plugin", "ff14 price alert sent", {
         ...alert,
         lowestPrice,
+        newListingCount: newListingKeys.length,
       });
     } catch (error) {
       logGroupDeliveryFailure(logger, "ff14 price alert failed", {
         alert,
       }, error);
     }
+  }
+
+  // Refreshes happen while processing alerts above. Cleaning afterwards keeps
+  // a still-visible listing alive even if the service was stopped for longer
+  // than the retention window.
+  const cleanupResult = await itemStore.cleanupExpiredFf14PriceAlertDeliveries(
+    new Date(Date.now() - FF14_PRICE_ALERT_DELIVERY_RETENTION_MS),
+  );
+  if (cleanupResult.count > 0) {
+    logger.info("plugin", "expired ff14 price alert deliveries cleaned up", {
+      count: cleanupResult.count,
+    });
   }
 };
 

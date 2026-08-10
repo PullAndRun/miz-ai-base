@@ -68,6 +68,19 @@ model Ff14PriceAlertSuppression {
   @@map("ff14_price_alert_suppressions")
 }
 
+model Ff14PriceAlertDelivery {
+  groupId     String   @map("group_id")
+  region      String
+  itemId      Int      @map("item_id")
+  listingKey  String   @map("listing_key")
+  deliveredAt DateTime @default(now()) @map("delivered_at")
+  lastSeenAt  DateTime @default(now()) @map("last_seen_at")
+
+  @@id([groupId, region, itemId, listingKey])
+  @@index([lastSeenAt])
+  @@map("ff14_price_alert_deliveries")
+}
+
 model Reminder {
   id          Int      @id @default(autoincrement())
   groupId     String   @map("group_id")

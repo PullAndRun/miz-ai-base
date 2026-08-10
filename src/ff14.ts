@@ -1,4 +1,5 @@
 import dayjs from "dayjs";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { fetchWithRetry, readResponseJson } from "@/http";
 
@@ -20,10 +21,14 @@ const searchResponseSchema = z.looseObject({
 });
 
 const listingSchema = z.looseObject({
+  listingID: z.union([z.string().min(1), z.number()]).nullish(),
   pricePerUnit: z.number().nonnegative(),
   quantity: z.number().int().nonnegative(),
   total: z.number().nonnegative(),
+  worldID: z.number().int().nullish(),
   worldName: z.string().optional(),
+  retainerID: z.string().nullish(),
+  sellerID: z.string().nullish(),
   hq: z.boolean().optional(),
   lastReviewTime: z.number().optional(),
 });
@@ -157,6 +162,55 @@ export const getLowestMarketPrice = (market: MarketResponse) => {
 
   return Math.min(...listings.map((listing) => listing.pricePerUnit));
 };
+
+export const getFf14LowPriceListingKeys = (
+  market: MarketResponse,
+  maximumPrice: number,
+) => {
+  const listingKeys = market.listings
+    .filter((listing) => listing.pricePerUnit > 0 && listing.pricePerUnit <= maximumPrice)
+    .map((listing) => {
+      if (listing.listingID !== undefined && listing.listingID !== null) {
+        return `listing:${String(listing.listingID)}`;
+      }
+
+      // Universalis normally supplies listingID. Keep a stable fallback for
+      // incomplete responses without using review time, which changes while
+      // the actual market-board listing remains the same.
+      return `fallback:${hashFf14ListingKey([
+        listing.worldID,
+        listing.worldName,
+        listing.retainerID,
+        listing.sellerID,
+        listing.hq === true,
+        listing.pricePerUnit,
+        listing.quantity,
+        listing.total,
+      ])}`;
+    });
+
+  if (listingKeys.length > 0) {
+    return [...new Set(listingKeys)].sort();
+  }
+
+  const lowestPrice = getLowestMarketPrice(market);
+  if (lowestPrice === undefined || lowestPrice > maximumPrice) {
+    return [];
+  }
+
+  // A summary-only response can still trigger the existing price check. Give
+  // that market snapshot a persistent identity so it is not sent every hour.
+  return [`summary:${hashFf14ListingKey([
+    market.minPrice,
+    market.minPriceNQ,
+    market.minPriceHQ,
+    market.listingsCount,
+    market.unitsForSale,
+  ])}`];
+};
+
+const hashFf14ListingKey = (value: unknown) =>
+  createHash("sha256").update(JSON.stringify(value)).digest("base64url");
 
 export const formatFf14MarketMessages = ({
   item,

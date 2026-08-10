@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   createFf14PriceAlertMentionMessage,
   formatFf14MarketMessages,
+  getFf14LowPriceListingKeys,
   queryFf14Market,
 } from "@/ff14";
 
@@ -115,6 +116,48 @@ describe("FF14 price alert mentions", () => {
   test("does not mention the same member twice", () => {
     const message = createFf14PriceAlertMentionMessage([123456789, "123456789"]);
     expect(message.filter((segment) => segment.type === "at")).toHaveLength(1);
+  });
+});
+
+describe("FF14 low-price listing identity", () => {
+  test("uses listing IDs so the same listing is only delivered once", () => {
+    const market = {
+      listings: [
+        { listingID: "listing-a", pricePerUnit: 1, quantity: 1, total: 1, lastReviewTime: 100 },
+        { listingID: "listing-b", pricePerUnit: 99, quantity: 2, total: 198 },
+        { listingID: "too-expensive", pricePerUnit: 101, quantity: 1, total: 101 },
+      ],
+    };
+
+    expect(getFf14LowPriceListingKeys(market, 100)).toEqual([
+      "listing:listing-a",
+      "listing:listing-b",
+    ]);
+    expect(getFf14LowPriceListingKeys({
+      listings: [
+        { ...market.listings[1], lastReviewTime: 999 },
+        { ...market.listings[0], lastReviewTime: 999 },
+      ],
+    }, 100)).toEqual([
+      "listing:listing-a",
+      "listing:listing-b",
+    ]);
+  });
+
+  test("detects a newly posted low-price listing even at the same price", () => {
+    const first = getFf14LowPriceListingKeys({
+      listings: [{ listingID: "listing-a", pricePerUnit: 1, quantity: 1, total: 1 }],
+    }, 100);
+    const next = getFf14LowPriceListingKeys({
+      listings: [
+        { listingID: "listing-a", pricePerUnit: 1, quantity: 1, total: 1 },
+        { listingID: "listing-new", pricePerUnit: 1, quantity: 1, total: 1 },
+      ],
+    }, 100);
+
+    expect(next.filter((listingKey) => !first.includes(listingKey))).toEqual([
+      "listing:listing-new",
+    ]);
   });
 });
 

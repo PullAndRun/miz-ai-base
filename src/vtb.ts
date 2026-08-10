@@ -732,6 +732,59 @@ const createVtbRepository = (prisma: PrismaClient) => {
       orderBy: { createdAt: "asc" },
     });
 
+  const listDeliveredFf14PriceAlertListingKeys = async (
+    groupId: string | number,
+    region: string,
+    itemId: number,
+    listingKeys: readonly string[],
+  ) => {
+    if (listingKeys.length === 0) return [];
+    const deliveries = await prisma.ff14PriceAlertDelivery.findMany({
+      where: {
+        groupId: String(groupId),
+        region,
+        itemId,
+        listingKey: { in: [...listingKeys] },
+      },
+      select: { listingKey: true },
+    });
+    if (deliveries.length > 0) {
+      await prisma.ff14PriceAlertDelivery.updateMany({
+        where: {
+          groupId: String(groupId),
+          region,
+          itemId,
+          listingKey: { in: deliveries.map((delivery) => delivery.listingKey) },
+        },
+        data: { lastSeenAt: new Date() },
+      });
+    }
+    return deliveries.map((delivery) => delivery.listingKey);
+  };
+
+  const recordFf14PriceAlertDeliveries = async (
+    groupId: string | number,
+    region: string,
+    itemId: number,
+    listingKeys: readonly string[],
+  ) => {
+    if (listingKeys.length === 0) return;
+    await prisma.ff14PriceAlertDelivery.createMany({
+      data: [...new Set(listingKeys)].map((listingKey) => ({
+        groupId: String(groupId),
+        region,
+        itemId,
+        listingKey,
+      })),
+      skipDuplicates: true,
+    });
+  };
+
+  const cleanupExpiredFf14PriceAlertDeliveries = async (lastSeenBefore: Date) =>
+    prisma.ff14PriceAlertDelivery.deleteMany({
+      where: { lastSeenAt: { lt: lastSeenBefore } },
+    });
+
   const recordLiveEndDelivery = async (mid: string, groupIds: readonly string[]) => {
     if (groupIds.length === 0) return;
     await prisma.vtbLiveSession.update({
@@ -1296,6 +1349,8 @@ const createVtbRepository = (prisma: PrismaClient) => {
   return {
     initialize, findFf14Item, upsertFf14Item,
     disableFf14PriceAlert, enableFf14PriceAlert, listDisabledFf14PriceAlerts,
+    listDeliveredFf14PriceAlertListingKeys, recordFf14PriceAlertDeliveries,
+    cleanupExpiredFf14PriceAlertDeliveries,
     findStreamerByName, listStreamers, deleteStreamersNotInNames, deleteStreamerByName,
     upsertStreamer, getLiveSession, startLiveSession, recordLiveDelivery, markLiveSessionEnded, recordLiveEndDelivery,
     getDynamicDeliveryState, startDynamicDelivery, recordDynamicDelivery,
