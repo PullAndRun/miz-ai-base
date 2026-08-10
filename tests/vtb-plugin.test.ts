@@ -62,4 +62,51 @@ describe("VTB subscription commands", () => {
 
     expect(repositoryLoads).toBe(0);
   });
+
+  test("list shows whether each streamer has at-all enabled", async () => {
+    const config = createConfig([{
+      groupId: 100,
+      streamers: ["主播甲", "主播乙"],
+      atAllStreamers: ["主播乙"],
+    }]);
+    let replyText = "";
+    const plugin = createVtbPlugin({ loadCurrentConfig: async () => config });
+
+    await plugin.handle!({
+      command: { name: "vtb", args: "list", raw: "vtb list" },
+      config,
+      message: adminMessage,
+      reply: async (message: unknown) => {
+        replyText = String(message);
+      },
+    } as never);
+
+    expect(replyText).toContain("主播甲（开播 @全体成员：否）");
+    expect(replyText).toContain("主播乙（开播 @全体成员：是）");
+  });
+
+  test("atall command updates a subscribed streamer", async () => {
+    const config = createConfig([{ groupId: 100, streamers: ["主播甲"] }]);
+    const calls: unknown[][] = [];
+    let replyText = "";
+    const plugin = createVtbPlugin({
+      setAtAllStreamer: async (...args) => {
+        calls.push(args);
+        return { changed: true, subscribed: true, atAllStreamers: ["主播甲"] };
+      },
+    });
+
+    await plugin.handle!({
+      command: { name: "vtb", args: "atall enable 主播甲", raw: "vtb atall enable 主播甲" },
+      config,
+      message: adminMessage,
+      logger: { info: () => undefined },
+      reply: async (message: unknown) => {
+        replyText = String(message);
+      },
+    } as never);
+
+    expect(calls).toEqual([[100, "主播甲", true]]);
+    expect(replyText).toContain("已开启 主播甲");
+  });
 });

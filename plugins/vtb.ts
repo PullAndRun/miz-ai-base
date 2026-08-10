@@ -19,6 +19,7 @@ import {
   addVtbSubscription,
   loadConfig,
   removeVtbSubscription,
+  setVtbAtAllStreamer,
   updateVtbSubscriptionNames,
 } from "@/config";
 import { findVtbSubscription } from "@/vtb-subscriptions";
@@ -27,6 +28,7 @@ type VtbPluginDependencies = {
   loadCurrentConfig?: typeof loadConfig;
   addSubscription?: typeof addVtbSubscription;
   removeSubscription?: typeof removeVtbSubscription;
+  setAtAllStreamer?: typeof setVtbAtAllStreamer;
   getRepository?: typeof getVtbRepository;
 };
 
@@ -34,6 +36,7 @@ export const createVtbPlugin = ({
   loadCurrentConfig = loadConfig,
   addSubscription = addVtbSubscription,
   removeSubscription = removeVtbSubscription,
+  setAtAllStreamer = setVtbAtAllStreamer,
   getRepository = getVtbRepository,
 }: VtbPluginDependencies = {}): MizPlugin => ({
   name: "vtb",
@@ -45,15 +48,19 @@ export const createVtbPlugin = ({
     "查看订阅：miz vtb list",
     "添加订阅：miz vtb subscribe 主播昵称",
     "取消订阅：miz vtb unsubscribe 主播昵称",
+    "开播 @全体：miz vtb atall enable/disable 主播昵称",
     "同步昵称与直播间：miz vtb sync",
     "订阅管理需要管理员或直播订阅白名单权限，资料同步需要同步白名单权限。",
   ].join("\n"),
   async handle({ command, config, logger, message, reply }) {
-    const [type, ...nameParts] = command.args.trim().split(/\s+/);
+    const [type, ...argumentParts] = command.args.trim().split(/\s+/);
+    const atAllAction = type === "atall" ? parseAtAllAction(argumentParts[0]) : undefined;
+    const nameParts = type === "atall" ? argumentParts.slice(1) : argumentParts;
     const streamerName = nameParts.join(" ").trim();
     if (
-      (type !== "live" && type !== "dynamic" && type !== "sync" && type !== "list" && type !== "subscribe" && type !== "unsubscribe") ||
-      ((type === "live" || type === "dynamic" || type === "subscribe" || type === "unsubscribe") && !streamerName)
+      (type !== "live" && type !== "dynamic" && type !== "sync" && type !== "list" && type !== "subscribe" && type !== "unsubscribe" && type !== "atall") ||
+      ((type === "live" || type === "dynamic" || type === "subscribe" || type === "unsubscribe" || type === "atall") && !streamerName) ||
+      (type === "atall" && atAllAction === undefined)
     ) {
       await reply([
         "📺 B 站主播功能这样用：",
@@ -62,6 +69,7 @@ export const createVtbPlugin = ({
         "订阅列表：miz vtb list",
         "添加订阅：miz vtb subscribe 主播昵称",
         "取消订阅：miz vtb unsubscribe 主播昵称",
+        "开播 @全体：miz vtb atall enable/disable 主播昵称",
         "同步资料：miz vtb sync",
       ].join("\n"));
       return;
@@ -85,7 +93,7 @@ export const createVtbPlugin = ({
     }
 
     try {
-      if (type === "list" || type === "subscribe" || type === "unsubscribe") {
+      if (type === "list" || type === "subscribe" || type === "unsubscribe" || type === "atall") {
         if (message.groupId === undefined) {
           await reply("主播关注名单跟着群聊走，回到目标群里管理吧。私聊仍然可以查询直播和动态。");
           return;
@@ -107,9 +115,33 @@ export const createVtbPlugin = ({
           const subscription = findVtbSubscription(latestConfig.vtb.subscriptions, message.groupId);
           await reply(
             subscription?.streamers.length
-              ? [`📺 这个群正在关注 ${subscription.streamers.length} 位主播：`, ...subscription.streamers.map((name) => `· ${name}`)].join("\n")
+              ? [
+                  `📺 这个群正在关注 ${subscription.streamers.length} 位主播：`,
+                  ...subscription.streamers.map((name) =>
+                    `· ${name}（开播 @全体成员：${subscription.atAllStreamers?.includes(name) ? "是" : "否"}）`),
+                ].join("\n")
               : "📺 关注名单还是空的。\n添加：miz vtb subscribe 主播昵称",
           );
+          return;
+        }
+
+        if (type === "atall") {
+          const enabled = atAllAction === "enable";
+          const result = await setAtAllStreamer(message.groupId, streamerName, enabled);
+          if (!result.subscribed) {
+            await reply(`关注名单里没有 ${streamerName}，请先用 miz vtb subscribe ${streamerName} 添加订阅。`);
+            return;
+          }
+          if (!result.changed) {
+            await reply(`${streamerName} 的开播 @全体成员已经${enabled ? "开启" : "关闭"}了。`);
+            return;
+          }
+          logger.info("plugin", "vtb group at-all setting updated", {
+            action: enabled ? "enable" : "disable",
+            groupId: message.groupId,
+            streamerName,
+          });
+          await reply(`已${enabled ? "开启" : "关闭"} ${streamerName} 的开播 @全体成员。`);
           return;
         }
 
@@ -274,5 +306,11 @@ export const createVtbPlugin = ({
 });
 
 const vtbPlugin = createVtbPlugin();
+
+const parseAtAllAction = (action: string | undefined) => {
+  if (action === "enable" || action === "on" || action === "开启") return "enable" as const;
+  if (action === "disable" || action === "off" || action === "关闭") return "disable" as const;
+  return undefined;
+};
 
 export default vtbPlugin;

@@ -510,6 +510,57 @@ export const removeVtbSubscription = (groupId: string | number, streamerName: st
     return { changed: true, streamers };
   });
 
+export const setVtbAtAllStreamer = (
+  groupId: string | number,
+  streamerName: string,
+  enabled: boolean,
+) => queueVtbSubscriptionUpdate(async () => {
+  const source = await readVtbSubscriptionConfig();
+  const result = setVtbAtAllStreamerInSource(source, groupId, streamerName, enabled);
+  if (result.changed) {
+    await writeVtbSubscriptionConfig(result.source);
+  }
+  return {
+    changed: result.changed,
+    subscribed: result.subscribed,
+    atAllStreamers: result.atAllStreamers,
+  };
+});
+
+export const setVtbAtAllStreamerInSource = (
+  source: string,
+  groupId: string | number,
+  streamerName: string,
+  enabled: boolean,
+) => {
+  const subscription = findVtbSubscriptionBlock(source, groupId);
+  if (!subscription || !subscription.streamers.includes(streamerName)) {
+    return {
+      changed: false,
+      subscribed: false,
+      source,
+      atAllStreamers: subscription?.atAllStreamers ?? [],
+    };
+  }
+
+  const current = subscription.atAllStreamers ?? [];
+  const alreadyEnabled = current.includes(streamerName);
+  if (alreadyEnabled === enabled) {
+    return { changed: false, subscribed: true, source, atAllStreamers: current };
+  }
+
+  const atAllStreamers = enabled
+    ? [...current, streamerName]
+    : current.filter((name) => name !== streamerName);
+  const updatedBlock = replaceAtAllStreamersInBlock(subscription.text, atAllStreamers);
+  return {
+    changed: true,
+    subscribed: true,
+    source: `${source.slice(0, subscription.start)}${updatedBlock}${source.slice(subscription.end)}`,
+    atAllStreamers,
+  };
+};
+
 export type Ff14PriceAlertInput = MizConfig["ff14"]["priceAlerts"][number];
 
 export const addFf14PriceAlert = (alert: Ff14PriceAlertInput) =>
@@ -733,6 +784,25 @@ const replaceSubscriptionBlock = (
     );
   }
   return `${source.slice(0, subscription.start)}${updatedBlock}${source.slice(subscription.end)}`;
+};
+
+const replaceAtAllStreamersInBlock = (
+  block: string,
+  atAllStreamers: readonly string[],
+) => {
+  const assignment = `atAllStreamers = ${JSON.stringify(atAllStreamers)}`;
+  if (/^atAllStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m.test(block)) {
+    return block.replace(
+      /^atAllStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m,
+      assignment,
+    );
+  }
+
+  const newline = block.includes("\r\n") ? "\r\n" : "\n";
+  return block.replace(
+    /^(streamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*)$/m,
+    `$1${newline}${assignment}`,
+  );
 };
 
 const getSubscriptionBlockSeparator = (source: string) => {
