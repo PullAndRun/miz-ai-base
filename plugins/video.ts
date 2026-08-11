@@ -9,9 +9,7 @@ import { tryAcquireVideoJob } from "@/video-jobs";
 import {
   deleteDownloadedVideo,
   downloadVideo,
-  getVideoDuration,
   isBilibiliUrl,
-  isVideoDurationAllowed,
   isVideoUrl,
   isWhitelistedVideoUser,
 } from "@/video";
@@ -22,7 +20,7 @@ const videoPlugin: MizPlugin = {
   name: "video",
   commands: ["video", "视频"],
   description: [
-    "把链接里的视频搬到聊天里，最长 10 分钟。普通成员可用 B 站链接，白名单成员可用其他站点。",
+    "把链接里的视频搬到聊天里。普通成员可用 B 站链接，白名单成员可用其他站点。",
     "用法：miz video 视频链接",
   ].join("\n"),
   async handle({
@@ -36,7 +34,7 @@ const videoPlugin: MizPlugin = {
   }) {
     const url = command.args.trim();
     if (!url) {
-      await reply("🎬 视频链接还没放进来。\n例如：miz video https://...\n时长记得控制在 10 分钟以内。");
+      await reply("🎬 视频链接还没放进来。\n例如：miz video https://...");
       return;
     }
 
@@ -110,17 +108,6 @@ const processVideo = async ({
 }) => {
   let deliveryAttempted = false;
   try {
-    const duration = await getVideoDuration(url, config.video, config.network, config.bilibili);
-    if (duration === undefined) {
-      await reply("没能读到视频时长。链接可能失效、需要登录，或内容没有公开，换一个能直接打开的链接试试吧。");
-      return;
-    }
-
-    if (!isVideoDurationAllowed(duration)) {
-      await reply("这段视频超过 10 分钟，搬不过来啦。换个短版，或者先裁剪一下吧。");
-      return;
-    }
-
     const downloadedVideoPath = await downloadVideo({
       url,
       config: config.video,

@@ -15,8 +15,6 @@ import {
   getNapcatVideoFile,
   isBilibiliUrl,
   isRetryableYtDlpError,
-  isVideoDurationAllowed,
-  MAX_VIDEO_DURATION_SECONDS,
   formatMediaToolVersion,
   parseFfmpegDisplayVersion,
   parseYtDlpDisplayVersion,
@@ -45,13 +43,6 @@ const videoConfig: VideoConfig = {
 };
 const networkConfig = { proxyUrl: "" };
 const bilibiliConfig = { cookie: "SESSDATA=test-cookie" };
-
-describe("video duration limit", () => {
-  test("allows exactly ten minutes and rejects anything longer", () => {
-    expect(isVideoDurationAllowed(MAX_VIDEO_DURATION_SECONDS)).toBeTrue();
-    expect(isVideoDurationAllowed(MAX_VIDEO_DURATION_SECONDS + 0.01)).toBeFalse();
-  });
-});
 
 describe("video download filenames", () => {
   test("keeps the NapCat-visible temporary filename ASCII-only", () => {

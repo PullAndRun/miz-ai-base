@@ -14,10 +14,6 @@ const YT_DLP_OUTER_RETRY_COUNT = 1;
 const YT_DLP_OUTER_RETRY_DELAY_MS = 2_000;
 export const STALE_VIDEO_ARTIFACT_MAX_AGE_MS = 24 * 60 * 60_000;
 const VIDEO_ARTIFACT_NAME_PATTERN = /^miz-video-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?:-source)?\./i;
-export const MAX_VIDEO_DURATION_SECONDS = 10 * 60;
-
-export const isVideoDurationAllowed = (durationSeconds: number) =>
-  Number.isFinite(durationSeconds) && durationSeconds > 0 && durationSeconds <= MAX_VIDEO_DURATION_SECONDS;
 
 export const isBilibiliUrl = (value: string, allowedHosts: readonly string[]) => {
   try {
@@ -98,24 +94,6 @@ export const downloadVideo = async ({
     await deleteDownloadArtifacts(downloadDirectory, requestId);
     throw error;
   }
-};
-
-export const getVideoDuration = async (
-  url: string,
-  config: VideoConfig,
-  network: NetworkConfig,
-  bilibili: BilibiliConfig,
-) => {
-  const output = await withYtDlpRequest(url, config, network, bilibili, (requestArgs) =>
-    runYtDlpWithTransientRetry(config, [
-      "--no-playlist",
-      "--skip-download",
-      "--print",
-      "%(duration)s",
-      ...requestArgs,
-    ]));
-  const value = Number(output.trim().split(/\r?\n/).filter(Boolean).at(-1));
-  return Number.isFinite(value) && value > 0 ? value : undefined;
 };
 
 export const getNapcatVideoFile = (videoPath: string, config: VideoConfig) => {
