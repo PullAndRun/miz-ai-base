@@ -24,6 +24,7 @@ type DependencyUpdateOptions = Readonly<{
   packageJsonPath?: string;
   runUpdate?: () => Promise<void>;
   proxyUrl?: string;
+  signal?: AbortSignal;
 }>;
 
 export const updatePackageDependencies = async (
@@ -31,7 +32,9 @@ export const updatePackageDependencies = async (
 ): Promise<DependencyUpdateResult> => {
   const packageJsonPath = options.packageJsonPath ?? "package.json";
   const before = await readPackageManifest(packageJsonPath);
-  await (options.runUpdate ?? (() => runBunUpdate(options.proxyUrl)))();
+  throwIfAborted(options.signal);
+  await (options.runUpdate ?? (() => runBunUpdate(options.proxyUrl, options.signal)))();
+  throwIfAborted(options.signal);
   const after = await readPackageManifest(packageJsonPath);
   return { changes: findDependencyVersionChanges(before, after) };
 };
@@ -60,7 +63,8 @@ const readPackageManifest = async (path: string): Promise<PackageManifest> => {
   return file.json() as Promise<PackageManifest>;
 };
 
-const runBunUpdate = async (proxyUrl = "") => {
+const runBunUpdate = async (proxyUrl = "", signal?: AbortSignal) => {
+  throwIfAborted(signal);
   const child = Bun.spawn(createBunUpdateArgs(), {
     cwd: process.cwd(),
     env: {
@@ -71,11 +75,26 @@ const runBunUpdate = async (proxyUrl = "") => {
     stdout: "pipe",
     stderr: "pipe",
   });
-  const [exitCode, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
+  let forceKillTimeout: ReturnType<typeof setTimeout> | undefined;
+  const abort = () => {
+    child.kill();
+    forceKillTimeout = setTimeout(() => child.kill("SIGKILL"), 1_000);
+  };
+  signal?.addEventListener("abort", abort, { once: true });
+  let exitCode: number;
+  let stdout: string;
+  let stderr: string;
+  try {
+    [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+  } finally {
+    signal?.removeEventListener("abort", abort);
+    if (forceKillTimeout) clearTimeout(forceKillTimeout);
+  }
+  throwIfAborted(signal);
   if (exitCode !== 0) {
     throw new Error(`bun update exited with code ${exitCode}: ${formatProcessOutput(stderr || stdout)}`);
   }
@@ -91,3 +110,9 @@ export const createBunUpdateArgs = () => [
 
 const formatProcessOutput = (output: string) =>
   output.replace(/\s+/g, " ").trim().slice(-2_000) || "no process output";
+
+const throwIfAborted = (signal?: AbortSignal) => {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error("Dependency update aborted");
+  }
+};

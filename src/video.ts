@@ -293,21 +293,23 @@ type MediaToolVersionRunner = (
   executable: string,
   args: readonly string[],
   processName: string,
+  signal?: AbortSignal,
 ) => Promise<string>;
 
 export const readMediaToolVersions = async (
   config: VideoConfig,
-  runVersionCommand: MediaToolVersionRunner = (executable, args, processName) =>
-    runProcess(executable, [...args], processName, 10_000),
+  runVersionCommand: MediaToolVersionRunner = (executable, args, processName, signal) =>
+    runProcess(executable, [...args], processName, 10_000, signal),
+  signal?: AbortSignal,
 ) => {
   const ytDlpPath = getYtDlpPath(config);
   const [ffmpeg, ytDlp] = await Promise.all([
     readMediaToolVersion(
-      () => runVersionCommand(getFfmpegPath(config), ["-version"], "ffmpeg"),
+      () => runVersionCommand(getFfmpegPath(config), ["-version"], "ffmpeg", signal),
       parseFfmpegDisplayVersion,
     ),
     readMediaToolVersion(
-      () => runVersionCommand(ytDlpPath, ["--version"], "yt-dlp"),
+      () => runVersionCommand(ytDlpPath, ["--version"], "yt-dlp", signal),
       parseYtDlpDisplayVersion,
       () => readYtDlpUpdateMarkerVersion(ytDlpPath),
     ),
@@ -373,8 +375,13 @@ const runProcess = (
   args: string[],
   processName: string,
   timeoutMs: number,
+  signal?: AbortSignal,
 ) =>
   new Promise<string>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason instanceof Error ? signal.reason : new Error(`${processName} aborted`));
+      return;
+    }
     const child = spawn(executable, args, {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -385,6 +392,8 @@ const runProcess = (
     let settled = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let forceKillTimeout: ReturnType<typeof setTimeout> | undefined;
+    let stopReason: "timeout" | "abort" | undefined;
+    const abort = () => stopProcess("abort");
     const settle = (callback: () => void) => {
       if (settled) {
         return;
@@ -397,17 +406,28 @@ const runProcess = (
       if (forceKillTimeout) {
         clearTimeout(forceKillTimeout);
       }
+      signal?.removeEventListener("abort", abort);
       callback();
     };
-    timeout = setTimeout(() => {
+    const stopProcess = (reason: "timeout" | "abort") => {
+      if (stopReason) return;
+      stopReason = reason;
       timedOut = true;
       child.kill();
       forceKillTimeout = setTimeout(() => {
         if (!settled) {
           child.kill("SIGKILL");
-          settle(() => reject(new Error(`${processName} timed out`)));
+          settle(() => reject(reason === "timeout"
+            ? new Error(`${processName} timed out`)
+            : signal?.reason instanceof Error
+              ? signal.reason
+              : new Error(`${processName} aborted`)));
         }
       }, PROCESS_FORCE_KILL_DELAY_MS);
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    timeout = setTimeout(() => {
+      stopProcess("timeout");
     }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => appendCapturedOutput(stdout, chunk));
@@ -424,11 +444,13 @@ const runProcess = (
 
       settle(() =>
         reject(
-          new Error(
-            timedOut
-              ? `${processName} timed out`
-              : `${processName} failed: ${formatProcessError(Buffer.concat(stderr.chunks).toString("utf8"))}`,
-          ),
+          stopReason === "abort"
+            ? signal?.reason instanceof Error ? signal.reason : new Error(`${processName} aborted`)
+            : new Error(
+              timedOut
+                ? `${processName} timed out`
+                : `${processName} failed: ${formatProcessError(Buffer.concat(stderr.chunks).toString("utf8"))}`,
+            ),
         ),
       );
     });

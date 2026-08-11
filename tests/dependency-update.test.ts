@@ -18,11 +18,14 @@ describe("package dependency updates", () => {
     expect(packageJson.scripts.start).toStartWith(
       "bun run dependencies:update -- normal --display-tool-versions",
     );
+    expect(packageJson.scripts.start).toContain("--startup");
     expect(updateScript).toContain("updatePackageDependencies");
     expect(updateScript).toContain("if (displayToolVersionsOnly)");
     expect(updateScript).toContain("readMediaToolVersions");
     expect(updateScript).toContain("lookupLatestMediaToolVersions");
     expect(updateScript).toContain("formatMediaToolVersion");
+    expect(updateScript).toContain("STARTUP_UPDATE_TIMEOUT_MS = 30_000");
+    expect(updateScript).toContain("continuing startup");
     expect(updateScript).toContain("installFfmpegForWindowsAndLinux");
     expect(updateScript).toContain("updateYtDlpBinaries");
   });
@@ -69,6 +72,25 @@ describe("package dependency updates", () => {
       expect(result.changes).toEqual([
         { name: "alpha", section: "dependencies", from: "1.0.0", to: "2.0.0" },
       ]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("aborts a startup dependency update without reading a partial result", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "miz-dependency-update-timeout-"));
+    const packageJsonPath = path.join(directory, "package.json");
+    const controller = new AbortController();
+    try {
+      await Bun.write(packageJsonPath, JSON.stringify({ dependencies: { alpha: "1.0.0" } }));
+
+      await expect(updatePackageDependencies({
+        packageJsonPath,
+        signal: controller.signal,
+        runUpdate: async () => {
+          controller.abort(new DOMException("startup update timed out", "TimeoutError"));
+        },
+      })).rejects.toMatchObject({ name: "TimeoutError" });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
