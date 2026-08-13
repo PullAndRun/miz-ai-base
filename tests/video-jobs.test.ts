@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { tryAcquireVideoJob } from "@/video-jobs";
+import { enqueueVideoJob, tryAcquireVideoJob } from "@/video-jobs";
 
 describe("video job admission", () => {
   test("blocks duplicate users and enforces the global concurrency limit", () => {
@@ -40,5 +40,23 @@ describe("video job admission", () => {
     if (next.acquired) {
       next.release();
     }
+  });
+
+  test("queues jobs in FIFO order when all slots are occupied", async () => {
+    const first = enqueueVideoJob(1);
+    const second = enqueueVideoJob(1);
+    const order: string[] = [];
+    const firstHandle = await first.ready;
+    order.push("first");
+    let secondStarted = false;
+    const secondTask = second.ready.then((handle) => {
+      secondStarted = true;
+      order.push("second");
+      handle.release();
+    });
+    expect(secondStarted).toBeFalse();
+    firstHandle.release();
+    await secondTask;
+    expect(order).toEqual(["first", "second"]);
   });
 });

@@ -5,7 +5,7 @@ import {
   isVideoDeliveryError,
   type VideoDeliveryError,
 } from "@/video-delivery";
-import { tryAcquireVideoJob } from "@/video-jobs";
+import { enqueueVideoJob } from "@/video-jobs";
 import {
   deleteDownloadedVideo,
   downloadVideo,
@@ -54,17 +54,19 @@ const videoPlugin: MizPlugin = {
       return;
     }
 
-    const admission = tryAcquireVideoJob(
-      `${message.groupId ?? "private"}:${message.userId ?? "unknown"}`,
-      config.video.maxConcurrentJobs,
-    );
-    if (!admission.acquired) {
+    const queued = enqueueVideoJob(config.video.maxConcurrentJobs);
+    if (queued.position > 0) {
+      await reply(`视频已加入队列，前面还有 ${queued.position} 个视频，将按顺序发布。`);
+    }
+    const admission = await queued.ready;
+    /* legacy rejection branch removed
       await reply(admission.reason === "duplicate"
         ? "你已经有一个视频在处理中，请等它完成后再发下一个。"
         : "现在处理中的视频有点多，请稍后再试。");
       return;
     }
 
+    */
     try {
       await processVideo({
         url,
