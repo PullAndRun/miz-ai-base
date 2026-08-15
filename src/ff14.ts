@@ -292,13 +292,39 @@ const fetchJsonOnce = async <T>(
   init: RequestInit & { proxy?: string } = {},
 ): Promise<T> => {
   await waitForFf14RequestSlot();
-  const response = await fetchWithRetry(url, {
-    ...init,
-    timeoutMs: FETCH_TIMEOUT_MS,
-  });
+  // Bun's proxy option is useful in the container, but a stale/unavailable
+  // proxy can close the socket before the upstream request is established.
+  // Keep the configured proxy as the primary route and retry the same request
+  // directly when that route fails at the transport layer. HTTP responses and
+  // response parsing errors are deliberately not retried through another route.
+  const { proxy, ...requestInit } = init;
+  let response: Response;
+  try {
+    response = await fetchJsonResponse(url, requestInit, proxy);
+  } catch (error) {
+    if (!proxy || isHttpResponseError(error)) {
+      throw error;
+    }
+
+    response = await fetchJsonResponse(url, requestInit);
+  }
 
   return schema.parse(await readResponseJson(response, MAX_FF14_RESPONSE_BYTES));
 };
+
+const fetchJsonResponse = (
+  url: string | URL,
+  requestInit: RequestInit,
+  proxy?: string,
+) => fetchWithRetry(url, {
+  ...requestInit,
+  ...(proxy ? { proxy } : {}),
+  timeoutMs: FETCH_TIMEOUT_MS,
+});
+
+const isHttpResponseError = (error: unknown) =>
+  error instanceof Error &&
+  typeof (error as Error & { status?: unknown }).status === "number";
 
 const fetchJson = fetchJsonOnce;
 
