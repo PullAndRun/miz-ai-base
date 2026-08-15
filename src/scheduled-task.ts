@@ -7,6 +7,10 @@ export type ScheduledTaskRuntime = {
   stop(): Promise<void>;
 };
 
+export type TriggerableScheduledTaskRuntime = ScheduledTaskRuntime & {
+  trigger(): void;
+};
+
 type ExclusiveCronTaskOptions = {
   cronExpression: string;
   taskName: string;
@@ -21,7 +25,7 @@ type ExclusiveTaskOptions = {
 };
 
 export type ExclusiveTaskRunner = {
-  start(): void;
+  start(options?: { queueIfRunning?: boolean }): void;
   stop(): Promise<void>;
 };
 
@@ -34,9 +38,9 @@ export const createExclusiveCronTask = ({
   cronExpression,
   taskName,
   ...taskOptions
-}: ExclusiveCronTaskOptions): ScheduledTaskRuntime => {
+}: ExclusiveCronTaskOptions): TriggerableScheduledTaskRuntime => {
   const runner = createExclusiveTaskRunner(taskOptions);
-  const task = cron.createTask(cronExpression, runner.start, {
+  const task = cron.createTask(cronExpression, () => runner.start(), {
     name: taskName,
     missedExecutionTolerance: CRON_EXECUTION_TOLERANCE_MS,
   });
@@ -50,6 +54,7 @@ export const createExclusiveCronTask = ({
   });
   void task.start();
   return {
+    trigger: () => runner.start({ queueIfRunning: true }),
     stop: async () => {
       await task.stop();
       await runner.stop();
@@ -65,13 +70,18 @@ export const createExclusiveTaskRunner = ({
   shutdownFailureMessage,
 }: ExclusiveTaskOptions): ExclusiveTaskRunner => {
   let currentRun: Promise<void> | undefined;
+  let runQueued = false;
   let stopping = false;
 
-  const startRun = () => {
+  const startRun = (options?: { queueIfRunning?: boolean }) => {
     if (stopping) {
       return;
     }
     if (currentRun) {
+      if (options?.queueIfRunning) {
+        runQueued = true;
+        return;
+      }
       if (skippedMessage) {
         logger.warn("plugin", skippedMessage);
       }
@@ -82,6 +92,10 @@ export const createExclusiveTaskRunner = ({
     const trackedRun = execution.finally(() => {
       if (currentRun === trackedRun) {
         currentRun = undefined;
+        if (runQueued) {
+          runQueued = false;
+          startRun({ queueIfRunning: true });
+        }
       }
     });
     currentRun = trackedRun;

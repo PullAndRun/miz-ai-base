@@ -23,6 +23,7 @@ import {
   updateVtbSubscriptionNames,
 } from "@/config";
 import { findVtbSubscription } from "@/vtb-subscriptions";
+import { notifyVtbSubscriptionChange } from "@/vtb-subscription-runtime";
 
 type VtbPluginDependencies = {
   loadCurrentConfig?: typeof loadConfig;
@@ -30,6 +31,7 @@ type VtbPluginDependencies = {
   removeSubscription?: typeof removeVtbSubscription;
   setAtAllStreamer?: typeof setVtbAtAllStreamer;
   getRepository?: typeof getVtbRepository;
+  notifySubscriptionChange?: typeof notifyVtbSubscriptionChange;
 };
 
 export const createVtbPlugin = ({
@@ -38,6 +40,7 @@ export const createVtbPlugin = ({
   removeSubscription = removeVtbSubscription,
   setAtAllStreamer = setVtbAtAllStreamer,
   getRepository = getVtbRepository,
+  notifySubscriptionChange = notifyVtbSubscriptionChange,
 }: VtbPluginDependencies = {}): MizPlugin => ({
   name: "vtb",
   commands: ["vtb"],
@@ -141,6 +144,10 @@ export const createVtbPlugin = ({
             groupId: message.groupId,
             streamerName,
           });
+          notifySubscriptionChange({
+            groupId: message.groupId,
+            subscriptions: (await loadCurrentConfig()).vtb.subscriptions,
+          });
           await reply(`已${enabled ? "开启" : "关闭"} ${streamerName} 的开播 @全体成员。`);
           return;
         }
@@ -195,6 +202,10 @@ export const createVtbPlugin = ({
           action: type,
           groupId: message.groupId,
           streamerName,
+        });
+        notifySubscriptionChange({
+          groupId: message.groupId,
+          subscriptions: nextSubscriptions,
         });
         await reply(type === "subscribe"
           ? databaseSynchronized

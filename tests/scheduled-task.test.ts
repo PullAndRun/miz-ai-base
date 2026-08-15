@@ -52,4 +52,35 @@ describe("exclusive task lifecycle", () => {
     await Promise.resolve();
     expect(runs).toBe(1);
   });
+
+  test("coalesces an explicitly queued run while the current run is active", async () => {
+    const { logger, warnings } = createTestLogger();
+    const finishes: Array<() => void> = [];
+    let runs = 0;
+    const runner = createExclusiveTaskRunner({
+      logger,
+      run: async () => {
+        runs += 1;
+        await new Promise<void>((resolve) => finishes.push(resolve));
+      },
+      skippedMessage: "skipped",
+      failureMessage: "failed",
+      shutdownFailureMessage: "shutdown failed",
+    });
+
+    runner.start();
+    await Promise.resolve();
+    runner.start({ queueIfRunning: true });
+    runner.start({ queueIfRunning: true });
+    expect(runs).toBe(1);
+    expect(warnings).toEqual([]);
+
+    finishes.shift()?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(runs).toBe(2);
+
+    const stopping = runner.stop();
+    finishes.shift()?.();
+    await stopping;
+  });
 });

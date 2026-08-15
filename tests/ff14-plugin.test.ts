@@ -28,10 +28,18 @@ describe("FF14 price alert commands", () => {
 
   test("adds an alert for the current group with at targets", async () => {
     const config = createConfig();
+    const latestConfig = createConfig([{
+      groupId: 100,
+      region: "猫",
+      itemName: "水之碎晶",
+      minimumPrice: 1000,
+      priceAlertAtUserIds: ["123"],
+    }]);
     let added: unknown;
     let replyText = "";
+    const appliedRevisions: number[] = [];
     const plugin = createFf14Plugin({
-      loadCurrentConfig: async () => config,
+      loadCurrentConfig: async () => latestConfig,
       addPriceAlert: async (alert) => {
         added = alert;
         return { changed: true, alert };
@@ -39,6 +47,7 @@ describe("FF14 price alert commands", () => {
       getRepository: async () => ({
         enableFf14PriceAlert: async () => false,
       } as never),
+      notifyAlertChange: (alerts) => appliedRevisions.push(alerts.length),
     });
 
     await plugin.handle!({
@@ -58,6 +67,7 @@ describe("FF14 price alert commands", () => {
     });
     expect(replyText).toContain("已添加");
     expect(replyText).toContain("@123");
+    expect(appliedRevisions).toEqual([1]);
   });
 
   test("disables and enables only the configured item in the current group", async () => {

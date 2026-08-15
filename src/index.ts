@@ -1,25 +1,26 @@
-import { watch } from "node:fs";
 import { loadConfig } from "@/config";
+import { createConfigWatcher } from "@/config-watcher";
 import { ensureProjectDirectories } from "@/directories";
 import { createGateway, type Gateway } from "@/gateway";
 import { getGroupIds } from "@/group-ids";
 import { createLogger, type Logger } from "@/logger";
 import { createPluginRuntime } from "@/plugins";
+import { requiresGatewayRestart, requiresRuntimeReload } from "@/runtime-config";
+import { replaceRuntimeWithFallback, type RuntimeReplacement } from "@/runtime-reload";
 import { startScheduledTasks } from "@/tasks";
 import { cleanupStaleVideoArtifacts } from "@/video";
 import { closeVtbRepository, partitionAvailableVtbSubscriptions, syncConfiguredVtbStreamers } from "@/vtb";
 
-const CONFIG_RELOAD_DELAY_MS = 500;
-
 type AppRuntime = {
   config: Awaited<ReturnType<typeof loadConfig>>;
+  gateway: Gateway;
+  stopFeatures(): Promise<void>;
   stop(): Promise<void>;
 };
 
 const registerShutdownHandlers = (
-  gateway: Gateway,
   getRuntime: () => AppRuntime,
-  stopConfigWatcher: () => void,
+  stopConfigWatcher: () => Promise<void>,
   logger: Logger,
 ) => {
   let stopping = false;
@@ -31,12 +32,11 @@ const registerShutdownHandlers = (
     stopping = true;
     logger.info("miz", `received ${signal}, shutting down`);
     try {
-      stopConfigWatcher();
+      await stopConfigWatcher();
       await getRuntime().stop();
     } catch (error) {
       logger.error("miz", "scheduled tasks failed to stop cleanly", error);
     } finally {
-      gateway.dispose();
       process.exit(0);
     }
   };
@@ -45,10 +45,10 @@ const registerShutdownHandlers = (
   process.once("SIGTERM", () => void stop("SIGTERM"));
 };
 
-const main = async () => {
+const main = async (logger: Logger) => {
   const createdDirectories = await ensureProjectDirectories();
   const loadedConfig = await loadConfig();
-  const logger = createLogger(loadedConfig.naplink.logLevel);
+  logger.setLevel?.(loadedConfig.naplink.logLevel);
   if (createdDirectories.length > 0) {
     logger.info("miz", "created missing project directories", { directories: createdDirectories });
   }
@@ -62,31 +62,26 @@ const main = async () => {
       logger.warn("miz", "stale video artifact cleanup failed", error);
     }
   }
-  const gateway = createGateway(loadedConfig, logger);
-
-  logger.info("miz", `connecting to ${loadedConfig.gateway.url}`);
-
-  await gateway.connect();
-  await gateway.reportServerInfo();
-  let runtime = await createAppRuntime(loadedConfig, gateway, logger);
-  const stopConfigWatcher = watchConfig(logger, async (nextConfig) => {
-    const previousRuntime = runtime;
-    await previousRuntime.stop();
-    try {
-      runtime = await createAppRuntime(nextConfig, gateway, logger);
-    } catch (error) {
-      runtime = await createAppRuntime(previousRuntime.config, gateway, logger);
-      throw error;
-    }
+  let runtime = await createConnectedAppRuntime(loadedConfig, logger);
+  const stopConfigWatcher = await createConfigWatcher({
+    loadConfig,
+    logger,
+    onReloaded: async (nextConfig) => {
+      if (!requiresRuntimeReload(runtime.config, nextConfig)) return;
+      const result = await replaceAppRuntime(runtime, nextConfig, logger);
+      runtime = result.runtime;
+      if (!result.applied) throw result.error;
+    },
+    reloadOnStart: true,
   });
-  registerShutdownHandlers(gateway, () => runtime, stopConfigWatcher, logger);
+  registerShutdownHandlers(() => runtime, stopConfigWatcher, logger);
 };
 
-const createAppRuntime = async (
+const createFeatureRuntime = async (
   loadedConfig: Awaited<ReturnType<typeof loadConfig>>,
   gateway: Gateway,
   logger: Logger,
-): Promise<AppRuntime> => {
+): Promise<Pick<AppRuntime, "stopFeatures">> => {
   let detachPluginHandler: (() => void) | undefined;
   let taskRuntime: Awaited<ReturnType<typeof startScheduledTasks>> | undefined;
 
@@ -100,8 +95,7 @@ const createAppRuntime = async (
     detachPluginHandler = detach;
     let stopPromise: Promise<void> | undefined;
     return {
-      config,
-      stop: () => {
+      stopFeatures: () => {
         stopPromise ??= (async () => {
           detach();
           await plugins.stop();
@@ -125,64 +119,91 @@ const createAppRuntime = async (
   }
 };
 
-const watchConfig = (
+const createConnectedAppRuntime = async (
+  config: Awaited<ReturnType<typeof loadConfig>>,
   logger: Logger,
-  onReloaded: (config: Awaited<ReturnType<typeof loadConfig>>) => Promise<void>,
-) => {
-  let reloadTimer: ReturnType<typeof setTimeout> | undefined;
-  const changedFiles = new Set<string>();
-  let reloading = false;
-  let reloadQueued = false;
-  const reload = async () => {
-    if (reloading) {
-      reloadQueued = true;
-      return;
-    }
+): Promise<AppRuntime> => {
+  logger.setLevel?.(config.naplink.logLevel);
+  const gateway = createGateway(config, logger);
+  try {
+    logger.info("miz", `connecting to ${config.gateway.url}`);
+    await gateway.connect();
+    await gateway.reportServerInfo();
+    const features = await createFeatureRuntime(config, gateway, logger);
+    return createManagedAppRuntime(config, gateway, features.stopFeatures);
+  } catch (error) {
+    gateway.dispose();
+    throw error;
+  }
+};
 
-    reloading = true;
-    const reloadedFiles = [...changedFiles];
-    changedFiles.clear();
-    try {
-      const nextConfig = await loadConfig();
-      await onReloaded(nextConfig);
-      logger.info("miz", "configuration hot-reloaded", {
-        files: reloadedFiles,
-      });
-    } catch (error) {
-      logger.warn("miz", "configuration reload failed; keeping the current configuration", error);
-    } finally {
-      reloading = false;
-      if (reloadQueued) {
-        reloadQueued = false;
-        void reload();
-      }
-    }
+const createManagedAppRuntime = (
+  config: Awaited<ReturnType<typeof loadConfig>>,
+  gateway: Gateway,
+  stopFeatures: () => Promise<void>,
+): AppRuntime => {
+  let stopPromise: Promise<void> | undefined;
+  return {
+    config,
+    gateway,
+    stopFeatures,
+    stop: () => {
+      stopPromise ??= (async () => {
+        let failure: unknown;
+        try {
+          await stopFeatures();
+        } catch (error) {
+          failure = error;
+        } finally {
+          gateway.dispose();
+        }
+        if (failure) throw failure;
+      })();
+      return stopPromise;
+    },
   };
-  const scheduleReload = (filename: string) => {
-    changedFiles.add(filename);
-    if (reloadTimer) {
-      clearTimeout(reloadTimer);
-    }
-    reloadTimer = setTimeout(() => {
-      reloadTimer = undefined;
-      void reload();
-    }, CONFIG_RELOAD_DELAY_MS);
-  };
-  const watcher = watch("config", (_eventType, filename) => {
-    const name = filename?.toString();
-    if (name?.endsWith(".toml")) {
-      scheduleReload(name);
-    }
+};
+
+const replaceAppRuntime = async (
+  previous: AppRuntime,
+  nextConfig: Awaited<ReturnType<typeof loadConfig>>,
+  logger: Logger,
+): Promise<RuntimeReplacement<AppRuntime>> => {
+  const gatewayChanged = requiresGatewayRestart(previous.config, nextConfig);
+  if (gatewayChanged) {
+    return replaceRuntimeWithFallback({
+      stopPrevious: previous.stop,
+      createNext: () => createConnectedAppRuntime(nextConfig, logger),
+      restorePrevious: () => {
+        logger.setLevel?.(previous.config.naplink.logLevel);
+        return createConnectedAppRuntime(previous.config, logger);
+      },
+      onStopError: (error) => logger.warn(
+        "miz",
+        "application runtime did not stop cleanly before configuration reload",
+        error,
+      ),
+    });
+  }
+
+  return replaceRuntimeWithFallback({
+    stopPrevious: previous.stopFeatures,
+    createNext: async () => {
+      logger.setLevel?.(nextConfig.naplink.logLevel);
+      const features = await createFeatureRuntime(nextConfig, previous.gateway, logger);
+      return createManagedAppRuntime(nextConfig, previous.gateway, features.stopFeatures);
+    },
+    restorePrevious: async () => {
+      logger.setLevel?.(previous.config.naplink.logLevel);
+      const features = await createFeatureRuntime(previous.config, previous.gateway, logger);
+      return createManagedAppRuntime(previous.config, previous.gateway, features.stopFeatures);
+    },
+    onStopError: (error) => logger.warn(
+      "miz",
+      "feature runtime did not stop cleanly before configuration reload",
+      error,
+    ),
   });
-  watcher.on("error", (error) => logger.warn("miz", "configuration watcher stopped", error));
-
-  logger.info("miz", "configuration auto-reload enabled");
-  return () => {
-    if (reloadTimer) {
-      clearTimeout(reloadTimer);
-    }
-    watcher.close();
-  };
 };
 
 const prepareVtbSubscriptions = async (
@@ -244,7 +265,7 @@ const syncConfiguredVtbStreamersOnStartup = async (
 
 const logger = createLogger();
 
-main().catch((error) => {
+main(logger).catch((error) => {
   logger.error("miz", "failed to start", error);
   process.exit(1);
 });

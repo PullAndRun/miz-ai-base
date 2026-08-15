@@ -9,6 +9,7 @@ export type Logger = {
   info(context: LoggerContext, message: string, metadata?: unknown): void;
   warn(context: LoggerContext, message: string, metadata?: unknown): void;
   error(context: LoggerContext, message: string, metadata?: unknown): void;
+  setLevel?(level: LogLevel): void;
 };
 
 export const createLogger = (level: LogLevel = "info"): Logger => {
@@ -27,11 +28,17 @@ export const createLogger = (level: LogLevel = "info"): Logger => {
     ],
   });
 
+  const setLevel = (nextLevel: LogLevel) => {
+    logger.level = nextLevel === "off" ? "info" : nextLevel;
+    logger.silent = nextLevel === "off";
+  };
+
   return {
     debug: (context, message, metadata) => writeLog(logger, "debug", context, message, metadata),
     info: (context, message, metadata) => writeLog(logger, "info", context, message, metadata),
     warn: (context, message, metadata) => writeLog(logger, "warn", context, message, metadata),
     error: (context, message, metadata) => writeLog(logger, "error", context, message, metadata),
+    setLevel,
   };
 };
 

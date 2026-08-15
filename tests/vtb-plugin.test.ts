@@ -109,4 +109,28 @@ describe("VTB subscription commands", () => {
     expect(calls).toEqual([[100, "主播甲", true]]);
     expect(replyText).toContain("已开启 主播甲");
   });
+
+  test("publishes the latest subscriptions after a successful subscribe", async () => {
+    const staleConfig = createConfig([]);
+    const latestConfig = createConfig([{ groupId: 100, streamers: ["新主播"] }]);
+    const changes: Array<{ groupId: string | number; subscriptions: MizConfig["vtb"]["subscriptions"] }> = [];
+    const plugin = createVtbPlugin({
+      loadCurrentConfig: async () => latestConfig,
+      addSubscription: async () => ({ changed: true, streamers: ["新主播"] }),
+      getRepository: async () => ({
+        findStreamerByName: async () => ({ name: "新主播", mid: "1" }),
+      }) as never,
+      notifySubscriptionChange: (change) => changes.push(change),
+    });
+
+    await plugin.handle!({
+      command: { name: "vtb", args: "subscribe 新主播", raw: "vtb subscribe 新主播" },
+      config: staleConfig,
+      message: adminMessage,
+      logger: { info: () => undefined },
+      reply: async () => undefined,
+    } as never);
+
+    expect(changes).toEqual([{ groupId: 100, subscriptions: latestConfig.vtb.subscriptions }]);
+  });
 });

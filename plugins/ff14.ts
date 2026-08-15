@@ -16,6 +16,7 @@ import {
 import { canManageGroupFeature } from "@/group-permissions";
 import type { MizPlugin } from "@/plugins";
 import { getVtbRepository } from "@/vtb";
+import { notifyFf14AlertChange } from "@/ff14-alert-runtime";
 
 type Ff14PluginRepository = Pick<Awaited<ReturnType<typeof getVtbRepository>>,
   | "disableFf14PriceAlert"
@@ -30,6 +31,7 @@ type Ff14PluginDependencies = {
   addPriceAlert?: typeof addFf14PriceAlert;
   removePriceAlerts?: typeof removeFf14PriceAlerts;
   getRepository?: (config: MizConfig) => Promise<Ff14PluginRepository>;
+  notifyAlertChange?: typeof notifyFf14AlertChange;
 };
 
 type Ff14Action =
@@ -45,6 +47,7 @@ export const createFf14Plugin = ({
   addPriceAlert = addFf14PriceAlert,
   removePriceAlerts = removeFf14PriceAlerts,
   getRepository = getVtbRepository,
+  notifyAlertChange = notifyFf14AlertChange,
 }: Ff14PluginDependencies = {}): MizPlugin => ({
   name: "ff14",
   commands: ["ff14"],
@@ -143,6 +146,7 @@ export const createFf14Plugin = ({
                 error,
               });
             }
+            notifyAlertChange((await loadCurrentConfig()).ff14.priceAlerts);
           }
           await reply(result.changed
             ? `🪙 已添加“${result.alert.itemName}”推送：${action.region}(${FF14_REGION_NAMES[action.region]})，价格不高于 ${action.minimumPrice.toLocaleString("zh-CN")} gil 时提醒${action.atUserIds.length > 0 ? ` ${action.atUserIds.map((id) => `@${id}`).join(" ")}` : "本群"}。`
@@ -169,6 +173,7 @@ export const createFf14Plugin = ({
               error,
             });
           }
+          notifyAlertChange((await loadCurrentConfig()).ff14.priceAlerts);
           await reply(`已删除“${action.itemName}”的 ${result.removed.length} 条商品推送。`);
           return;
         }

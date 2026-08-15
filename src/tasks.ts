@@ -18,6 +18,11 @@ import { getGroupIds } from "@/group-ids";
 import { deliverUnsentNews, fetchFinanceNews, formatScheduledNewsItems } from "@/news";
 import { createExclusiveCronTask, type ScheduledTaskRuntime } from "@/scheduled-task";
 import { serializeError } from "@/errors";
+import { onFf14AlertChange } from "@/ff14-alert-runtime";
+import {
+  onVtbSubscriptionChange,
+  replaceVtbSubscriptionGroup,
+} from "@/vtb-subscription-runtime";
 import {
   closeVtbRepository,
   createVtbNotificationMessage,
@@ -434,11 +439,6 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
     return createNoopTask();
   }
 
-  if (config.vtb.subscriptions.length === 0) {
-    logger.info("plugin", "vtb task disabled: no configured subscriptions");
-    return createNoopTask();
-  }
-
   if (!hasVtbApiEndpoints(config.vtb)) {
     logger.warn("plugin", "vtb task disabled: required API URLs are missing");
     return createNoopTask();
@@ -462,7 +462,10 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
     dynamicCursor: 0,
     cardInfos: new Map(),
   };
-  const runTask = () => pollVtbSubscriptions(config, gateway, logger, repository, pollState);
+  let pollingConfig = config;
+  const runTask = () => pollingConfig.vtb.subscriptions.length === 0
+    ? Promise.resolve()
+    : pollVtbSubscriptions(pollingConfig, gateway, logger, repository, pollState);
 
   logger.info("plugin", "vtb task started", {
     cronExpression,
@@ -472,7 +475,7 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
     cardCacheMinutes: config.vtb.cardCacheMinutes,
   });
 
-  return createExclusiveCronTask({
+  const task = createExclusiveCronTask({
     cronExpression,
     taskName: "vtb task",
     logger,
@@ -480,6 +483,29 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
     failureMessage: "vtb task failed",
     shutdownFailureMessage: "vtb task ended with an error during shutdown",
   });
+  const detachSubscriptionListener = onVtbSubscriptionChange(({ groupId, subscriptions }) => {
+    const nextSubscriptions = replaceVtbSubscriptionGroup(
+      pollingConfig.vtb.subscriptions,
+      subscriptions,
+      groupId,
+    );
+    pollingConfig = {
+      ...pollingConfig,
+      vtb: { ...pollingConfig.vtb, subscriptions: nextSubscriptions },
+    };
+    logger.info("plugin", "vtb runtime subscription refreshed", {
+      groupId,
+      streamers: nextSubscriptions.find((subscription) =>
+        String(subscription.groupId) === String(groupId))?.streamers ?? [],
+    });
+    task.trigger();
+  });
+  return {
+    stop: async () => {
+      detachSubscriptionListener();
+      await task.stop();
+    },
+  };
 };
 
 const pollVtbSubscriptions = async (
@@ -1095,12 +1121,6 @@ const startFf14PriceAlertTask = (
     return createNoopTask();
   }
 
-  const alerts = config.ff14.priceAlerts;
-  if (alerts.length === 0) {
-    logger.info("plugin", "ff14 price alert task disabled: no configured alerts");
-    return createNoopTask();
-  }
-
   if (!config.ff14.itemSearchApiUrl || !config.ff14.marketApiUrl) {
     logger.warn("plugin", "ff14 price alert task disabled: required API URLs are missing");
     return createNoopTask();
@@ -1114,16 +1134,19 @@ const startFf14PriceAlertTask = (
     return createNoopTask();
   }
 
+  let pollingConfig = config;
   const runTask = async () => {
-    await runFf14PriceAlerts(config, gateway, logger);
+    if (pollingConfig.ff14.priceAlerts.length > 0) {
+      await runFf14PriceAlerts(pollingConfig, gateway, logger);
+    }
   };
 
   logger.info("plugin", "ff14 price alert task started", {
     cronExpression,
-    alerts: alerts.length,
+    alerts: config.ff14.priceAlerts.length,
   });
 
-  return createExclusiveCronTask({
+  const task = createExclusiveCronTask({
     cronExpression,
     taskName: "ff14 price alert task",
     logger,
@@ -1132,6 +1155,20 @@ const startFf14PriceAlertTask = (
     failureMessage: "ff14 price alert task failed",
     shutdownFailureMessage: "ff14 price alert task ended with an error during shutdown",
   });
+  const detachAlertListener = onFf14AlertChange((alerts) => {
+    pollingConfig = {
+      ...pollingConfig,
+      ff14: { ...pollingConfig.ff14, priceAlerts: [...alerts] },
+    };
+    logger.info("plugin", "ff14 runtime price alerts refreshed", { alerts: alerts.length });
+    task.trigger();
+  });
+  return {
+    stop: async () => {
+      detachAlertListener();
+      await task.stop();
+    },
+  };
 };
 
 const runFf14PriceAlerts = async (
