@@ -55,6 +55,22 @@ type VtbPollState = {
   cardInfos: Map<string, { fans?: number; avatarUrl?: string; expiresAt: number }>;
 };
 
+export const getUndeliveredVtbLiveEndGroupIds = (
+  currentGroupIds: readonly (string | number)[],
+  liveDeliveredGroupIds: readonly string[],
+  endDeliveredGroupIds: readonly string[],
+) => {
+  if (endDeliveredGroupIds.includes(ALL_GROUPS_DELIVERED_MARKER)) {
+    return [];
+  }
+
+  const liveDeliveredGroups = new Set(liveDeliveredGroupIds);
+  return currentGroupIds.filter((groupId) => {
+    const groupKey = String(groupId);
+    return liveDeliveredGroups.has(groupKey) && !endDeliveredGroupIds.includes(groupKey);
+  });
+};
+
 export type TaskRuntime = ScheduledTaskRuntime;
 
 export const startScheduledTasks = async (
@@ -738,9 +754,14 @@ const pollVtbSubscriptions = async (
           if (!session.endedAt) {
             await repository.markLiveSessionEnded(streamer.mid, endFans, endedAt);
           }
-          const undeliveredEndGroupIds = session.endDeliveredGroupIds.includes(ALL_GROUPS_DELIVERED_MARKER)
-            ? []
-            : groupIds.filter((groupId) => !session.endDeliveredGroupIds.includes(String(groupId)));
+          // Only groups that received this session's live-start notification
+          // should receive its live-end notification. A group subscribing after
+          // the streamer went offline must not get a stale live-end message.
+          const undeliveredEndGroupIds = getUndeliveredVtbLiveEndGroupIds(
+            groupIds,
+            session.deliveredGroupIds,
+            session.endDeliveredGroupIds,
+          );
           if (undeliveredEndGroupIds.length > 0) {
             const message = createVtbNotificationMessage(
               formatOfflineMessage(
