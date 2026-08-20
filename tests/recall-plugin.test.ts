@@ -46,13 +46,13 @@ const createContext = ({
 };
 
 describe("recall command", () => {
-  test("allows a configured QQ account to recall the bot's last group message", async () => {
+  test("silently recalls the bot account's last group message for an allowed user", async () => {
     const testContext = createContext({ userId: "123", whitelistUserIds: [123] });
 
     await recallPlugin.handle!(testContext.context as never);
 
     expect(testContext.getRecallCalls()).toBe(1);
-    expect(testContext.replies).toEqual(["迷子已经撤回了自己在本群的最后一条发言。"]);
+    expect(testContext.replies).toEqual([]);
   });
 
   test("does not call the gateway for a user outside the recall whitelist", async () => {

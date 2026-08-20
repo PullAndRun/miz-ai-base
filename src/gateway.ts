@@ -168,6 +168,33 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
     return response;
   };
 
+  const refreshTrackedGroupMessages = async (groupId: number | string) => {
+    try {
+      const [loginInfo, history] = await Promise.all([
+        callApiWithoutRetry<unknown>(client, "get_login_info", {}, config.naplink.apiTimeoutMs),
+        callApiWithoutRetry<unknown>(
+          client,
+          "get_group_msg_history",
+          {
+            group_id: groupId,
+            message_seq: 0,
+            count: MAX_TRACKED_GROUP_MESSAGES,
+            reverse_order: false,
+          },
+          config.naplink.apiTimeoutMs,
+        ),
+      ]);
+      const selfId = getIdValue(loginInfo, ["user_id", "userId", "uin", "qq"]);
+      if (!selfId) {
+        logger.warn("gateway", "unable to identify bot account while reading group message history", { groupId });
+        return;
+      }
+      lastGroupMessages.syncHistory(groupId, getSelfGroupMessageIdsFromHistory(history, selfId));
+    } catch (error) {
+      logger.warn("gateway", "unable to refresh bot group messages from group history", { groupId, error });
+    }
+  };
+
   return {
     connect: () => client.connect(),
     dispose: () => client.dispose(),
@@ -188,16 +215,19 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
       }
     },
     canMentionAllGroupMembers,
-    recallLastGroupMessage: (groupId, count = 1) => lastGroupMessages.recall(
-      groupId,
-      count,
-      (messageId) => callApiWithoutRetry(
-        client,
-        "delete_msg",
-        { message_id: messageId },
-        config.naplink.apiTimeoutMs,
-      ),
-    ),
+    recallLastGroupMessage: async (groupId, count = 1) => {
+      await refreshTrackedGroupMessages(groupId);
+      return lastGroupMessages.recall(
+        groupId,
+        count,
+        (messageId) => callApiWithoutRetry(
+          client,
+          "delete_msg",
+          { message_id: messageId },
+          config.naplink.apiTimeoutMs,
+        ),
+      );
+    },
     sendGroupMessage: async (groupId, message) => {
       if (!await canSendGroupMessage(groupId)) {
         throw createGroupMessageUnavailableError(groupId);
@@ -418,6 +448,20 @@ const registerEvents = (
     notifyMessageHandlers(messageHandlers, message, logger);
   });
 
+  client.on("message_sent", (event) => {
+    const parsedEvent = napCatEventSchema.safeParse(event);
+    if (!parsedEvent.success) {
+      logger.warn("gateway", "invalid sent message event ignored", parsedEvent.error);
+      return;
+    }
+
+    logger.info("gateway", `event=${formatEventName(parsedEvent.data)}`);
+    const sentGroupMessage = getSelfSentGroupMessage(parsedEvent.data);
+    if (sentGroupMessage) {
+      recordGroupMessage(sentGroupMessage.groupId, { message_id: sentGroupMessage.messageId });
+    }
+  });
+
   client.on("notice", (event) => {
     const parsedEvent = napCatEventSchema.safeParse(event);
     logger.info("gateway", `event=${parsedEvent.success ? formatEventName(parsedEvent.data) : "unknown"}`);
@@ -476,6 +520,70 @@ const toIncomingMessage = (event: NapCatEvent): IncomingMessage => ({
   userId: event.user_id,
   raw: event,
 });
+
+export const getSelfSentGroupMessage = (event: {
+  post_type?: string;
+  message_type?: string;
+  message_id?: number | string;
+  group_id?: number | string;
+  user_id?: number | string;
+  self_id?: number | string;
+}) => {
+  if (
+    event.post_type !== "message_sent" ||
+    event.message_type !== "group" ||
+    event.message_id === undefined ||
+    event.group_id === undefined ||
+    event.user_id === undefined ||
+    event.self_id === undefined ||
+    String(event.user_id) !== String(event.self_id)
+  ) {
+    return undefined;
+  }
+
+  return { groupId: event.group_id, messageId: event.message_id } as const;
+};
+
+export const getSelfGroupMessageIdsFromHistory = (response: unknown, selfId: number | string) => {
+  const messages = getValue(response, ["messages"]);
+  if (!Array.isArray(messages)) {
+    return [];
+  }
+
+  const candidates = messages.flatMap((message, index) => {
+    if (!message || typeof message !== "object") {
+      return [];
+    }
+    const record = message as Record<string, unknown>;
+    const sender = record.sender && typeof record.sender === "object"
+      ? record.sender as Record<string, unknown>
+      : undefined;
+    const senderId = getIdValue(record, ["user_id", "userId"])
+      ?? getIdValue(sender, ["user_id", "userId"]);
+    const messageId = getIdValue(record, ["message_id", "messageId"]);
+    if (senderId !== String(selfId) || messageId === undefined) {
+      return [];
+    }
+
+    return [{
+      messageId,
+      sequence: getNumberValue(record, ["message_seq", "messageSeq"]),
+      time: getNumberValue(record, ["time"]),
+      index,
+    }];
+  });
+
+  candidates.sort((left, right) => {
+    if (left.sequence !== undefined && right.sequence !== undefined && left.sequence !== right.sequence) {
+      return left.sequence - right.sequence;
+    }
+    if (left.time !== undefined && right.time !== undefined && left.time !== right.time) {
+      return left.time - right.time;
+    }
+    return left.index - right.index;
+  });
+  return [...new Set(candidates.map(({ messageId }) => messageId))];
+};
 
 const createMessageDeduplicator = () => {
   const seenMessageIds = new Map<string, number>();
@@ -884,11 +992,27 @@ export const createLastGroupMessageTracker = () => {
     if (messageId !== undefined) {
       const groupKey = String(groupId);
       const history = messageIds.get(groupKey) ?? [];
+      if (history.includes(messageId)) {
+        return;
+      }
       messageIds.set(
         groupKey,
-        [...history.filter((id) => id !== messageId), messageId].slice(-MAX_TRACKED_GROUP_MESSAGES),
+        [...history, messageId].slice(-MAX_TRACKED_GROUP_MESSAGES),
       );
     }
+  };
+  const syncHistory = (groupId: number | string, historyMessageIds: readonly (number | string)[]) => {
+    const groupKey = String(groupId);
+    const current = messageIds.get(groupKey) ?? [];
+    const history = [...new Set(historyMessageIds.map(String))];
+    const historySet = new Set(history);
+    const possiblyNewerTrackedMessages = current.filter((messageId) => !historySet.has(messageId));
+    const merged = [...history, ...possiblyNewerTrackedMessages].slice(-MAX_TRACKED_GROUP_MESSAGES);
+    if (merged.length === 0) {
+      messageIds.delete(groupKey);
+      return;
+    }
+    messageIds.set(groupKey, merged);
   };
   const recall = async (
     groupId: number | string,
@@ -929,7 +1053,7 @@ export const createLastGroupMessageTracker = () => {
     }
     return { status: "completed", recalledMessageIds, failures };
   };
-  return { record, recall };
+  return { record, syncHistory, recall };
 };
 
 const getOptionalBooleanValue = (value: unknown, keys: readonly string[]) => {

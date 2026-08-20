@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   createLastGroupMessageTracker,
   createGroupMessageUnavailableError,
+  getSelfGroupMessageIdsFromHistory,
+  getSelfSentGroupMessage,
   getGroupSendPermission,
   isGroupAtAllAvailable,
   isGroupMessageUnavailableError,
@@ -14,6 +16,54 @@ test("gateway reconnect attempts are unlimited", () => {
 });
 
 describe("last bot group message tracking", () => {
+  test("recognizes group messages sent by the bot account outside the gateway send API", () => {
+    expect(getSelfSentGroupMessage({
+      post_type: "message_sent",
+      message_type: "group",
+      message_id: 11,
+      group_id: 100,
+      user_id: 200,
+      self_id: "200",
+    })).toEqual({ groupId: 100, messageId: 11 });
+
+    expect(getSelfSentGroupMessage({
+      post_type: "message",
+      message_type: "group",
+      message_id: 12,
+      group_id: 100,
+      user_id: 200,
+      self_id: 200,
+    })).toBeUndefined();
+    expect(getSelfSentGroupMessage({
+      post_type: "message_sent",
+      message_type: "group",
+      message_id: 13,
+      group_id: 100,
+      user_id: 201,
+      self_id: 200,
+    })).toBeUndefined();
+    expect(getSelfSentGroupMessage({
+      post_type: "message_sent",
+      message_type: "private",
+      message_id: 14,
+      user_id: 200,
+      self_id: 200,
+    })).toBeUndefined();
+  });
+
+  test("reads the bot account's messages from group history in chronological order", () => {
+    expect(getSelfGroupMessageIdsFromHistory({
+      data: {
+        messages: [
+          { message_id: 33, message_seq: 30, user_id: 200 },
+          { message_id: 11, message_seq: 10, sender: { user_id: "200" } },
+          { message_id: 22, message_seq: 20, user_id: 201 },
+        ],
+      },
+    }, 200)).toEqual(["11", "33"]);
+    expect(getSelfGroupMessageIdsFromHistory({ data: {} }, 200)).toEqual([]);
+  });
+
   test("recalls the requested number of recent messages in newest-first order", async () => {
     const tracker = createLastGroupMessageTracker();
     tracker.record(100, { data: { message_id: 11 } });
@@ -33,6 +83,31 @@ describe("last bot group message tracking", () => {
     await expect(tracker.recall(200, 1, async (messageId) => {
       deleted.push(messageId);
     })).resolves.toEqual({ status: "completed", recalledMessageIds: ["22"], failures: [] });
+  });
+
+  test("does not reorder a message when both the send response and sent event record it", async () => {
+    const tracker = createLastGroupMessageTracker();
+    tracker.record(100, { message_id: 11 });
+    tracker.record(100, { message_id: 22 });
+    tracker.record(100, { message_id: 11 });
+
+    await expect(tracker.recall(100, 1, async () => undefined)).resolves.toEqual({
+      status: "completed",
+      recalledMessageIds: ["22"],
+      failures: [],
+    });
+  });
+
+  test("merges group history before newer messages already observed in real time", async () => {
+    const tracker = createLastGroupMessageTracker();
+    tracker.record(100, { message_id: 33 });
+    tracker.syncHistory(100, [11, 22]);
+
+    await expect(tracker.recall(100, 3, async () => undefined)).resolves.toEqual({
+      status: "completed",
+      recalledMessageIds: ["33", "22", "11"],
+      failures: [],
+    });
   });
 
   test("keeps the message available when the recall API fails", async () => {

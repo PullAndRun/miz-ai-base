@@ -9,7 +9,7 @@ const recallPlugin: MizPlugin = {
   name: "recall",
   commands: ["recall", "撤回"],
   description: [
-    "撤回迷子在当前群最近发送的消息，仅限撤回白名单使用。",
+    "撤回迷子账号在当前群最近发送的消息，包括从其他客户端发出的消息；仅限撤回白名单使用。",
     "用法：miz recall [数量]",
     "例如：miz recall 2；中文命令：miz 撤回 2",
   ].join("\n"),
@@ -48,6 +48,9 @@ const recallPlugin: MizPlugin = {
         })),
         operatorId: message.userId,
       });
+      if (result.failures.length === 0) {
+        return;
+      }
       await reply(formatRecallResult(
         parsedCount.count,
         result.recalledMessageIds.length,
