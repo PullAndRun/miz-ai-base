@@ -215,25 +215,17 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
   };
 
   const deleteGroupMessage = async (groupId: number | string, messageId: string) => {
-    try {
-      await callApiWithoutRetry(
-        client,
-        "get_msg",
-        { message_id: messageId },
-        config.naplink.apiTimeoutMs,
-      );
-      logger.info("gateway", "loaded bot group message before recall", { groupId, messageId });
-    } catch (error) {
-      logger.warn("gateway", "unable to load bot group message before recall; trying delete anyway", {
-        groupId,
-        messageId,
-        error,
-      });
-    }
+    logger.info("gateway", "recalling bot-owned group message", { groupId, messageId });
+    // NapCat parses its short message ID numerically. Preserve non-numeric IDs
+    // for adapters that use string identifiers.
+    const numericMessageId = Number(messageId);
+    const actionMessageId = Number.isSafeInteger(numericMessageId) && numericMessageId > 0
+      ? numericMessageId
+      : messageId;
     return callApiWithoutRetry(
       client,
       "delete_msg",
-      { message_id: messageId },
+      { message_id: actionMessageId },
       config.naplink.apiTimeoutMs,
     );
   };
@@ -686,7 +678,6 @@ const callApiWithoutRetry = <T>(
     ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
   });
 };
-
 const extractMessageText = (event: NapCatEvent) => {
   const message = event.message;
   if (typeof message === "string") {

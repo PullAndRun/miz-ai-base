@@ -21,7 +21,6 @@ test("recall history lookup always has a short timeout", () => {
   expect(getRecallHistoryTimeoutMs(30_000)).toBe(5_000);
   expect(getRecallHistoryTimeoutMs(2_000)).toBe(2_000);
 });
-
 describe("last bot group message tracking", () => {
   test("recognizes group messages sent by the bot account outside the gateway send API", () => {
     expect(getSelfSentGroupMessage({
