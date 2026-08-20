@@ -28,9 +28,19 @@ const recallPlugin: MizPlugin = {
       return;
     }
 
+    logger.info("plugin", "group message recall requested", {
+      groupId: message.groupId,
+      requestedCount: parsedCount.count,
+      operatorId: message.userId,
+    });
     try {
       const result = await gateway.recallLastGroupMessage(message.groupId, parsedCount.count);
       if (result.status === "not_found") {
+        logger.info("plugin", "no bot group message found for recall", {
+          groupId: message.groupId,
+          requestedCount: parsedCount.count,
+          operatorId: message.userId,
+        });
         await reply("迷子暂时没有记录到本群可撤回的消息。");
         return;
       }

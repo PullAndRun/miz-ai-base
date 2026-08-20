@@ -4,6 +4,7 @@ import {
   createGroupMessageUnavailableError,
   getSelfGroupMessageIdsFromHistory,
   getSelfSentGroupMessage,
+  getRecallHistoryTimeoutMs,
   getGroupSendPermission,
   isGroupAtAllAvailable,
   isGroupMessageUnavailableError,
@@ -13,6 +14,12 @@ import {
 
 test("gateway reconnect attempts are unlimited", () => {
   expect(NAPLINK_RECONNECT_MAX_ATTEMPTS).toBe(Number.POSITIVE_INFINITY);
+});
+
+test("recall history lookup always has a short timeout", () => {
+  expect(getRecallHistoryTimeoutMs(0)).toBe(5_000);
+  expect(getRecallHistoryTimeoutMs(30_000)).toBe(5_000);
+  expect(getRecallHistoryTimeoutMs(2_000)).toBe(2_000);
 });
 
 describe("last bot group message tracking", () => {
@@ -66,9 +73,11 @@ describe("last bot group message tracking", () => {
 
   test("recalls the requested number of recent messages in newest-first order", async () => {
     const tracker = createLastGroupMessageTracker();
+    expect(tracker.count(100)).toBe(0);
     tracker.record(100, { data: { message_id: 11 } });
     tracker.record(200, { messageId: "22" });
     tracker.record(100, { message_id: 33 });
+    expect(tracker.count(100)).toBe(2);
     const deleted: string[] = [];
 
     await expect(tracker.recall(100, 2, async (messageId) => {

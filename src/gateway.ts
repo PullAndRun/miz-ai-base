@@ -103,7 +103,12 @@ const MAX_GROUP_PERMISSION_CACHE_ENTRIES = 5_000;
 const MESSAGE_DEDUPLICATION_WINDOW_MS = 10 * 60 * 1_000;
 const MAX_DEDUPLICATED_MESSAGE_IDS = 5_000;
 const MAX_TRACKED_GROUP_MESSAGES = 100;
+const RECALL_HISTORY_TIMEOUT_MS = 5_000;
 export const NAPLINK_RECONNECT_MAX_ATTEMPTS = Number.POSITIVE_INFINITY;
+
+export const getRecallHistoryTimeoutMs = (configuredTimeoutMs: number) => configuredTimeoutMs > 0
+  ? Math.min(configuredTimeoutMs, RECALL_HISTORY_TIMEOUT_MS)
+  : RECALL_HISTORY_TIMEOUT_MS;
 
 const textSegmentSchema = z
   .looseObject({
@@ -165,13 +170,19 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
   ) => {
     const response = await send();
     lastGroupMessages.record(groupId, response);
+    logger.info("gateway", "bot group message recorded from send response", {
+      groupId,
+      messageId: getIdValue(response, ["message_id", "messageId"]),
+    });
     return response;
   };
 
   const refreshTrackedGroupMessages = async (groupId: number | string) => {
+    const timeoutMs = getRecallHistoryTimeoutMs(config.naplink.apiTimeoutMs);
+    logger.info("gateway", "refreshing bot messages from group history before recall", { groupId, timeoutMs });
     try {
       const [loginInfo, history] = await Promise.all([
-        callApiWithoutRetry<unknown>(client, "get_login_info", {}, config.naplink.apiTimeoutMs),
+        callApiWithoutRetry<unknown>(client, "get_login_info", {}, timeoutMs),
         callApiWithoutRetry<unknown>(
           client,
           "get_group_msg_history",
@@ -181,7 +192,7 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
             count: MAX_TRACKED_GROUP_MESSAGES,
             reverse_order: false,
           },
-          config.naplink.apiTimeoutMs,
+          timeoutMs,
         ),
       ]);
       const selfId = getIdValue(loginInfo, ["user_id", "userId", "uin", "qq"]);
@@ -189,7 +200,13 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
         logger.warn("gateway", "unable to identify bot account while reading group message history", { groupId });
         return;
       }
-      lastGroupMessages.syncHistory(groupId, getSelfGroupMessageIdsFromHistory(history, selfId));
+      const historyMessageIds = getSelfGroupMessageIdsFromHistory(history, selfId);
+      lastGroupMessages.syncHistory(groupId, historyMessageIds);
+      logger.info("gateway", "bot messages refreshed from group history", {
+        groupId,
+        foundMessageCount: historyMessageIds.length,
+        foundMessageIds: historyMessageIds,
+      });
     } catch (error) {
       logger.warn("gateway", "unable to refresh bot group messages from group history", { groupId, error });
     }
@@ -216,16 +233,23 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
     },
     canMentionAllGroupMembers,
     recallLastGroupMessage: async (groupId, count = 1) => {
-      await refreshTrackedGroupMessages(groupId);
+      const trackedCount = lastGroupMessages.count(groupId);
+      logger.info("gateway", "group message recall started", { groupId, requestedCount: count, trackedCount });
+      if (trackedCount < count) {
+        await refreshTrackedGroupMessages(groupId);
+      }
       return lastGroupMessages.recall(
         groupId,
         count,
-        (messageId) => callApiWithoutRetry(
-          client,
-          "delete_msg",
-          { message_id: messageId },
-          config.naplink.apiTimeoutMs,
-        ),
+        (messageId) => {
+          logger.info("gateway", "deleting bot group message", { groupId, messageId });
+          return callApiWithoutRetry(
+            client,
+            "delete_msg",
+            { message_id: messageId },
+            config.naplink.apiTimeoutMs,
+          );
+        },
       );
     },
     sendGroupMessage: async (groupId, message) => {
@@ -459,6 +483,7 @@ const registerEvents = (
     const sentGroupMessage = getSelfSentGroupMessage(parsedEvent.data);
     if (sentGroupMessage) {
       recordGroupMessage(sentGroupMessage.groupId, { message_id: sentGroupMessage.messageId });
+      logger.info("gateway", "bot group message recorded from sent event", sentGroupMessage);
     }
   });
 
@@ -987,6 +1012,7 @@ const getOptionalNonZeroBooleanValue = (value: unknown, keys: readonly string[])
 
 export const createLastGroupMessageTracker = () => {
   const messageIds = new Map<string, string[]>();
+  const count = (groupId: number | string) => messageIds.get(String(groupId))?.length ?? 0;
   const record = (groupId: number | string, response: unknown) => {
     const messageId = getIdValue(response, ["message_id", "messageId"]);
     if (messageId !== undefined) {
@@ -1053,7 +1079,7 @@ export const createLastGroupMessageTracker = () => {
     }
     return { status: "completed", recalledMessageIds, failures };
   };
-  return { record, syncHistory, recall };
+  return { count, record, syncHistory, recall };
 };
 
 const getOptionalBooleanValue = (value: unknown, keys: readonly string[]) => {
