@@ -1,5 +1,5 @@
 import type { MizPlugin } from "@/plugins";
-import { isWhitelistedUser } from "@/group-permissions";
+import { canManageGroupFeature } from "@/group-permissions";
 import { summarizeError } from "@/errors";
 import { isRecallTimeoutError } from "@/gateway";
 
@@ -9,7 +9,7 @@ const recallPlugin: MizPlugin = {
   name: "recall",
   commands: ["recall", "撤回"],
   description: [
-    "撤回迷子账号在当前群最近发送的消息，包括从其他客户端发出的消息；仅限撤回白名单使用。",
+    "撤回迷子账号在当前群最近发送的消息，包括从其他客户端发出的消息；撤回白名单、群主和管理员可用。",
     "用法：miz recall [数量]",
     "例如：miz recall 2；中文命令：miz 撤回 2",
   ].join("\n"),
@@ -23,8 +23,8 @@ const recallPlugin: MizPlugin = {
       await reply(parsedCount.reason);
       return;
     }
-    if (!isWhitelistedUser(message.userId, config.recall.whitelistUserIds)) {
-      await reply("只有撤回白名单中的成员可以让迷子撤回自己的群消息。");
+    if (!canManageGroupFeature(message.raw, message.userId, config.recall.whitelistUserIds)) {
+      await reply("只有撤回白名单成员、群主或管理员可以让迷子撤回自己的群消息。");
       return;
     }
 

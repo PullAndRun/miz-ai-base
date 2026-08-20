@@ -10,12 +10,14 @@ const createContext = ({
   userId = 123,
   groupId = 456,
   whitelistUserIds = [123],
+  role = "member",
   args = "",
   recall = async () => ({ status: "completed", recalledMessageIds: ["789"], failures: [] } as const),
 }: {
   userId?: string | number;
   groupId?: string | number;
   whitelistUserIds?: Array<string | number>;
+  role?: "member" | "admin" | "owner";
   args?: string;
   recall?: (count: number) => Promise<
     | { status: "completed"; recalledMessageIds: readonly string[]; failures: readonly { messageId: string; error: unknown }[] }
@@ -37,7 +39,7 @@ const createContext = ({
         },
       },
       logger: { info: () => undefined, warn: () => undefined },
-      message: { userId, groupId },
+      message: { userId, groupId, raw: { sender: { role } } },
       reply: async (message: unknown) => {
         replies.push(String(message));
       },
@@ -61,7 +63,16 @@ describe("recall command", () => {
     await recallPlugin.handle!(testContext.context as never);
 
     expect(testContext.getRecallCalls()).toBe(0);
-    expect(testContext.replies[0]).toContain("撤回白名单");
+    expect(testContext.replies[0]).toContain("群主或管理员");
+  });
+
+  test.each(["admin", "owner"] as const)("allows a group %s outside the whitelist", async (role) => {
+    const testContext = createContext({ userId: 999, whitelistUserIds: [123], role });
+
+    await recallPlugin.handle!(testContext.context as never);
+
+    expect(testContext.getRecallCalls()).toBe(1);
+    expect(testContext.replies).toEqual([]);
   });
 
   test("reports an expired or timed-out recall instead of claiming success", async () => {
