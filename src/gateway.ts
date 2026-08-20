@@ -598,7 +598,9 @@ export const getSelfGroupMessageIdsFromHistory = (response: unknown, selfId: num
 
     return [{
       messageId,
-      sequence: getNumberValue(record, ["message_seq", "messageSeq"]),
+      // NapCat's message_seq may be the random short message ID. real_seq is
+      // the actual monotonically increasing group sequence.
+      sequence: getNumberValue(record, ["real_seq", "realSeq"]),
       time: getNumberValue(record, ["time"]),
       index,
     }];

@@ -61,10 +61,10 @@ describe("last bot group message tracking", () => {
     expect(getSelfGroupMessageIdsFromHistory({
       data: {
         messages: [
-          { message_id: 33, message_seq: 30, user_id: 200 },
-          { message_id: 11, message_seq: 10, sender: { user_id: "200" } },
-          { message_id: 44, message_seq: 40, user_id: 200, raw_message: "", message: [] },
-          { message_id: 22, message_seq: 20, user_id: 201 },
+          { message_id: 33, message_seq: 1, real_seq: "30", user_id: 200 },
+          { message_id: 11, message_seq: 999, real_seq: "10", sender: { user_id: "200" } },
+          { message_id: 44, real_seq: "40", user_id: 200, raw_message: "", message: [] },
+          { message_id: 22, real_seq: "20", user_id: 201 },
         ],
       },
     }, 200)).toEqual(["11", "33"]);
