@@ -54,11 +54,6 @@ export const isRecallTimeoutError = (error: unknown) => {
   return /超时|已过期|超过.{0,12}(?:撤回|时限|时间)|撤回.{0,12}(?:过期|时限)|too[ -]?old|expired|recall.{0,16}(?:time|limit)|E_API_TIMEOUT/i.test(text);
 };
 
-export const isNapCatRecallResultZeroTimeout = (error: unknown) => {
-  const text = collectErrorText(error).join(" ");
-  return /recallMsg[\s\S]*["']?result["']?\s*:\s*0/i.test(text);
-};
-
 export const createGroupMessageUnavailableError = (
   groupId: number | string,
 ): GroupMessageUnavailableError => Object.assign(
@@ -220,34 +215,27 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
   };
 
   const deleteGroupMessage = async (groupId: number | string, messageId: string) => {
-    const deleteMessage = () => callApiWithoutRetry(
+    try {
+      await callApiWithoutRetry(
+        client,
+        "get_msg",
+        { message_id: messageId },
+        config.naplink.apiTimeoutMs,
+      );
+      logger.info("gateway", "loaded bot group message before recall", { groupId, messageId });
+    } catch (error) {
+      logger.warn("gateway", "unable to load bot group message before recall; trying delete anyway", {
+        groupId,
+        messageId,
+        error,
+      });
+    }
+    return callApiWithoutRetry(
       client,
       "delete_msg",
       { message_id: messageId },
       config.naplink.apiTimeoutMs,
     );
-    try {
-      await deleteMessage();
-    } catch (error) {
-      if (!isNapCatRecallResultZeroTimeout(error)) {
-        throw error;
-      }
-      logger.warn("gateway", "NapCat reported recall result 0 but timed out; retrying once", {
-        groupId,
-        messageId,
-      });
-      try {
-        await deleteMessage();
-      } catch (retryError) {
-        if (!isNapCatRecallResultZeroTimeout(retryError)) {
-          throw retryError;
-        }
-        logger.warn("gateway", "NapCat returned recall result 0 twice; treating the recall as accepted", {
-          groupId,
-          messageId,
-        });
-      }
-    }
   };
 
   return {

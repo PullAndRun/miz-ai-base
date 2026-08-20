@@ -9,7 +9,6 @@ import {
   isGroupAtAllAvailable,
   isGroupMessageUnavailableError,
   isIgnorableNapLinkWarning,
-  isNapCatRecallResultZeroTimeout,
   NAPLINK_RECONNECT_MAX_ATTEMPTS,
 } from "@/gateway";
 
@@ -21,15 +20,6 @@ test("recall history lookup always has a short timeout", () => {
   expect(getRecallHistoryTimeoutMs(0)).toBe(5_000);
   expect(getRecallHistoryTimeoutMs(30_000)).toBe(5_000);
   expect(getRecallHistoryTimeoutMs(2_000)).toBe(2_000);
-});
-
-test("recognizes NapCat's successful recall result wrapped in a timeout error", () => {
-  expect(isNapCatRecallResultZeroTimeout(new Error(
-    'Timeout: NTEvent serviceAndMethod:NodeIKernelMsgService/recallMsg EventRet: { "result": 0, "errMsg": "" }',
-  ))).toBeTrue();
-  expect(isNapCatRecallResultZeroTimeout(new Error(
-    'Timeout: NTEvent serviceAndMethod:NodeIKernelMsgService/recallMsg EventRet: { "result": 8 }',
-  ))).toBeFalse();
 });
 
 describe("last bot group message tracking", () => {
