@@ -54,6 +54,11 @@ export const isRecallTimeoutError = (error: unknown) => {
   return /超时|已过期|超过.{0,12}(?:撤回|时限|时间)|撤回.{0,12}(?:过期|时限)|too[ -]?old|expired|recall.{0,16}(?:time|limit)|E_API_TIMEOUT/i.test(text);
 };
 
+export const isNapCatRecallResultZeroTimeout = (error: unknown) => {
+  const text = collectErrorText(error).join(" ");
+  return /recallMsg[\s\S]*["']?result["']?\s*:\s*0/i.test(text);
+};
+
 export const createGroupMessageUnavailableError = (
   groupId: number | string,
 ): GroupMessageUnavailableError => Object.assign(
@@ -198,7 +203,7 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
       const selfId = getIdValue(loginInfo, ["user_id", "userId", "uin", "qq"]);
       if (!selfId) {
         logger.warn("gateway", "unable to identify bot account while reading group message history", { groupId });
-        return;
+        return false;
       }
       const historyMessageIds = getSelfGroupMessageIdsFromHistory(history, selfId);
       lastGroupMessages.syncHistory(groupId, historyMessageIds);
@@ -207,8 +212,41 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
         foundMessageCount: historyMessageIds.length,
         foundMessageIds: historyMessageIds,
       });
+      return true;
     } catch (error) {
       logger.warn("gateway", "unable to refresh bot group messages from group history", { groupId, error });
+      return false;
+    }
+  };
+
+  const deleteGroupMessage = async (groupId: number | string, messageId: string) => {
+    const deleteMessage = () => callApiWithoutRetry(
+      client,
+      "delete_msg",
+      { message_id: messageId },
+      config.naplink.apiTimeoutMs,
+    );
+    try {
+      await deleteMessage();
+    } catch (error) {
+      if (!isNapCatRecallResultZeroTimeout(error)) {
+        throw error;
+      }
+      logger.warn("gateway", "NapCat reported recall result 0 but timed out; retrying once", {
+        groupId,
+        messageId,
+      });
+      try {
+        await deleteMessage();
+      } catch (retryError) {
+        if (!isNapCatRecallResultZeroTimeout(retryError)) {
+          throw retryError;
+        }
+        logger.warn("gateway", "NapCat returned recall result 0 twice; treating the recall as accepted", {
+          groupId,
+          messageId,
+        });
+      }
     }
   };
 
@@ -235,20 +273,13 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
     recallLastGroupMessage: async (groupId, count = 1) => {
       const trackedCount = lastGroupMessages.count(groupId);
       logger.info("gateway", "group message recall started", { groupId, requestedCount: count, trackedCount });
-      if (trackedCount < count) {
-        await refreshTrackedGroupMessages(groupId);
-      }
+      await refreshTrackedGroupMessages(groupId);
       return lastGroupMessages.recall(
         groupId,
         count,
         (messageId) => {
           logger.info("gateway", "deleting bot group message", { groupId, messageId });
-          return callApiWithoutRetry(
-            client,
-            "delete_msg",
-            { message_id: messageId },
-            config.naplink.apiTimeoutMs,
-          );
+          return deleteGroupMessage(groupId, messageId);
         },
       );
     },
@@ -1029,16 +1060,12 @@ export const createLastGroupMessageTracker = () => {
   };
   const syncHistory = (groupId: number | string, historyMessageIds: readonly (number | string)[]) => {
     const groupKey = String(groupId);
-    const current = messageIds.get(groupKey) ?? [];
     const history = [...new Set(historyMessageIds.map(String))];
-    const historySet = new Set(history);
-    const possiblyNewerTrackedMessages = current.filter((messageId) => !historySet.has(messageId));
-    const merged = [...history, ...possiblyNewerTrackedMessages].slice(-MAX_TRACKED_GROUP_MESSAGES);
-    if (merged.length === 0) {
+    if (history.length === 0) {
       messageIds.delete(groupKey);
       return;
     }
-    messageIds.set(groupKey, merged);
+    messageIds.set(groupKey, history.slice(-MAX_TRACKED_GROUP_MESSAGES));
   };
   const recall = async (
     groupId: number | string,
