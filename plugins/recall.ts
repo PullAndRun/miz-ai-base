@@ -28,36 +28,15 @@ const recallPlugin: MizPlugin = {
       return;
     }
 
-    logger.info("plugin", "group message recall requested", {
-      groupId: message.groupId,
-      requestedCount: parsedCount.count,
-      operatorId: message.userId,
-    });
     try {
       const result = await gateway.recallLastGroupMessage(message.groupId, parsedCount.count);
       if (result.status === "not_found") {
-        logger.info("plugin", "no bot group message found for recall", {
-          groupId: message.groupId,
-          requestedCount: parsedCount.count,
-          operatorId: message.userId,
-        });
         await reply("迷子暂时没有记录到本群可撤回的消息。");
         return;
       }
 
       const timeoutFailures = result.failures.filter((failure) => isRecallTimeoutError(failure.error));
       const otherFailures = result.failures.filter((failure) => !isRecallTimeoutError(failure.error));
-      logger.info("plugin", "recent bot group messages recall completed", {
-        groupId: message.groupId,
-        requestedCount: parsedCount.count,
-        recalledMessageIds: result.recalledMessageIds,
-        timeoutMessageIds: timeoutFailures.map((failure) => failure.messageId),
-        failedMessages: otherFailures.map((failure) => ({
-          messageId: failure.messageId,
-          error: summarizeError(failure.error),
-        })),
-        operatorId: message.userId,
-      });
       if (result.failures.length === 0) {
         return;
       }

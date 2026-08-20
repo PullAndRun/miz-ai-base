@@ -170,16 +170,11 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
   ) => {
     const response = await send();
     lastGroupMessages.record(groupId, response);
-    logger.info("gateway", "bot group message recorded from send response", {
-      groupId,
-      messageId: getIdValue(response, ["message_id", "messageId"]),
-    });
     return response;
   };
 
   const refreshTrackedGroupMessages = async (groupId: number | string) => {
     const timeoutMs = getRecallHistoryTimeoutMs(config.naplink.apiTimeoutMs);
-    logger.info("gateway", "refreshing bot messages from group history before recall", { groupId, timeoutMs });
     try {
       const [loginInfo, history] = await Promise.all([
         callApiWithoutRetry<unknown>(client, "get_login_info", {}, timeoutMs),
@@ -202,11 +197,6 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
       }
       const historyMessageIds = getSelfGroupMessageIdsFromHistory(history, selfId);
       lastGroupMessages.syncHistory(groupId, historyMessageIds);
-      logger.info("gateway", "bot messages refreshed from group history", {
-        groupId,
-        foundMessageCount: historyMessageIds.length,
-        foundMessageIds: historyMessageIds,
-      });
       return true;
     } catch (error) {
       logger.warn("gateway", "unable to refresh bot group messages from group history", { groupId, error });
@@ -215,7 +205,6 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
   };
 
   const deleteGroupMessage = async (groupId: number | string, messageId: string) => {
-    logger.info("gateway", "recalling bot-owned group message", { groupId, messageId });
     // NapCat parses its short message ID numerically. Preserve non-numeric IDs
     // for adapters that use string identifiers.
     const numericMessageId = Number(messageId);
@@ -256,21 +245,14 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
     },
     canMentionAllGroupMembers,
     recallLastGroupMessage: async (groupId, count = 1) => {
-      const trackedCount = lastGroupMessages.count(groupId);
-      logger.info("gateway", "group message recall started", { groupId, requestedCount: count, trackedCount });
-      // Keep the original send-response/event IDs for miz messages. Query the
-      // group history only when the local tracker cannot satisfy the request;
-      // this also provides the fallback for messages sent by MaiBot/phone.
-      if (trackedCount < count) {
-        await refreshTrackedGroupMessages(groupId);
-      }
+      // The group history is the source of truth so a stale local ID cannot be
+      // recalled hours later. If history lookup fails, the tracker remains as a
+      // fallback for messages sent through miz itself.
+      await refreshTrackedGroupMessages(groupId);
       return lastGroupMessages.recall(
         groupId,
         count,
-        (messageId) => {
-          logger.info("gateway", "deleting bot group message", { groupId, messageId });
-          return deleteGroupMessage(groupId, messageId);
-        },
+        (messageId) => deleteGroupMessage(groupId, messageId),
       );
     },
     sendGroupMessage: async (groupId, message) => {
@@ -504,7 +486,6 @@ const registerEvents = (
     const sentGroupMessage = getSelfSentGroupMessage(parsedEvent.data);
     if (sentGroupMessage) {
       recordGroupMessage(sentGroupMessage.groupId, { message_id: sentGroupMessage.messageId });
-      logger.info("gateway", "bot group message recorded from sent event", sentGroupMessage);
     }
   });
 
@@ -607,7 +588,11 @@ export const getSelfGroupMessageIdsFromHistory = (response: unknown, selfId: num
     const senderId = getIdValue(record, ["user_id", "userId"])
       ?? getIdValue(sender, ["user_id", "userId"]);
     const messageId = getIdValue(record, ["message_id", "messageId"]);
-    if (senderId !== String(selfId) || messageId === undefined) {
+    const rawMessage = getValue(record, ["raw_message", "rawMessage"]);
+    const messageSegments = record.message;
+    const isRecalledPlaceholder = Array.isArray(messageSegments) && messageSegments.length === 0
+      && (rawMessage === undefined || rawMessage === "");
+    if (senderId !== String(selfId) || messageId === undefined || isRecalledPlaceholder) {
       return [];
     }
 
@@ -1049,16 +1034,12 @@ export const createLastGroupMessageTracker = () => {
   };
   const syncHistory = (groupId: number | string, historyMessageIds: readonly (number | string)[]) => {
     const groupKey = String(groupId);
-    const current = messageIds.get(groupKey) ?? [];
     const history = [...new Set(historyMessageIds.map(String))];
-    const historySet = new Set(history);
-    const locallyTrackedNewerMessages = current.filter((messageId) => !historySet.has(messageId));
-    const merged = [...history, ...locallyTrackedNewerMessages].slice(-MAX_TRACKED_GROUP_MESSAGES);
-    if (merged.length === 0) {
+    if (history.length === 0) {
       messageIds.delete(groupKey);
       return;
     }
-    messageIds.set(groupKey, merged);
+    messageIds.set(groupKey, history.slice(-MAX_TRACKED_GROUP_MESSAGES));
   };
   const recall = async (
     groupId: number | string,
