@@ -106,14 +106,14 @@ describe("last bot group message tracking", () => {
     });
   });
 
-  test("uses group history as the source of truth for recall order", async () => {
+  test("merges history while preserving locally tracked newer messages", async () => {
     const tracker = createLastGroupMessageTracker();
     tracker.record(100, { message_id: 33 });
     tracker.syncHistory(100, [11, 22]);
 
     await expect(tracker.recall(100, 3, async () => undefined)).resolves.toEqual({
       status: "completed",
-      recalledMessageIds: ["22", "11"],
+      recalledMessageIds: ["33", "22", "11"],
       failures: [],
     });
   });

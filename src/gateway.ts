@@ -222,12 +222,17 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
     const actionMessageId = Number.isSafeInteger(numericMessageId) && numericMessageId > 0
       ? numericMessageId
       : messageId;
-    return callApiWithoutRetry(
-      client,
-      "delete_msg",
-      { message_id: actionMessageId },
-      config.naplink.apiTimeoutMs,
-    );
+    try {
+      return await callApiWithoutRetry(
+        client,
+        "delete_msg",
+        { message_id: actionMessageId },
+        config.naplink.apiTimeoutMs,
+      );
+    } catch (error) {
+      logger.warn("gateway", "bot group message recall failed", { groupId, messageId, error });
+      throw error;
+    }
   };
 
   return {
@@ -253,7 +258,12 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
     recallLastGroupMessage: async (groupId, count = 1) => {
       const trackedCount = lastGroupMessages.count(groupId);
       logger.info("gateway", "group message recall started", { groupId, requestedCount: count, trackedCount });
-      await refreshTrackedGroupMessages(groupId);
+      // Keep the original send-response/event IDs for miz messages. Query the
+      // group history only when the local tracker cannot satisfy the request;
+      // this also provides the fallback for messages sent by MaiBot/phone.
+      if (trackedCount < count) {
+        await refreshTrackedGroupMessages(groupId);
+      }
       return lastGroupMessages.recall(
         groupId,
         count,
@@ -1039,12 +1049,16 @@ export const createLastGroupMessageTracker = () => {
   };
   const syncHistory = (groupId: number | string, historyMessageIds: readonly (number | string)[]) => {
     const groupKey = String(groupId);
+    const current = messageIds.get(groupKey) ?? [];
     const history = [...new Set(historyMessageIds.map(String))];
-    if (history.length === 0) {
+    const historySet = new Set(history);
+    const locallyTrackedNewerMessages = current.filter((messageId) => !historySet.has(messageId));
+    const merged = [...history, ...locallyTrackedNewerMessages].slice(-MAX_TRACKED_GROUP_MESSAGES);
+    if (merged.length === 0) {
       messageIds.delete(groupKey);
       return;
     }
-    messageIds.set(groupKey, history.slice(-MAX_TRACKED_GROUP_MESSAGES));
+    messageIds.set(groupKey, merged);
   };
   const recall = async (
     groupId: number | string,
