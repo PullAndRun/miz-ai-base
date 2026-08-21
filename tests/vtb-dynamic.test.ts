@@ -49,4 +49,39 @@ describe("Bilibili dynamic response parsing", () => {
       { id_str: "100", modules: { module_dynamic: {} } },
     ], "备用主播", "https://www.bilibili.com").items).toEqual([]);
   });
+  test("drops automatic live-start recommendation dynamics", () => {
+    const feed = parseBilibiliDynamicFeed([
+      {
+        id_str: "1238968975401943104",
+        type: "DYNAMIC_TYPE_LIVE_RCMD",
+        modules: {
+          module_author: { name: "主播", pub_ts: 1_753_000_000 },
+          module_dynamic: { major: { live_rcmd: { content: "live" } } },
+        },
+      },
+      {
+        id_str: "100",
+        type: "DYNAMIC_TYPE_WORD",
+        modules: {
+          module_author: { name: "主播", pub_ts: 1_752_999_000 },
+          module_dynamic: { desc: { text: "普通动态" } },
+        },
+      },
+    ], "主播", "https://www.bilibili.com");
+
+    expect(feed.items).toHaveLength(1);
+    expect(feed.items[0].link).toBe("https://t.bilibili.com/100");
+  });
+
+  test("uses the live recommendation card shape when type is omitted", () => {
+    expect(parseBilibiliDynamicFeed([
+      {
+        id_str: "123",
+        modules: {
+          module_author: { name: "主播", pub_ts: 1_753_000_000 },
+          module_dynamic: { major: { live_rcmd: {} } },
+        },
+      },
+    ], "主播", "https://www.bilibili.com").items).toEqual([]);
+  });
 });
