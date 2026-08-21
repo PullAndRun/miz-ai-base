@@ -6,7 +6,7 @@ const pluginDisplayNames: Readonly<Record<string, string>> = {
   divination: "今日小签",
   ff14: "FF14 市场",
   faq: "群问答",
-  help: "功能菜单",
+  help: "功能图鉴",
   joke: "笑话图",
   news: "新闻快讯",
   qrcode: "二维码",
@@ -41,9 +41,15 @@ export const createHelpMessages = (commandPrefix: string, plugins: readonly Plug
     .filter((plugin) => plugin.commands.length > 0)
     .map((plugin) => {
       const commands = plugin.commands.map((command) => `${commandPrefix} ${command}`).join("\n");
-      const description = formatDescription(plugin.description ?? "这个功能还在准备说明，先记住它的名字吧。");
+      const description = formatDescription(
+        plugin.description ?? "这个功能还在准备说明，先记住它的名字吧。",
+        commandPrefix,
+      );
       const displayName = pluginDisplayNames[plugin.name] ?? plugin.name;
       return `✦ ${displayName}\n${description}\n\n指令入口：\n${commands}`;
     });
 
-const formatDescription = (description: string) => description.replace(/\s*(用法[：:])/g, "\n$1");
+const formatDescription = (description: string, commandPrefix: string) =>
+  description
+    .replaceAll("miz ", () => `${commandPrefix} `)
+    .replace(/\s*(用法[：:])/g, "\n$1");

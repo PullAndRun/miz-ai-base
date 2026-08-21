@@ -28,4 +28,17 @@ describe("help menu coverage", () => {
     expect(messages.join("\n")).toContain("✦ 群问答");
     expect(messages.join("\n")).toContain("✦ 群待办");
   });
+
+  test("uses the configured command prefix in usage examples", () => {
+    const messages = createHelpMessages("迷子", [
+      {
+        name: "video",
+        commands: ["video", "视频"],
+        description: "把链接里的视频搬到聊天里。\n用法：miz video 视频链接",
+      },
+    ]);
+
+    expect(messages[0]).toContain("用法：迷子 video 视频链接");
+    expect(messages[0]).not.toContain("用法：miz video 视频链接");
+  });
 });

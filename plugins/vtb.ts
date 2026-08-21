@@ -58,8 +58,6 @@ export const createVtbPlugin = ({
   name: "vtb",
   commands: ["vtb"],
   description: [
-    "Dynamic push toggle: miz vtb dynamic enable/disable streamer name",
-    "Dynamic @all toggle: miz vtb dynamicatall enable/disable streamer name",
     "追踪 B 站主播的直播和动态，也能管理本群的关注名单。",
     "查询直播：miz vtb live 主播昵称",
     "查询动态：miz vtb dynamic 主播昵称",
@@ -67,9 +65,13 @@ export const createVtbPlugin = ({
     "添加订阅：miz vtb subscribe 主播昵称",
     "取消订阅：miz vtb unsubscribe 主播昵称",
     "开播 @全体：miz vtb atall enable/disable 主播昵称",
+    "动态推送：miz vtb dynamic enable/disable 主播昵称",
+    "动态 @全体：miz vtb dynamicatall enable/disable 主播昵称",
     "同步昵称与直播间：miz vtb sync",
-    "订阅管理和资料同步都需要 VTB 管理员白名单权限。",
-  ].join("\n") + "\nB 站扫码登录/退出：miz vtb login/logout（仅限私聊和 VTB 管理员白名单）",
+    "扫码登录：miz vtb login",
+    "退出登录：miz vtb logout",
+    "订阅管理、推送开关和资料同步需要 VTB 管理员白名单权限；扫码登录和退出登录仅限私聊，并需要同样的白名单权限。",
+  ].join("\n"),
   async handle({ command, config, logger, message, reply }) {
     const [type, ...argumentParts] = command.args.trim().split(/\s+/);
     const atAllAction = type === "atall" ? parseAtAllAction(argumentParts[0]) : undefined;
@@ -97,7 +99,11 @@ export const createVtbPlugin = ({
         "添加订阅：miz vtb subscribe 主播昵称",
         "取消订阅：miz vtb unsubscribe 主播昵称",
         "开播 @全体：miz vtb atall enable/disable 主播昵称",
+        "动态推送：miz vtb dynamic enable/disable 主播昵称",
+        "动态 @全体：miz vtb dynamicatall enable/disable 主播昵称",
         "同步资料：miz vtb sync",
+        "扫码登录：miz vtb login（私聊）",
+        "退出登录：miz vtb logout（私聊）",
       ].join("\n"));
       return;
     }
