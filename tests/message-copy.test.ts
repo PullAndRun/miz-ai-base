@@ -48,6 +48,30 @@ describe("user-facing copy", () => {
     expect(`${offline}\n${dynamic}`).not.toMatch(/下播时间：|本场新增粉丝：|发布时间：|查看原文：|小作文|TA/);
   });
 
+  test("dynamic messages omit duplicated title or description text", () => {
+    const shared = {
+      author: "主播",
+      containsDynamicUrl: false,
+      publishedAt: new Date("2030-08-01T19:00:00+08:00"),
+      link: "https://t.bilibili.com/123",
+    };
+    const titleContainsDescription = formatDynamicMessage({
+      ...shared,
+      title: "安排：今晚视频全文内容",
+      description: "今晚视频全文内容",
+    }, "https://www.example.test");
+    expect(titleContainsDescription).toContain("「安排：今晚视频全文内容」");
+    expect(titleContainsDescription.match(/今晚视频全文内容/g)).toHaveLength(1);
+
+    const descriptionContainsTitle = formatDynamicMessage({
+      ...shared,
+      title: "短标题",
+      description: "短标题以及更完整的正文内容",
+    }, "https://www.example.test");
+    expect(descriptionContainsTitle).toContain("短标题以及更完整的正文内容");
+    expect(descriptionContainsTitle).not.toContain("「短标题」");
+  });
+
   test("general content stays natural without forcing live terminology", () => {
     const news = formatNewsMessages([{ id: "1", title: "市场更新", detail: "详情内容" }]).join("\n");
     const scheduledNews = formatScheduledNewsItems([

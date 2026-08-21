@@ -12,6 +12,7 @@ const BILIBILI_TIMEOUT_MS = 15_000;
 const BILIBILI_RESPONSE_BYTES = 512 * 1024;
 const QR_LOGIN_TIMEOUT_MS = 5 * 60_000;
 const QR_LOGIN_POLL_INTERVAL_MS = 2_000;
+const QR_LOGIN_POLL_JITTER_MS = 500;
 
 export type BilibiliCredential = {
   sessdata: string;
@@ -32,12 +33,16 @@ export type BilibiliQrLoginResult =
 let loadedCredential: BilibiliCredential | undefined;
 let loadedFromDatabase = false;
 let credentialDatabase: PrismaClient | undefined;
+let credentialLoadPromise: Promise<BilibiliCredential | undefined> | undefined;
+let credentialRevision = 0;
 
 export const configureBilibiliCredentialStore = (databaseUrl: string) => {
   if (credentialDatabase && credentialDatabase !== undefined) return;
   credentialDatabase = createDatabaseClient(databaseUrl);
+  credentialRevision += 1;
   loadedFromDatabase = false;
   loadedCredential = undefined;
+  credentialLoadPromise = undefined;
 };
 
 /** Returns the credential obtained by QR login; configured cookies are not used. */
@@ -95,39 +100,63 @@ export const waitForBilibiliQrLogin = async (qrcodeKey: string, proxyUrl = "", s
     lastStatus = result.status;
     if (result.status === "done") return result.credential;
     if (result.status === "timeout") throw new Error("Bilibili QR code expired");
-    await wait(QR_LOGIN_POLL_INTERVAL_MS, signal);
+    await wait(QR_LOGIN_POLL_INTERVAL_MS + Math.random() * QR_LOGIN_POLL_JITTER_MS, signal);
   }
   throw new Error(`Bilibili QR login timed out while waiting for ${lastStatus}`);
 };
 
 export const getBilibiliCredential = async () => {
-  if (!loadedFromDatabase) {
+  if (loadedFromDatabase) {
+    return loadedCredential;
+  }
+
+  if (!credentialDatabase) {
     loadedFromDatabase = true;
-    if (credentialDatabase) {
-      const stored = await credentialDatabase.bilibiliCredential.findUnique({ where: { id: CREDENTIAL_ID } });
-      loadedCredential = stored ? normalizeCredential(JSON.parse(stored.credentialJson)) : undefined;
+    return undefined;
+  }
+
+  const revision = credentialRevision;
+  credentialLoadPromise ??= (async () => {
+    const stored = await credentialDatabase!.bilibiliCredential.findUnique({ where: { id: CREDENTIAL_ID } });
+    const credential = stored ? normalizeCredential(JSON.parse(stored.credentialJson)) : undefined;
+    if (revision === credentialRevision) {
+      loadedCredential = credential;
+      loadedFromDatabase = true;
+    }
+    return credential;
+  })();
+  const pendingLoad = credentialLoadPromise;
+  try {
+    return await pendingLoad;
+  } finally {
+    if (credentialLoadPromise === pendingLoad) {
+      credentialLoadPromise = undefined;
     }
   }
-  return loadedCredential;
 };
 
 export const saveBilibiliCredential = async (credential: BilibiliCredential) => {
   if (!credentialDatabase) throw new Error("Bilibili credential database is not configured");
-  loadedCredential = normalizeCredential(credential);
-  loadedFromDatabase = true;
+  const normalizedCredential = normalizeCredential(credential);
+  credentialRevision += 1;
+  credentialLoadPromise = undefined;
   await credentialDatabase.bilibiliCredential.upsert({
     where: { id: CREDENTIAL_ID },
-    create: { id: CREDENTIAL_ID, credentialJson: JSON.stringify(loadedCredential) },
-    update: { credentialJson: JSON.stringify(loadedCredential) },
+    create: { id: CREDENTIAL_ID, credentialJson: JSON.stringify(normalizedCredential) },
+    update: { credentialJson: JSON.stringify(normalizedCredential) },
   });
+  loadedCredential = normalizedCredential;
+  loadedFromDatabase = true;
 };
 
 export const clearBilibiliCredential = async () => {
-  loadedCredential = undefined;
-  loadedFromDatabase = true;
+  credentialRevision += 1;
+  credentialLoadPromise = undefined;
   if (credentialDatabase) {
     await credentialDatabase.bilibiliCredential.deleteMany({ where: { id: CREDENTIAL_ID } });
   }
+  loadedCredential = undefined;
+  loadedFromDatabase = true;
 };
 
 export const serializeBilibiliCredential = (credential: BilibiliCredential) => {
@@ -262,9 +291,20 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const asString = (value: unknown) => typeof value === "string" && value ? value : undefined;
 
 const wait = (milliseconds: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
-  const timer = setTimeout(resolve, milliseconds);
-  signal?.addEventListener("abort", () => {
-    clearTimeout(timer);
+  if (signal?.aborted) {
     reject(signal.reason);
-  }, { once: true });
+    return;
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const finish = (settle: () => void) => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    signal?.removeEventListener("abort", onAbort);
+    settle();
+  };
+  const onAbort = () => finish(() => reject(signal?.reason));
+  timer = setTimeout(() => finish(resolve), milliseconds);
+  signal?.addEventListener("abort", onAbort, { once: true });
 });

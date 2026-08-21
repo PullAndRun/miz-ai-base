@@ -133,6 +133,7 @@ describe("VTB subscription commands", () => {
       groupId: 100,
       streamers: ["主播甲", "主播乙"],
       atAllStreamers: ["主播乙"],
+      dynamicStreamers: ["主播乙"],
     }]);
     let replyText = "";
     const plugin = createVtbPlugin({ loadCurrentConfig: async () => config });
@@ -148,6 +149,8 @@ describe("VTB subscription commands", () => {
 
     expect(replyText).toContain("主播甲（开播 @全体成员：否）");
     expect(replyText).toContain("主播乙（开播 @全体成员：是）");
+    expect(replyText).toContain("· 主播甲（开播 @全体成员：否）\n  直播推送：是；动态推送：否");
+    expect(replyText).toContain("· 主播乙（开播 @全体成员：是）\n  直播推送：是；动态推送：是");
   });
 
   test("atall command updates a subscribed streamer", async () => {

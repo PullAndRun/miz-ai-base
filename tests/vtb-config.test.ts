@@ -99,6 +99,43 @@ describe("VTB dynamic config updates", () => {
     expect(disabled.changed).toBeTrue();
     expect(disabled.dynamicAtAllStreamers).toEqual([]);
   });
+
+  test("updates multiline streamer arrays without corrupting the TOML", () => {
+    const multilineSource = [
+      "[[miz.vtb.subscriptions]]",
+      "groupId = 300",
+      "streamers = [",
+      '  "主播甲",',
+      '  "主播乙",',
+      "]",
+      "atAllStreamers = [",
+      '  "主播甲",',
+      "]",
+      "dynamicStreamers = [",
+      '  "主播甲",',
+      "]",
+      "dynamicAtAllStreamers = [",
+      '  "主播甲",',
+      "]",
+      "",
+    ].join("\n");
+
+    const atAll = setVtbAtAllStreamerInSource(multilineSource, 300, "主播乙", true);
+    const dynamic = setVtbDynamicStreamerInSource(atAll.source, 300, "主播乙", true);
+    const dynamicAtAll = setVtbDynamicAtAllStreamerInSource(dynamic.source, 300, "主播乙", true);
+    expect(Bun.TOML.parse(dynamicAtAll.source)).toMatchObject({
+      miz: {
+        vtb: {
+          subscriptions: [{
+            streamers: ["主播甲", "主播乙"],
+            atAllStreamers: ["主播甲", "主播乙"],
+            dynamicStreamers: ["主播甲", "主播乙"],
+            dynamicAtAllStreamers: ["主播甲", "主播乙"],
+          }],
+        },
+      },
+    });
+  });
 });
 
 test("VTB example config does not create an invalid placeholder subscription", async () => {

@@ -14,6 +14,7 @@ import {
   getVtbLiveInfo,
   resolveTrackedVtbStreamer,
   syncVtbSubscriptionNames,
+  type VtbCardInfo,
 } from "@/vtb";
 import {
   addVtbSubscription,
@@ -149,7 +150,13 @@ export const createVtbPlugin = ({
         await reply("B 站登录只对 VTB 管理员白名单开放。");
         return;
       }
-      await clearBilibiliCredential();
+      try {
+        await clearBilibiliCredential();
+      } catch (error) {
+        logger.warn("plugin", "vtb bilibili credential logout failed", { error: summarizeError(error) });
+        await reply("B 站登录凭据暂时没能清除，请稍后再试；当前凭据仍会继续使用。");
+        return;
+      }
       await reply("B 站已退出扫码登录；后续 VTB 和视频下载将不再携带登录凭据。");
       return;
     }
@@ -160,7 +167,7 @@ export const createVtbPlugin = ({
     }
 
     const missingLiveApi = type === "live" &&
-      (!config.vtb.userApiUrl || !config.vtb.cardApiUrl || !config.vtb.liveApiUrl ||
+      (!config.vtb.userApiUrl || !config.vtb.liveApiUrl ||
         !config.vtb.webUrl || !config.vtb.liveWebUrl);
     const missingDynamicApi = type === "dynamic" && dynamicAction === undefined &&
       (!config.vtb.userApiUrl || !config.vtb.webUrl);
@@ -200,7 +207,10 @@ export const createVtbPlugin = ({
               ? [
                   `📺 这个群正在关注 ${subscription.streamers.length} 位主播：`,
                   ...subscription.streamers.map((name) =>
-                    `· ${name}（开播 @全体成员：${subscription.atAllStreamers?.includes(name) ? "是" : "否"}）`),
+                    [
+                      `· ${name}（开播 @全体成员：${subscription.atAllStreamers?.includes(name) ? "是" : "否"}）`,
+                      `  直播推送：是；动态推送：${subscription.dynamicStreamers?.includes(name) ? "是" : "否"}`,
+                    ].join("\n")),
                 ].join("\n")
               : "📺 关注名单还是空的。\n添加：miz vtb subscribe 主播昵称",
           );
@@ -319,11 +329,21 @@ export const createVtbPlugin = ({
             });
           }
         } else if (!nextSubscriptions.some((subscription) => subscription.streamers.includes(streamerName))) {
-          const repository = await getRepository(config);
-          const removed = await repository.deleteStreamerByName(streamerName);
-          if (removed) {
-            logger.info("plugin", "vtb streamer removed from database after final subscription was cancelled", {
+          try {
+            const repository = await getRepository(config);
+            const removed = await repository.deleteStreamerByName(streamerName);
+            if (removed) {
+              logger.info("plugin", "vtb streamer removed from database after final subscription was cancelled", {
+                streamerName,
+              });
+            }
+          } catch (error) {
+            // The config file is already the source of truth. A database
+            // cleanup failure should not make a successful unsubscribe look
+            // like it failed or prevent the runtime snapshot from refreshing.
+            logger.warn("plugin", "vtb streamer database cleanup failed after unsubscribe", {
               streamerName,
+              error: summarizeError(error),
             });
           }
         }
@@ -338,8 +358,8 @@ export const createVtbPlugin = ({
         });
         await reply(type === "subscribe"
           ? databaseSynchronized
-            ? `📺 已关注 ${streamerName}！\n之后的开播和新动态会来到这个群。`
-            : `📺 已把 ${streamerName} 加入关注名单。\n资料还在同步，后台会继续追上。`
+            ? `📺 已关注 ${streamerName}！\n之后的开播和下播会来到这个群；动态推送默认关闭，需要时发送 miz vtb dynamic enable ${streamerName}。`
+            : `📺 已把 ${streamerName} 加入关注名单。\n资料还在同步，后台会继续追上；同步完成后默认推送开播和下播，动态可另行开启。`
           : `已经取消关注 ${streamerName}。`);
         return;
       }
@@ -395,11 +415,27 @@ export const createVtbPlugin = ({
       if (type === "live") {
         const [live, cachedCard] = await Promise.all([
           getVtbLiveInfo(streamer, config.vtb),
-          getVtbCardInfo(streamer.mid, config.vtb),
+          getVtbCardInfo(streamer.mid, config.vtb).catch((error) => {
+            // Fan count and avatar are optional for a live status query. A
+            // transient card API failure should not hide the live result.
+            logger.warn("plugin", "vtb live query card lookup failed; continuing without card data", {
+              streamerName,
+              error: summarizeError(error),
+            });
+            return {} as VtbCardInfo;
+          }),
         ]);
-        const card = live.name !== streamer.name
-          ? (await getVtbCardInfos([streamer.mid], config.vtb)).get(streamer.mid) ?? cachedCard
-          : cachedCard;
+        let card = cachedCard;
+        if (live.name !== streamer.name) {
+          try {
+            card = (await getVtbCardInfos([streamer.mid], config.vtb)).get(streamer.mid) ?? cachedCard;
+          } catch (error) {
+            logger.warn("plugin", "vtb live query nickname refresh failed; using available card data", {
+              streamerName,
+              error: summarizeError(error),
+            });
+          }
+        }
         const renamed = findVtbNameChanges([streamer], new Map([[streamer.mid, card]]));
         if (renamed.length > 0) {
           const latestName = renamed[0].name;
@@ -440,6 +476,14 @@ export const createVtbPlugin = ({
       ));
     } catch (error) {
       logger.error("plugin", "vtb query failed", error);
+      if (type === "dynamic" && error instanceof Error && error.message.includes("logged-in credential")) {
+        await reply("查询 B 站动态需要先完成登录，请管理员私聊发送 miz vtb login 扫码登录。\n登录后再试一次 miz vtb dynamic 主播昵称；已开启的动态推送也会在登录后恢复。");
+        return;
+      }
+      if (error instanceof Error && error.name === "VtbCooldownError") {
+        await reply("B 站接口刚才触发了保护，机器人已暂时放慢请求；过几分钟再查一次就好。");
+        return;
+      }
       await reply("B 站数据刚才在路上卡了一下，过一会儿再查吧。");
     }
   },

@@ -745,22 +745,8 @@ const writeVtbSubscriptionNames = async (renames: ReadonlyMap<string, string>) =
   }
 
   const source = await readVtbSubscriptionConfig();
-  let changed = false;
-  const updated = source.replace(/^(streamers|atAllStreamers|dynamicStreamers|dynamicAtAllStreamers)[ \t]*=[ \t]*(\[[^\r\n]*\])[ \t]*$/gm, (line, key: string, value: string) => {
-    const parsed = Bun.TOML.parse(`${key} = ${value}`) as Record<string, unknown>;
-    const names = parsed[key];
-    if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) {
-      return line;
-    }
-
-    const nextNames = names.map((name) => renames.get(name) ?? name);
-    if (nextNames.every((name, index) => name === names[index])) {
-      return line;
-    }
-
-    changed = true;
-    return `${key} = ${JSON.stringify(nextNames)}`;
-  });
+  const updated = replaceVtbNameAssignments(source, renames);
+  const changed = updated !== source;
 
   if (changed) {
     await writeVtbSubscriptionConfig(updated);
@@ -880,11 +866,165 @@ const findVtbSubscriptionBlock = (source: string, groupId: string | number): Vtb
   return undefined;
 };
 
+type TomlAssignment = {
+  valueStart: number;
+  valueEnd: number;
+  lineEnd: number;
+  value: string;
+};
+
+const findTomlAssignment = (source: string, key: string): TomlAssignment | undefined => {
+  const matched = new RegExp(`^${key}[ \\t]*=[ \\t]*`, "m").exec(source);
+  if (!matched || matched.index === undefined) {
+    return undefined;
+  }
+
+  const valueStart = matched.index + matched[0].length;
+  const valueEnd = findTomlValueEnd(source, valueStart);
+  let lineEnd = valueEnd;
+  while (lineEnd < source.length && source[lineEnd] !== "\n" && source[lineEnd] !== "\r") {
+    lineEnd += 1;
+  }
+  return {
+    valueStart,
+    valueEnd,
+    lineEnd,
+    value: source.slice(valueStart, valueEnd),
+  };
+};
+
+const findTomlValueEnd = (source: string, start: number) => {
+  const first = source[start];
+  if (first !== "[" && first !== "{") {
+    let end = start;
+    while (end < source.length && source[end] !== "\n" && source[end] !== "\r") {
+      end += 1;
+    }
+    return end;
+  }
+
+  const closingStack: string[] = [];
+  let quote: "\"" | "'" | "\"\"\"" | "'''" | undefined;
+  for (let index = start; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (quote === "\"" && character === "\\") {
+        index += 1;
+      } else if (quote.length === 3
+        ? source.startsWith(quote, index)
+        : character === quote) {
+        index += quote.length - 1;
+        quote = undefined;
+      }
+      continue;
+    }
+
+    if (source.startsWith("\"\"\"", index)) {
+      quote = "\"\"\"";
+      index += 2;
+    } else if (source.startsWith("'''", index)) {
+      quote = "'''";
+      index += 2;
+    } else if (character === "\"") {
+      quote = "\"";
+    } else if (character === "'") {
+      quote = "'";
+    } else if (character === "[") {
+      closingStack.push("]");
+    } else if (character === "{") {
+      closingStack.push("}");
+    } else if (character === closingStack[closingStack.length - 1]) {
+      closingStack.pop();
+      if (closingStack.length === 0) {
+        return index + 1;
+      }
+    }
+  }
+
+  return source.length;
+};
+
+const replaceTomlArrayAssignment = (
+  source: string,
+  key: string,
+  values: readonly string[],
+) => {
+  const assignment = findTomlAssignment(source, key);
+  if (!assignment) {
+    return source;
+  }
+  return `${source.slice(0, assignment.valueStart)}${JSON.stringify(values)}${source.slice(assignment.valueEnd)}`;
+};
+
+const replaceOrInsertTomlArrayAssignment = (
+  source: string,
+  key: string,
+  values: readonly string[],
+  anchorKey: string,
+) => {
+  const assignment = findTomlAssignment(source, key);
+  if (assignment) {
+    return replaceTomlArrayAssignment(source, key, values);
+  }
+
+  const anchor = findTomlAssignment(source, anchorKey);
+  if (!anchor) {
+    return source;
+  }
+  const newline = source.includes("\r\n") ? "\r\n" : "\n";
+  return `${source.slice(0, anchor.lineEnd)}${newline}${key} = ${JSON.stringify(values)}${source.slice(anchor.lineEnd)}`;
+};
+
+const replaceVtbNameAssignments = (source: string, renames: ReadonlyMap<string, string>) => {
+  const keys = ["streamers", "atAllStreamers", "dynamicStreamers", "dynamicAtAllStreamers"];
+  const assignments = keys.flatMap((key) => {
+    const matches: Array<{ key: string; assignment: TomlAssignment }> = [];
+    let offset = 0;
+    while (offset < source.length) {
+      const match = new RegExp(`^${key}[ \\t]*=[ \\t]*`, "m").exec(source.slice(offset));
+      if (!match || match.index === undefined) {
+        break;
+      }
+      const absoluteIndex = offset + match.index;
+      const assignment = findTomlAssignment(source.slice(absoluteIndex), key);
+      if (!assignment) {
+        break;
+      }
+      matches.push({
+        key,
+        assignment: {
+          ...assignment,
+          valueStart: assignment.valueStart + absoluteIndex,
+          valueEnd: assignment.valueEnd + absoluteIndex,
+          lineEnd: assignment.lineEnd + absoluteIndex,
+        },
+      });
+      offset = absoluteIndex + match[0].length + Math.max(1, assignment.valueEnd - assignment.valueStart);
+    }
+    return matches;
+  }).sort((left, right) => right.assignment.valueStart - left.assignment.valueStart);
+
+  let updated = source;
+  for (const { key, assignment } of assignments) {
+    const parsed = Bun.TOML.parse(`${key} = ${assignment.value.trim()}`) as Record<string, unknown>;
+    const names = parsed[key];
+    if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) {
+      continue;
+    }
+    const nextNames = names.map((name) => renames.get(name) ?? name);
+    if (nextNames.every((name, index) => name === names[index])) {
+      continue;
+    }
+    updated = `${updated.slice(0, assignment.valueStart)}${JSON.stringify(nextNames)}${updated.slice(assignment.valueEnd)}`;
+  }
+  return updated;
+};
+
 const parseTomlAssignment = (source: string, key: string) => {
-  const matched = new RegExp(`^${key}[ \\t]*=[ \\t]*(.+)$`, "m").exec(source)?.[1];
-  return matched === undefined
+  const assignment = findTomlAssignment(source, key);
+  return assignment === undefined
     ? undefined
-    : (Bun.TOML.parse(`${key} = ${matched}`) as Record<string, unknown>)[key];
+    : (Bun.TOML.parse(`${key} = ${assignment.value.trim()}`) as Record<string, unknown>)[key];
 };
 
 const replaceSubscriptionBlock = (
@@ -892,30 +1032,18 @@ const replaceSubscriptionBlock = (
   subscription: VtbSubscriptionBlock,
   streamers: readonly string[],
 ) => {
-  let updatedBlock = subscription.text.replace(
-    /^streamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m,
-    `streamers = ${JSON.stringify(streamers)}`,
-  );
+  let updatedBlock = replaceTomlArrayAssignment(subscription.text, "streamers", streamers);
   if (subscription.atAllStreamers) {
     const atAllStreamers = subscription.atAllStreamers.filter((name) => streamers.includes(name));
-    updatedBlock = updatedBlock.replace(
-      /^atAllStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m,
-      `atAllStreamers = ${JSON.stringify(atAllStreamers)}`,
-    );
+    updatedBlock = replaceTomlArrayAssignment(updatedBlock, "atAllStreamers", atAllStreamers);
   }
   if (subscription.dynamicStreamers) {
     const dynamicStreamers = subscription.dynamicStreamers.filter((name) => streamers.includes(name));
-    updatedBlock = updatedBlock.replace(
-      /^dynamicStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m,
-      `dynamicStreamers = ${JSON.stringify(dynamicStreamers)}`,
-    );
+    updatedBlock = replaceTomlArrayAssignment(updatedBlock, "dynamicStreamers", dynamicStreamers);
   }
   if (subscription.dynamicAtAllStreamers) {
     const dynamicAtAllStreamers = subscription.dynamicAtAllStreamers.filter((name) => streamers.includes(name));
-    updatedBlock = updatedBlock.replace(
-      /^dynamicAtAllStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m,
-      `dynamicAtAllStreamers = ${JSON.stringify(dynamicAtAllStreamers)}`,
-    );
+    updatedBlock = replaceTomlArrayAssignment(updatedBlock, "dynamicAtAllStreamers", dynamicAtAllStreamers);
   }
   return `${source.slice(0, subscription.start)}${updatedBlock}${source.slice(subscription.end)}`;
 };
@@ -924,59 +1052,25 @@ const replaceAtAllStreamersInBlock = (
   block: string,
   atAllStreamers: readonly string[],
 ) => {
-  const assignment = `atAllStreamers = ${JSON.stringify(atAllStreamers)}`;
-  if (/^atAllStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m.test(block)) {
-    return block.replace(
-      /^atAllStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m,
-      assignment,
-    );
-  }
-
-  const newline = block.includes("\r\n") ? "\r\n" : "\n";
-  return block.replace(
-    /^(streamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*)$/m,
-    `$1${newline}${assignment}`,
-  );
+  return replaceOrInsertTomlArrayAssignment(block, "atAllStreamers", atAllStreamers, "streamers");
 };
 
 const replaceDynamicStreamersInBlock = (
   block: string,
   dynamicStreamers: readonly string[],
 ) => {
-  const assignment = `dynamicStreamers = ${JSON.stringify(dynamicStreamers)}`;
-  if (/^dynamicStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m.test(block)) {
-    return block.replace(
-      /^dynamicStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m,
-      assignment,
-    );
-  }
-
-  const newline = block.includes("\r\n") ? "\r\n" : "\n";
-  return block.replace(
-    /^(streamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*)$/m,
-    `$1${newline}${assignment}`,
-  );
+  return replaceOrInsertTomlArrayAssignment(block, "dynamicStreamers", dynamicStreamers, "streamers");
 };
 
 const replaceDynamicAtAllStreamersInBlock = (
   block: string,
   dynamicAtAllStreamers: readonly string[],
 ) => {
-  const assignment = `dynamicAtAllStreamers = ${JSON.stringify(dynamicAtAllStreamers)}`;
-  if (/^dynamicAtAllStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m.test(block)) {
-    return block.replace(
-      /^dynamicAtAllStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m,
-      assignment,
-    );
-  }
-
-  const newline = block.includes("\r\n") ? "\r\n" : "\n";
-  const anchor = /^dynamicStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m.test(block)
-    ? /^dynamicStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m
-    : /^(streamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*)$/m;
-  return block.replace(
-    anchor,
-    `$1${newline}${assignment}`,
+  return replaceOrInsertTomlArrayAssignment(
+    block,
+    "dynamicAtAllStreamers",
+    dynamicAtAllStreamers,
+    findTomlAssignment(block, "dynamicStreamers") ? "dynamicStreamers" : "streamers",
   );
 };
 

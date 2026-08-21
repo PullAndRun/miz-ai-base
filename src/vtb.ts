@@ -126,6 +126,7 @@ const vtbRequestStates = new Map<string, {
   consecutiveFailures: number;
   cooldownUntil: number;
   lastRequestAt: number;
+  lastMinimumIntervalMs: number;
   queue: Promise<void>;
 }>();
 const vtbInFlightRequests = new Map<string, Promise<unknown>>();
@@ -316,7 +317,7 @@ export const syncVtbSubscriptionNames = async (config: MizConfig) => {
       failed.push({ name: streamer.name, reason: `直播接口未返回 MID ${streamer.mid}` });
       continue;
     }
-    if (card.name !== streamer.name || (live.roomId && live.roomId !== streamer.roomId)) {
+    if (card.name !== streamer.name || live.roomId !== streamer.roomId) {
       await repository.upsertStreamer({
         ...streamer,
         name: card.name,
@@ -484,7 +485,7 @@ export const getVtbDynamics = async (
     throw new Error("Bilibili dynamic API requires a logged-in credential");
   }
 
-  const cacheKey = `${BILIBILI_DYNAMIC_API_URL}\n${streamer.mid}`;
+  const cacheKey = `${BILIBILI_DYNAMIC_API_URL}\n${config.webUrl}\n${streamer.mid}`;
   const cacheRead = readExpiringCache(vtbDynamicQueryCache, cacheKey, Date.now());
   vtbDynamicQueryCache = cacheRead.cache;
   const cached = cacheRead.value;
@@ -538,10 +539,8 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
     return cached;
   }
 
-  const cookie = await getBilibiliCredentialHeader();
   const requestHeaders = createVtbRequestHeaders(
     config.webUrl,
-    cookie ? { Cookie: cookie } : undefined,
   );
   const requestInit = { headers: requestHeaders } satisfies RequestInit;
   const file = await runProtectedVtbRequest(
@@ -1453,17 +1452,40 @@ export const formatDynamicMessage = (dynamic: VtbDynamic, webUrl: string) => {
     dynamic.containsDynamicUrl ||
     dynamic.description.includes(dynamic.link) ||
     dynamic.description.includes(dynamicUrl);
+  const display = selectDynamicDisplayText(dynamic.title, dynamic.description);
+  const content = display.title
+    ? [`「${display.title}」`, ...(display.description ? ["", ...display.description.split("\n")] : [])]
+    : display.description
+      ? display.description.split("\n")
+      : ["只留下了标题，点进原文看看吧。"];
 
   return [
     `📮 ${dynamic.author} 发来一条新动态`,
     "",
-    `「${dynamic.title}」`,
-    ...(dynamic.description ? ["", ...dynamic.description.split("\n")] : ["", "只留下了标题，点进原文看看吧。"]),
+    ...content,
     "",
     `⏰ ${dayjs(dynamic.publishedAt).format("MM月DD日 HH:mm")} 发布`,
     ...(hasDynamicUrlInDescription ? [] : [`🔗 完整动态 · ${dynamicUrl}`]),
   ].join("\n");
 };
+
+const selectDynamicDisplayText = (title: string, description: string) => {
+  const normalizedTitle = normalizeDynamicComparisonText(title);
+  const normalizedDescription = normalizeDynamicComparisonText(description);
+
+  if (!normalizedTitle && !normalizedDescription) {
+    return { title: "", description: "" };
+  }
+  if (normalizedTitle && normalizedDescription && normalizedTitle.includes(normalizedDescription)) {
+    return { title, description: "" };
+  }
+  if (normalizedTitle && normalizedDescription && normalizedDescription.includes(normalizedTitle)) {
+    return { title: "", description };
+  }
+  return { title, description };
+};
+
+const normalizeDynamicComparisonText = (value: string) => value.replace(/\s+/g, " ").trim();
 
 export const createVtbNotificationMessage = (text: string, imageFile?: string) => [
   { type: "text", data: { text } },
@@ -1597,13 +1619,22 @@ const reserveVtbRequestSlot = async (host: string, minimumIntervalMs: number) =>
   const state = getVtbRequestState(host);
   const queued = state.queue.catch(() => undefined).then(async () => {
     assertVtbRequestAvailable(host);
+    // Carry a bounded part of a stricter interval across endpoint types. This
+    // prevents a sensitive user-search request (5s) from being followed by a
+    // dynamic request immediately, without making an interactive query wait
+    // for the full search interval again.
+    const inheritedIntervalMs = state.lastMinimumIntervalMs > minimumIntervalMs
+      ? Math.min(state.lastMinimumIntervalMs, minimumIntervalMs + 1_000)
+      : state.lastMinimumIntervalMs;
+    const effectiveIntervalMs = Math.max(minimumIntervalMs, inheritedIntervalMs);
     const jitterMs = minimumIntervalMs > 0 ? Math.random() * minimumIntervalMs : 0;
-    const waitMs = state.lastRequestAt + minimumIntervalMs + jitterMs - Date.now();
+    const waitMs = state.lastRequestAt + effectiveIntervalMs + jitterMs - Date.now();
     if (waitMs > 0) {
       await waitForVtbRequest(waitMs);
     }
     assertVtbRequestAvailable(host);
     state.lastRequestAt = Date.now();
+    state.lastMinimumIntervalMs = minimumIntervalMs;
   });
   state.queue = queued.catch(() => undefined);
   await queued;
@@ -1682,6 +1713,7 @@ const getVtbRequestState = (host: string) => {
     consecutiveFailures: 0,
     cooldownUntil: 0,
     lastRequestAt: 0,
+    lastMinimumIntervalMs: 0,
     queue: Promise.resolve(),
   };
   vtbRequestStates.set(host, state);
@@ -1978,12 +2010,25 @@ const cleanImageUrl = (value: string | null | undefined) => {
   if (!url) {
     return undefined;
   }
-  return url.startsWith("//") ? `https:${url}` : url;
+  const normalized = url.startsWith("//") ? `https:${url}` : url;
+  try {
+    const parsed = new URL(normalized);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? normalized : undefined;
+  } catch {
+    return undefined;
+  }
 };
 
 const parseDate = (value: string | number | undefined) => {
   if (!value || value === "0000-00-00 00:00:00") return undefined;
-  const date = typeof value === "number" ? new Date(value * 1000) : new Date(value);
+  const numericValue = typeof value === "number"
+    ? value
+    : /^\d+(?:\.\d+)?$/.test(value.trim())
+      ? Number(value)
+      : undefined;
+  const date = numericValue !== undefined
+    ? new Date((numericValue > 10_000_000_000 ? numericValue : numericValue * 1_000))
+    : new Date(value);
   return Number.isNaN(date.getTime()) ? undefined : date;
 };
 

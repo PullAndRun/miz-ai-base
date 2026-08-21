@@ -175,6 +175,21 @@ describe("Bilibili live lookup", () => {
     });
   });
 
+  test("accepts millisecond and numeric-string live timestamps", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      code: 0,
+      data: [{ uid: "123", live_status: 1, live_time: "1893456000000" }],
+    }))) as unknown as typeof fetch;
+    const timestampConfig = {
+      ...config,
+      liveApiUrl: "https://timestamp.example.test/live",
+    };
+
+    await expect(getVtbLiveInfo({ name: "示例主播", mid: "123" }, timestampConfig)).resolves.toMatchObject({
+      liveStartedAt: new Date("2030-01-01T00:00:00.000Z"),
+    });
+  });
+
   test("keeps the streamer avatar as an image fallback", async () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({
       code: 0,

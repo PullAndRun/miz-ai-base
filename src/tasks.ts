@@ -50,6 +50,7 @@ const SCHEDULED_DELIVERY_CONCURRENCY = 5;
 const WALLPAPER_DELIVERY_CONCURRENCY = 3;
 const WALLPAPER_SEND_INTERVAL_MS = 2_000;
 const FF14_PRICE_ALERT_DELIVERY_RETENTION_MS = 3 * 24 * 60 * 60_000;
+const vtbPollingIntervalCache = new Map<string, number>();
 
 type VtbPollState = {
   dynamicCursor: number;
@@ -469,7 +470,7 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
     return createNoopTask();
   }
 
-  if (!hasVtbApiEndpoints(config.vtb)) {
+  if (!hasVtbLiveApiEndpoints(config.vtb)) {
     logger.warn("plugin", "vtb task disabled: required API URLs are missing");
     return createNoopTask();
   }
@@ -627,7 +628,7 @@ const pollVtbSubscriptions = async (
       return liveNameChangedMids.has(mid) || !cached || cached.expiresAt <= now;
     });
     let refreshedCards = new Map<string, VtbCardInfo>();
-    if (hasBilibiliCredential && cardRefreshMids.length > 0) {
+    if (hasBilibiliCredential && config.vtb.cardApiUrl && cardRefreshMids.length > 0) {
       try {
         refreshedCards = await getVtbCardInfos(cardRefreshMids, config.vtb);
         for (const mid of cardRefreshMids) {
@@ -1005,8 +1006,37 @@ const resolveVtbNotificationImage = async (
 };
 
 const getVtbPollingIntervalMs = (cronExpression: string) => {
+  const cached = vtbPollingIntervalCache.get(cronExpression);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  try {
+    // Let node-cron evaluate the full expression instead of assuming the
+    // first field is a simple `*/N` minute interval. This keeps freshness
+    // windows and dynamic rotation correct for hourly/daily schedules too.
+    const task = cron.createTask(cronExpression, () => undefined);
+    try {
+      const [nextRun, followingRun] = task.getNextRuns(2);
+      const intervalMs = followingRun && nextRun
+        ? followingRun.getTime() - nextRun.getTime()
+        : undefined;
+      if (intervalMs && Number.isFinite(intervalMs) && intervalMs > 0) {
+        vtbPollingIntervalCache.set(cronExpression, intervalMs);
+        return intervalMs;
+      }
+    } finally {
+      task.destroy();
+    }
+  } catch {
+    // The caller already validates cron expressions; keep a safe fallback for
+    // direct helper use or an unexpected parser edge case.
+  }
+
   const minuteInterval = /^\*\/(\d+) \* \* \* \*$/.exec(cronExpression)?.[1];
-  return Math.max(1, minuteInterval ? Number(minuteInterval) : 3) * 60_000;
+  const fallback = Math.max(1, minuteInterval ? Number(minuteInterval) : 3) * 60_000;
+  vtbPollingIntervalCache.set(cronExpression, fallback);
+  return fallback;
 };
 
 /**
@@ -1408,6 +1438,9 @@ const hasVtbApiEndpoints = (config: MizConfig["vtb"]) =>
     config.webUrl &&
     config.liveWebUrl
   );
+
+const hasVtbLiveApiEndpoints = (config: MizConfig["vtb"]) =>
+  Boolean(config.userApiUrl && config.liveApiUrl && config.webUrl && config.liveWebUrl);
 
 const normalizeError = serializeError;
 
