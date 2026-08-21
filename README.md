@@ -167,14 +167,16 @@ Docker 模式最后再合并：
 [[miz.vtb.subscriptions]]
 groupId = "123456789"
 streamers = ["主播甲", "主播乙"]
+dynamicStreamers = ["主播甲"]
 atAllStreamers = ["主播甲"]
 ```
 
-- `streamers` 中的主播会推送开播、下播和最新动态。
+- `streamers` 中的主播会推送开播和下播。
+- 只有同时出现在 `streamers` 和 `dynamicStreamers` 中的主播才会轮询并推送最新动态。
 - `atAllStreamers` 只影响开播通知。
 - 只有机器人是群主或管理员，且该 QQ 账号在群内仍有可用的 `@全体成员` 次数时才会真正 `@全体`；否则发送普通通知。
 - 动态和下播通知不会 `@全体`。
-- 群管理员或订阅白名单成员可以通过命令直接维护 `config/vtb.toml` 中的订阅。
+- 群管理员或 VTB 管理员白名单成员可以通过命令直接维护 `config/vtb.toml` 中的订阅。
 
 ## Docker 部署
 
@@ -244,9 +246,9 @@ napcatMediaDirectory = "/app/media"
 | `miz todo list/done/cancel ...` | 查看、完成或取消待办；创建者、负责人和管理者拥有不同的处理权限。 |
 | `miz vtb live <主播昵称>` | 查询主播当前直播状态。 |
 | `miz vtb dynamic <主播昵称>` | 查询主播最新动态。 |
-| `miz vtb list/subscribe/unsubscribe ...` | 查看或维护本群订阅；`list` 会标出各主播开播时是否 `@全体成员`；需要群管理员或订阅白名单权限。 |
-| `miz vtb atall enable/disable <主播昵称>` | 开启或关闭该主播开播通知的 `@全体成员`；需要先订阅该主播，并需要群管理员或订阅白名单权限。 |
-| `miz vtb sync` | 同步主播昵称、MID 和直播间资料；仅同步白名单可用。 |
+| `miz vtb list/subscribe/unsubscribe ...` | 查看或维护本群订阅；`list` 会标出各主播开播时是否 `@全体成员`；需要群管理员或 VTB 管理员白名单权限。 |
+| `miz vtb atall enable/disable <主播昵称>` | 开启或关闭该主播开播通知的 `@全体成员`；需要先订阅该主播，并需要群管理员或 VTB 管理员白名单权限。 |
+| `miz vtb sync` | 同步主播昵称、MID 和直播间资料；仅 VTB 管理员白名单可用。 |
 | `miz ff14 <分区> <道具名>` | 查询国服市场；分区简写为猫、猪、狗、鸟。 |
 | `miz ff14 list` | 用一条合并转发展示当前群的全部商品推送及启用状态；转发内每 10 个商品归为一个节点。 |
 | `miz ff14 add <分区> <最高价> <道具名> [@成员 ...]` | 给当前群增加商品推送，可指定触发时要 at 的成员；需要群管理或 FF14 管理白名单权限。 |

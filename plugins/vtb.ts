@@ -85,11 +85,6 @@ export const createVtbPlugin = ({
       return;
     }
 
-    if (!config.vtb.enabled) {
-      await reply("主播追踪频道还没开启，喊管理员来接通一下吧。");
-      return;
-    }
-
     if (type === "login") {
       if (message.groupId !== undefined) {
         await reply("B 站扫码登录只允许在私聊中发起，避免二维码泄露。");
@@ -133,6 +128,11 @@ export const createVtbPlugin = ({
       }
       await clearBilibiliCredential();
       await reply("B 站已退出扫码登录；后续 VTB 和视频下载将不再携带登录凭据。");
+      return;
+    }
+
+    if (!config.vtb.enabled) {
+      await reply("主播追踪频道还没开启，喊管理员来接通一下吧。");
       return;
     }
 

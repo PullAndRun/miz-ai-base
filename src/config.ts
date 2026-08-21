@@ -145,7 +145,7 @@ const rawMizConfigSchema = z.object({
     .object({
       enabled: z.boolean().optional(),
       cron: nonEmptyStringSchema.optional(),
-      dynamicPollMinutes: z.number().int().positive().max(1_440).optional(),
+      dynamicPollMinutes: z.number().int().min(5).max(1_440).optional(),
       dynamicConcurrency: z.number().int().positive().max(8).optional(),
       cardCacheMinutes: z.number().int().positive().max(1_440).optional(),
       userApiUrl: nonEmptyStringSchema.optional(),
@@ -164,6 +164,7 @@ const rawMizConfigSchema = z.object({
             groupId: targetIdSchema,
             streamers: z.array(nonEmptyStringSchema).min(1),
             atAllStreamers: z.array(nonEmptyStringSchema).optional(),
+            dynamicStreamers: z.array(nonEmptyStringSchema).optional(),
           }),
         )
         .optional(),
@@ -286,7 +287,15 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
       ...(config.vtb?.subscriptionWhitelistUserIds ?? []),
     ].map((userId) => [String(userId), userId])).values()),
     proxyUrl: config.network?.proxyUrl ?? "",
-    subscriptions: config.vtb?.subscriptions ?? [],
+    subscriptions: (config.vtb?.subscriptions ?? []).map((subscription) => ({
+      ...subscription,
+      ...(subscription.atAllStreamers === undefined
+        ? {}
+        : { atAllStreamers: subscription.atAllStreamers.filter((name) => subscription.streamers.includes(name)) }),
+      ...(subscription.dynamicStreamers === undefined
+        ? {}
+        : { dynamicStreamers: subscription.dynamicStreamers.filter((name) => subscription.streamers.includes(name)) }),
+    })),
   },
 }));
 
@@ -397,6 +406,8 @@ export type VtbConfig = {
     readonly streamers: readonly string[];
     /** Streamers whose live-start notification should mention every group member. */
     readonly atAllStreamers?: readonly string[];
+    /** Streamers whose dynamic feed should be polled for this group. */
+    readonly dynamicStreamers?: readonly string[];
   }>;
 };
 
@@ -630,7 +641,7 @@ const writeVtbSubscriptionNames = async (renames: ReadonlyMap<string, string>) =
 
   const source = await readVtbSubscriptionConfig();
   let changed = false;
-  const updated = source.replace(/^(streamers|atAllStreamers)[ \t]*=[ \t]*(\[[^\r\n]*\])[ \t]*$/gm, (line, key: string, value: string) => {
+  const updated = source.replace(/^(streamers|atAllStreamers|dynamicStreamers)[ \t]*=[ \t]*(\[[^\r\n]*\])[ \t]*$/gm, (line, key: string, value: string) => {
     const parsed = Bun.TOML.parse(`${key} = ${value}`) as Record<string, unknown>;
     const names = parsed[key];
     if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) {
@@ -668,6 +679,7 @@ type VtbSubscriptionBlock = {
   text: string;
   streamers: string[];
   atAllStreamers?: string[];
+  dynamicStreamers?: string[];
 };
 
 const queueFf14PriceAlertUpdate = <T>(operation: () => Promise<T>) => {
@@ -742,7 +754,13 @@ const findVtbSubscriptionBlock = (source: string, groupId: string | number): Vtb
         throw new Error(`Invalid atAllStreamers for VTB subscription group ${groupId}`);
       }
       const atAllStreamers = rawAtAllStreamers as string[] | undefined;
-      return { start, end, text, streamers, atAllStreamers };
+      const rawDynamicStreamers = parseTomlAssignment(text, "dynamicStreamers");
+      if (rawDynamicStreamers !== undefined &&
+        (!Array.isArray(rawDynamicStreamers) || !rawDynamicStreamers.every((name) => typeof name === "string"))) {
+        throw new Error(`Invalid dynamicStreamers for VTB subscription group ${groupId}`);
+      }
+      const dynamicStreamers = rawDynamicStreamers as string[] | undefined;
+      return { start, end, text, streamers, atAllStreamers, dynamicStreamers };
     }
     start = nextStart;
   }
@@ -771,6 +789,13 @@ const replaceSubscriptionBlock = (
     updatedBlock = updatedBlock.replace(
       /^atAllStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m,
       `atAllStreamers = ${JSON.stringify(atAllStreamers)}`,
+    );
+  }
+  if (subscription.dynamicStreamers) {
+    const dynamicStreamers = subscription.dynamicStreamers.filter((name) => streamers.includes(name));
+    updatedBlock = updatedBlock.replace(
+      /^dynamicStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m,
+      `dynamicStreamers = ${JSON.stringify(dynamicStreamers)}`,
     );
   }
   return `${source.slice(0, subscription.start)}${updatedBlock}${source.slice(subscription.end)}`;

@@ -18,6 +18,7 @@ import { getGroupIds } from "@/group-ids";
 import { deliverUnsentNews, fetchFinanceNews, formatScheduledNewsItems } from "@/news";
 import { createExclusiveCronTask, type ScheduledTaskRuntime } from "@/scheduled-task";
 import { serializeError } from "@/errors";
+import { getBilibiliCredentialHeader } from "@/bilibili-credential";
 import { onFf14AlertChange } from "@/ff14-alert-runtime";
 import {
   onVtbSubscriptionChange,
@@ -531,15 +532,24 @@ const pollVtbSubscriptions = async (
   repository: Awaited<ReturnType<typeof getVtbRepository>>,
   pollState: VtbPollState,
 ) => {
-  const streamerGroups = new Map<string, Map<string, { groupId: string | number; atAll: boolean }>>();
+  const streamerGroups = new Map<string, Map<string, {
+    groupId: string | number;
+    atAll: boolean;
+    dynamic: boolean;
+  }>>();
   for (const subscription of config.vtb.subscriptions) {
     for (const streamer of subscription.streamers) {
-      const groups = streamerGroups.get(streamer) ?? new Map<string, { groupId: string | number; atAll: boolean }>();
+      const groups = streamerGroups.get(streamer) ?? new Map<string, {
+        groupId: string | number;
+        atAll: boolean;
+        dynamic: boolean;
+      }>();
       const groupKey = String(subscription.groupId);
       const existing = groups.get(groupKey);
       groups.set(groupKey, {
         groupId: existing?.groupId ?? subscription.groupId,
         atAll: existing?.atAll === true || subscription.atAllStreamers?.includes(streamer) === true,
+        dynamic: existing?.dynamic === true || subscription.dynamicStreamers?.includes(streamer) === true,
       });
       streamerGroups.set(streamer, groups);
     }
@@ -558,7 +568,7 @@ const pollVtbSubscriptions = async (
   try {
     const resolvedSubscriptions: Array<{
       streamerName: string;
-      groups: Map<string, { groupId: string | number; atAll: boolean }>;
+      groups: Map<string, { groupId: string | number; atAll: boolean; dynamic: boolean }>;
       streamer: VtbStreamer;
     }> = [];
     for (const [streamerName, groups] of streamerGroups) {
@@ -589,6 +599,12 @@ const pollVtbSubscriptions = async (
       resolvedSubscriptions.map((subscription) => subscription.streamer.mid),
     ));
     const now = Date.now();
+    // Dynamic feeds and card metadata require the persisted Bilibili login.
+    // Treat a missing or temporarily unreadable credential as a quiet skip so
+    // the scheduled task does not repeatedly print card-authentication errors.
+    const hasBilibiliCredential = await getBilibiliCredentialHeader()
+      .then((header) => Boolean(header))
+      .catch(() => false);
     const cardCacheMs = config.vtb.cardCacheMinutes * 60_000;
     const liveNameChangedMids = new Set(
       resolvedSubscriptions.flatMap(({ streamer }) => {
@@ -603,7 +619,7 @@ const pollVtbSubscriptions = async (
       return liveNameChangedMids.has(mid) || !cached || cached.expiresAt <= now;
     });
     let refreshedCards = new Map<string, VtbCardInfo>();
-    if (cardRefreshMids.length > 0) {
+    if (hasBilibiliCredential && cardRefreshMids.length > 0) {
       try {
         refreshedCards = await getVtbCardInfos(cardRefreshMids, config.vtb);
         for (const mid of cardRefreshMids) {
@@ -646,9 +662,15 @@ const pollVtbSubscriptions = async (
       }]),
     );
 
-    const uniqueDynamicSubscriptions = Array.from(
-      new Map(resolvedSubscriptions.map((subscription) => [subscription.streamer.mid, subscription])).values(),
-    );
+    const uniqueDynamicSubscriptions = hasBilibiliCredential
+      ? Array.from(
+          new Map(
+            resolvedSubscriptions
+              .filter((subscription) => [...subscription.groups.values()].some((group) => group.dynamic))
+              .map((subscription) => [subscription.streamer.mid, subscription]),
+          ).values(),
+        )
+      : [];
     const dynamicSubscriptions = selectVtbDynamicPollBatch(
       uniqueDynamicSubscriptions,
       pollState,

@@ -23,7 +23,9 @@ const VTB_RISK_COOLDOWN_MS = 30 * 60_000;
 const VTB_TRANSIENT_COOLDOWN_MS = 15 * 60_000;
 const VTB_TRANSIENT_FAILURE_THRESHOLD = 3;
 const VTB_JSON_REQUEST_INTERVAL_MS = 250;
-const VTB_DYNAMIC_REQUEST_INTERVAL_MS = 750;
+// Dynamic feeds are the most numerous VTB requests. Keep a deliberately
+// conservative per-host interval and add jitter in the shared request queue.
+const VTB_DYNAMIC_REQUEST_INTERVAL_MS = 2_000;
 const VTB_LIVE_QUERY_CACHE_MS = 60_000;
 const VTB_IMAGE_CACHE_MS = 10 * 60_000;
 const MAX_VTB_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -1755,7 +1757,7 @@ const getVtbCardCacheKey = (config: VtbConfig, mid: string) =>
   `${config.cardApiUrl}\n${mid}`;
 
 const getVtbDynamicQueryCacheMs = (config: VtbConfig) =>
-  Math.max(60_000, Math.min(10 * 60_000, (config.dynamicPollMinutes ?? 15) * 30_000));
+  Math.max(5 * 60_000, Math.min(30 * 60_000, (config.dynamicPollMinutes ?? 15) * 60_000));
 
 const createCardApiUrl = (apiUrl: string, mids: readonly string[]) => {
   const url = new URL(apiUrl);

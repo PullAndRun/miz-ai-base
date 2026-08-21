@@ -21,6 +21,12 @@ const privateMessage = {
   raw: {},
 };
 
+const groupMessage = {
+  groupId: 100,
+  userId: 1,
+  raw: {},
+};
+
 describe("VTB subscription commands", () => {
   test("requires the VTB admin whitelist for Bilibili login", async () => {
     const config = createConfig([]);
@@ -56,6 +62,24 @@ describe("VTB subscription commands", () => {
     } as never);
 
     expect(replyText.length).toBeGreaterThan(0);
+  });
+
+  test.each(["login", "logout"])("allows VTB %s only in private chat", async (type) => {
+    const config = createConfig([]);
+    config.vtb.adminWhitelistUserIds = [1];
+    let replyText = "";
+    const plugin = createVtbPlugin();
+
+    await plugin.handle!({
+      command: { name: "vtb", args: type, raw: `vtb ${type}` },
+      config,
+      message: groupMessage,
+      reply: async (message: unknown) => {
+        replyText = String(message);
+      },
+    } as never);
+
+    expect(replyText).toContain("私聊");
   });
 
   test("list reads subscriptions persisted after the runtime snapshot", async () => {
