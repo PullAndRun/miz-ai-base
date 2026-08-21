@@ -140,7 +140,7 @@ export const createVtbPlugin = ({
       (!config.vtb.userApiUrl || !config.vtb.cardApiUrl || !config.vtb.liveApiUrl ||
         !config.vtb.webUrl || !config.vtb.liveWebUrl);
     const missingDynamicApi = type === "dynamic" &&
-      (!config.vtb.userApiUrl || !config.vtb.dynamicApiUrl || !config.vtb.webUrl);
+      (!config.vtb.userApiUrl || !config.vtb.webUrl);
     const missingSyncApi = type === "sync" &&
       (!config.vtb.userApiUrl || !config.vtb.cardApiUrl || !config.vtb.liveApiUrl || !config.vtb.webUrl);
     if (missingLiveApi || missingDynamicApi || missingSyncApi) {

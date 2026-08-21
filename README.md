@@ -130,7 +130,7 @@ Docker 模式最后再合并：
 
 对象字段会递归合并，数组会整体替换。`ff14.toml`、`vtb.toml` 和 `app.local.toml` 都是可选文件；`app.toml` 始终必需。
 
-通用外部 API URL 放在 `app.toml`。`ff14.toml` 只保存低价提醒目标，`vtb.toml` 只保存群订阅；本机网关、数据库、代理、RSSHub 等环境相关地址继续放在 `app.local.toml`，Docker 地址放在 `app.docker.toml`。
+通用外部 API URL 放在 `app.toml`。`ff14.toml` 只保存低价提醒目标，`vtb.toml` 只保存群订阅；本机网关、数据库和代理等环境相关地址继续放在 `app.local.toml`，Docker 地址放在 `app.docker.toml`。
 
 运行期间修改 `config` 目录中的 TOML 文件，会重新加载插件和定时任务配置。如果修改了网关地址、NapLink 连接参数等连接级配置，建议重启进程以确保完全生效。
 
@@ -143,7 +143,6 @@ Docker 模式最后再合并：
 | `[miz.naplink]` | 日志级别、连接超时、心跳、API 超时和 API 重试次数；网关断线后会持续自动重连，直至恢复连接。 |
 | `[miz.plugins]` | 命令前缀和插件目录，默认分别为 `miz`、`plugins`。 |
 | `[miz.network]` | 供视频和 VTB 请求使用的代理地址 `proxyUrl`。 |
-| `[miz.bilibili]` | B 站 Cookie，供视频下载和 VTB 接口请求复用。 |
 | `[miz.reminder]` | 提醒轮询、批量处理数量和管理白名单。 |
 | `[miz.schedule]` | 群日程轮询、提前提醒分钟数和管理白名单。 |
 | `[miz.activity]` | 活动提醒、人数上限、批量处理数量和管理白名单。 |
@@ -173,6 +172,7 @@ atAllStreamers = ["主播甲"]
 
 - `streamers` 中的主播会推送开播和下播。
 - 只有同时出现在 `streamers` 和 `dynamicStreamers` 中的主播才会轮询并推送最新动态。
+- 动态轮询直连 Bilibili 接口，复用 `miz vtb login` 保存的凭据；未登录时会跳过动态轮询。
 - `atAllStreamers` 只影响开播通知。
 - 只有机器人是群主或管理员，且该 QQ 账号在群内仍有可用的 `@全体成员` 次数时才会真正 `@全体`；否则发送普通通知。
 - 动态和下播通知不会 `@全体`。
@@ -189,14 +189,13 @@ docker network create diana
 docker compose up -d
 ```
 
-如使用其他网络名称，请同步修改 Compose。NapCat、PostgreSQL、代理或 RSSHub 等依赖服务也需要加入同一网络，或者在 `config/app.docker.toml` 中填写容器能够访问的地址。
+如使用其他网络名称，请同步修改 Compose。NapCat、PostgreSQL、代理等依赖服务也需要加入同一网络，或者在 `config/app.docker.toml` 中填写容器能够访问的地址。
 
 首次执行 `bun run start:docker` 时，会根据 `config/example/app.docker.toml` 自动创建最小的 `config/app.docker.toml`：
 
 - NapCat：`ws://napcat-miz:3000`
 - PostgreSQL：`http://postgresql:5432`
 - 代理：`http://clash:7890`
-- VTB 动态 RSSHub：`http://rsshub:1200/bilibili/user/dynamic/`
 
 这些名称只是默认容器名，请按实际环境修改。文件创建后不会被后续启动覆盖。
 
@@ -266,7 +265,7 @@ napcatMediaDirectory = "/app/media"
 
 | 任务 | 默认计划 |
 | --- | --- |
-| 每日壁纸 | 每天 07:00，发送到机器人所在的全部群。 |
+| 每日壁纸 | 每天 08:00，发送到机器人所在的全部群。 |
 | 财经新闻 | 每 5 分钟检查配置群的新内容。 |
 | 单次与循环提醒 | 每分钟检查，单批默认处理 20 条。 |
 | 群日程 | 每分钟检查，默认提前 30 分钟提醒。 |

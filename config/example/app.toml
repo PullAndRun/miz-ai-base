@@ -33,7 +33,7 @@ marketApiUrl = ""
 
 [miz.wallpaper]
 enabled = true
-cron = "0 7 * * *"
+cron = "0 8 * * *"
 apiUrl = "https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN"
 imageBaseUrl = "https://www.bing.com"
 
@@ -106,7 +106,6 @@ cardCacheMinutes = 30
 userApiUrl = ""
 cardApiUrl = ""
 liveApiUrl = ""
-dynamicApiUrl = ""
 webUrl = "https://www.bilibili.com"
 liveWebUrl = "https://live.bilibili.com"
 nameSyncCron = "0 0 * * 0"

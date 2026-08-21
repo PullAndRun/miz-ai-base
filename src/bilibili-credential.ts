@@ -81,7 +81,7 @@ export const pollBilibiliQrLogin = async (qrcodeKey: string, proxyUrl = ""): Pro
     throw new Error(`Bilibili QR login failed: code ${String(code ?? "unknown")}`);
   }
 
-  const credential = parseLoginUrlCredential(loginUrl, refreshToken);
+  const credential = await resolveQrLoginCredential(loginUrl, refreshToken, proxyUrl);
   await saveBilibiliCredential(credential);
   return { status: "done", credential };
 };
@@ -152,16 +152,88 @@ const bilibiliFetch = async (url: string | URL, proxyUrl: string, init: RequestI
   retryRateLimited: false,
 });
 
-const parseLoginUrlCredential = (loginUrl: string, refreshToken: string): BilibiliCredential => {
+const resolveQrLoginCredential = async (loginUrl: string, refreshToken: string, proxyUrl: string) => {
   const values = new URL(loginUrl).searchParams;
-  const sessdata = values.get("SESSDATA");
+  const direct = normalizeCredentialFromValues(values, refreshToken);
+  if (direct) {
+    return direct;
+  }
+
+  const cookies = await exchangeQrLoginTicket(loginUrl, proxyUrl);
+  const sessdata = cookies.SESSDATA;
   if (!sessdata) throw new Error("Bilibili QR login did not return SESSDATA");
+  return normalizeCredential({
+    sessdata,
+    biliJct: cookies.bili_jct,
+    buvid3: cookies.buvid3,
+    buvid4: cookies.buvid4,
+    dedeUserId: cookies.DedeUserID,
+    acTimeValue: refreshToken,
+    extraCookies: Object.fromEntries(
+      Object.entries(cookies).filter(([key]) => !["SESSDATA", "bili_jct", "buvid3", "buvid4", "DedeUserID"].includes(key)),
+    ),
+  });
+};
+
+const normalizeCredentialFromValues = (values: URLSearchParams, refreshToken: string) => {
+  const sessdata = values.get("SESSDATA");
+  if (!sessdata) {
+    return undefined;
+  }
   return normalizeCredential({
     sessdata,
     biliJct: values.get("bili_jct") ?? undefined,
     dedeUserId: values.get("DedeUserID") ?? undefined,
     acTimeValue: refreshToken,
   });
+};
+
+const exchangeQrLoginTicket = async (loginUrl: string, proxyUrl: string) => {
+  const cookies: Record<string, string> = {};
+  let currentUrl = loginUrl;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const response = await bilibiliFetchManualRedirect(currentUrl, proxyUrl);
+    for (const header of getSetCookieHeaders(response.headers)) {
+      const separator = header.indexOf(";");
+      const pair = separator < 0 ? header : header.slice(0, separator);
+      const equals = pair.indexOf("=");
+      if (equals <= 0) continue;
+      const name = pair.slice(0, equals).trim();
+      const rawValue = pair.slice(equals + 1).trim();
+      if (!name || !rawValue) continue;
+      try {
+        cookies[name] = decodeURIComponent(rawValue);
+      } catch {
+        cookies[name] = rawValue;
+      }
+    }
+
+    const location = response.headers.get("location");
+    if (!location) break;
+    const nextUrl = new URL(location, currentUrl);
+    if (!/^https?:$/.test(nextUrl.protocol)) break;
+    if (!/^(?:passport\.)?bilibili(?:\.com|\.cn)$|^passport\.biligame\.com$/.test(nextUrl.hostname)) break;
+    currentUrl = nextUrl.href;
+  }
+  return cookies;
+};
+
+const bilibiliFetchManualRedirect = async (url: string, proxyUrl: string) => fetch(url, {
+  redirect: "manual",
+  headers: BILIBILI_HEADERS,
+  ...(proxyUrl ? { proxy: proxyUrl } : {}),
+  signal: AbortSignal.timeout(BILIBILI_TIMEOUT_MS),
+});
+
+const getSetCookieHeaders = (headers: Headers) => {
+  const extendedHeaders = headers as Headers & { getSetCookie?: () => string[] };
+  const values = extendedHeaders.getSetCookie?.();
+  if (values && values.length > 0) {
+    return values;
+  }
+  const combined = headers.get("set-cookie");
+  if (!combined) return [];
+  return combined.split(/,\s*(?=[^;,=\s]+\s*=)/g);
 };
 
 const normalizeCredential = (value: unknown): BilibiliCredential => {

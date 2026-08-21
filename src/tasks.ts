@@ -1359,7 +1359,6 @@ const hasVtbApiEndpoints = (config: MizConfig["vtb"]) =>
     config.userApiUrl &&
     config.cardApiUrl &&
     config.liveApiUrl &&
-    config.dynamicApiUrl &&
     config.webUrl &&
     config.liveWebUrl
   );

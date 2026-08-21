@@ -59,6 +59,39 @@ describe("Bilibili live lookup", () => {
     expect(referers).toEqual(["https://www.example.test/"]);
   });
 
+  test("caches successful user searches to avoid repeated anti-risk requests", async () => {
+    let calls = 0;
+    const originalRandom = Math.random;
+    Math.random = () => 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({
+        code: 0,
+        data: { result: [{ uname: "缓存主播", mid: "456", room_id: 789 }] },
+      }));
+    }) as unknown as typeof fetch;
+
+    try {
+      const searchConfig = {
+        ...config,
+        userApiUrl: "https://cached-search.example.test/users?name=",
+      };
+      await expect(resolveVtbStreamer("缓存主播", searchConfig)).resolves.toEqual({
+        name: "缓存主播",
+        mid: "456",
+        roomId: "789",
+      });
+      await expect(resolveVtbStreamer("缓存主播", searchConfig)).resolves.toEqual({
+        name: "缓存主播",
+        mid: "456",
+        roomId: "789",
+      });
+      expect(calls).toBe(1);
+    } finally {
+      Math.random = originalRandom;
+    }
+  });
+
   test("treats an omitted user without a live room as offline", async () => {
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ code: 0, data: [] }))) as unknown as typeof fetch;

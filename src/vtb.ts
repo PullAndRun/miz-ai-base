@@ -1,5 +1,4 @@
 import dayjs from "dayjs";
-import { XMLParser } from "fast-xml-parser";
 import { createHash } from "node:crypto";
 import {
   PrismaClient,
@@ -14,7 +13,7 @@ import { createExpiringCache, readExpiringCache, writeExpiringCache } from "@/ca
 import { getBilibiliCredentialHeader } from "@/bilibili-credential";
 import type { MizConfig, VtbConfig } from "@/config";
 import { createDatabaseClient, getDatabaseUrl } from "@/database";
-import { fetchWithRetry, readResponseBytes, readResponseJson, readResponseText } from "@/http";
+import { fetchWithRetry, readResponseBytes, readResponseJson } from "@/http";
 import { partitionVtbSubscriptionsByGroup } from "@/vtb-subscriptions";
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -23,6 +22,11 @@ const VTB_RISK_COOLDOWN_MS = 30 * 60_000;
 const VTB_TRANSIENT_COOLDOWN_MS = 15 * 60_000;
 const VTB_TRANSIENT_FAILURE_THRESHOLD = 3;
 const VTB_JSON_REQUEST_INTERVAL_MS = 250;
+// User-name search is the most sensitive endpoint and is only needed when a
+// streamer is not already present in the local VTB repository.
+const VTB_USER_SEARCH_REQUEST_INTERVAL_MS = 5_000;
+const VTB_USER_SEARCH_CACHE_MS = 6 * 60 * 60_000;
+const VTB_USER_SEARCH_MISS_CACHE_MS = 10 * 60_000;
 // Dynamic feeds are the most numerous VTB requests. Keep a deliberately
 // conservative per-host interval and add jitter in the shared request queue.
 const VTB_DYNAMIC_REQUEST_INTERVAL_MS = 2_000;
@@ -33,7 +37,8 @@ const MAX_VTB_RESPONSE_BYTES = 5 * 1024 * 1024;
 const MAX_VTB_IMAGE_CACHE_ENTRIES = 16;
 const MAX_VTB_QUERY_CACHE_ENTRIES = 1_000;
 const VTB_RISK_CODES = new Set([-352, -412, -509, -799]);
-const textValueSchema = z.union([z.string(), z.number(), z.boolean()]);
+const BILIBILI_DYNAMIC_API_URL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space";
+const BILIBILI_DYNAMIC_FEATURES = "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote";
 
 const userSchema = z.looseObject({
   uname: z.string().min(1),
@@ -71,23 +76,11 @@ const liveResponseSchema = z.looseObject({
   code: z.number(),
   data: z.unknown().optional(),
 });
-const dynamicSchema = z.object({
-  rss: z.object({
-    channel: z.object({
-      image: z.object({ url: z.string() }),
-      item: z
-        .array(
-          z.object({
-            title: textValueSchema,
-            description: textValueSchema,
-            pubDate: z.string(),
-            link: z.string(),
-            author: z.string(),
-          }),
-        )
-        .min(1),
-    }),
-  }),
+const dynamicResponseSchema = z.looseObject({
+  code: z.number(),
+  data: z.looseObject({
+    items: z.array(z.unknown()).optional().default([]),
+  }).nullish(),
 });
 
 export type VtbStreamer = { name: string; mid: string; roomId?: string };
@@ -128,13 +121,6 @@ type ScheduleEventClaim = ScheduleEvent & { claimedAt: Date };
 type ActivityClaim = Activity & { claimedAt: Date; registrations: ActivityRegistration[] };
 type GroupTodoClaim = GroupTodo & { claimedAt: Date };
 
-const xmlParser = new XMLParser({
-  ignoreAttributes: false,
-  parseTagValue: false,
-  trimValues: true,
-  isArray: (_name, jPath) => jPath === "rss.channel.item",
-});
-
 let repositoryPromise: Promise<VtbRepository> | undefined;
 const vtbRequestStates = new Map<string, {
   consecutiveFailures: number;
@@ -146,6 +132,7 @@ const vtbInFlightRequests = new Map<string, Promise<unknown>>();
 let vtbLiveQueryCache = createExpiringCache<string, VtbLiveInfo>(MAX_VTB_QUERY_CACHE_ENTRIES);
 let vtbCardQueryCache = createExpiringCache<string, VtbCardInfo>(MAX_VTB_QUERY_CACHE_ENTRIES);
 let vtbDynamicQueryCache = createExpiringCache<string, VtbDynamicFeed>(MAX_VTB_QUERY_CACHE_ENTRIES);
+let vtbUserSearchCache = createExpiringCache<string, VtbStreamer | null>(MAX_VTB_QUERY_CACHE_ENTRIES);
 let vtbImageCache = createExpiringCache<string, string>(MAX_VTB_IMAGE_CACHE_ENTRIES);
 
 export const getVtbRepository = async (config: MizConfig) => {
@@ -170,6 +157,13 @@ export const closeVtbRepository = async () => {
 };
 
 export const resolveVtbStreamer = async (name: string, config: VtbConfig): Promise<VtbStreamer | undefined> => {
+  const cacheKey = `${config.userApiUrl}\n${name}`;
+  const cacheRead = readExpiringCache(vtbUserSearchCache, cacheKey, Date.now());
+  vtbUserSearchCache = cacheRead.cache;
+  if (cacheRead.value !== undefined) {
+    return cacheRead.value ?? undefined;
+  }
+
   const url = `${config.userApiUrl}${encodeURIComponent(name)}`;
   const cookie = await getBilibiliCredentialHeader();
   const response = userResponseSchema.parse(
@@ -179,14 +173,23 @@ export const resolveVtbStreamer = async (name: string, config: VtbConfig): Promi
       cookie ? { Cookie: cookie } : undefined,
       undefined,
       config.proxyUrl,
+      VTB_USER_SEARCH_REQUEST_INTERVAL_MS,
     ),
   );
   assertVtbApiSuccess(url, "user", response.code);
 
   const user = response.data.result.find((item) => item.uname === name);
-  return user
+  const streamer = user
     ? { name: user.uname, mid: String(user.mid), roomId: normalizeRoomId(user.room_id) }
     : undefined;
+  vtbUserSearchCache = writeExpiringCache(
+    vtbUserSearchCache,
+    cacheKey,
+    streamer ?? null,
+    streamer ? VTB_USER_SEARCH_CACHE_MS : VTB_USER_SEARCH_MISS_CACHE_MS,
+    Date.now(),
+  );
+  return streamer;
 };
 
 export const resolveTrackedVtbStreamer = async (
@@ -474,37 +477,46 @@ export const getVtbLiveInfos = async (streamers: readonly VtbStreamer[], config:
 export const getVtbDynamics = async (
   streamer: VtbStreamer,
   config: VtbConfig,
-  retryCount = 0,
+  _retryCount = 0,
 ): Promise<VtbDynamicFeed> => {
-  const dynamicUrl = `${config.dynamicApiUrl}${encodeURIComponent(streamer.mid)}`;
-  const cacheRead = readExpiringCache(vtbDynamicQueryCache, dynamicUrl, Date.now());
+  const cookie = await getBilibiliCredentialHeader();
+  if (!cookie) {
+    throw new Error("Bilibili dynamic API requires a logged-in credential");
+  }
+
+  const cacheKey = `${BILIBILI_DYNAMIC_API_URL}\n${streamer.mid}`;
+  const cacheRead = readExpiringCache(vtbDynamicQueryCache, cacheKey, Date.now());
   vtbDynamicQueryCache = cacheRead.cache;
   const cached = cacheRead.value;
   if (cached) {
     return cached;
   }
-  const channel = dynamicSchema.parse(xmlParser.parse(await fetchDynamicText(dynamicUrl, retryCount, config.proxyUrl))).rss.channel;
-  const feed = {
-    avatarUrl: channel.image.url,
-    items: channel.item
-      .map((item) => {
-        const description = cleanDynamicText(String(item.description));
-        const dynamicUrl = formatDynamicUrl(item.link, config.webUrl);
-        return {
-          title: String(item.title),
-          description: truncateDynamicText(description),
-          containsDynamicUrl: description.includes(item.link) || description.includes(dynamicUrl),
-          publishedAt: parseRssDate(item.pubDate),
-          link: item.link,
-          author: item.author,
-        };
-      })
-      .filter((item): item is VtbDynamic => item.publishedAt !== undefined)
-      .sort((left, right) => right.publishedAt.getTime() - left.publishedAt.getTime()),
-  };
+
+  const query = new URLSearchParams({
+    offset: "",
+    host_mid: streamer.mid,
+    platform: "web",
+    features: BILIBILI_DYNAMIC_FEATURES,
+    dm_img_list: createDmImgList(),
+    dm_img_str: createDmImgToken(),
+    dm_cover_img_str: createDmImgToken(),
+  });
+  const dynamicUrl = `${BILIBILI_DYNAMIC_API_URL}?${query.toString()}`;
+  const response = dynamicResponseSchema.parse(
+    await fetchJson(
+      dynamicUrl,
+      config.webUrl,
+      { Cookie: cookie },
+      { headers: { Referer: `https://space.bilibili.com/${streamer.mid}/` } },
+      config.proxyUrl,
+      VTB_DYNAMIC_REQUEST_INTERVAL_MS,
+    ),
+  );
+  assertVtbApiSuccess(dynamicUrl, "dynamic", response.code);
+  const feed = parseBilibiliDynamicFeed(response.data?.items ?? [], streamer.name, config.webUrl);
   vtbDynamicQueryCache = writeExpiringCache(
     vtbDynamicQueryCache,
-    dynamicUrl,
+    cacheKey,
     feed,
     getVtbDynamicQueryCacheMs(config),
     Date.now(),
@@ -1517,6 +1529,7 @@ const fetchJson = async (
   headers?: Record<string, string>,
   init?: RequestInit,
   proxyUrl = "",
+  minimumIntervalMs = VTB_JSON_REQUEST_INTERVAL_MS,
 ) => {
   const requestInit: RequestInit = {
     ...init,
@@ -1525,7 +1538,7 @@ const fetchJson = async (
   return runProtectedVtbRequest(
     url,
     requestInit,
-    VTB_JSON_REQUEST_INTERVAL_MS,
+    minimumIntervalMs,
     async () => {
       const response = await fetchWithRetry(url, {
         ...requestInit,
@@ -1540,27 +1553,6 @@ const fetchJson = async (
     },
   );
 };
-
-const fetchText = async (url: string, proxyUrl = "") => {
-  const text = await runProtectedVtbRequest(
-    url,
-    undefined,
-    VTB_DYNAMIC_REQUEST_INTERVAL_MS,
-    async () => {
-      const response = await fetchWithRetry(url, {
-        timeoutMs: FETCH_TIMEOUT_MS,
-        retryCount: 0,
-        retryRateLimited: false,
-        ...(proxyUrl ? { proxy: proxyUrl } : {}),
-      });
-      return readResponseText(response, MAX_VTB_RESPONSE_BYTES);
-    },
-  );
-  recordVtbRequestSuccess(url);
-  return text;
-};
-
-const fetchDynamicText = async (url: string, _retryCount: number, proxyUrl = "") => fetchText(url, proxyUrl);
 
 const runProtectedVtbRequest = async <T>(
   url: string,
@@ -1800,6 +1792,139 @@ const extractCardRecords = (value: unknown): unknown[] => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+const asRecord = (value: unknown) => isRecord(value) ? value : undefined;
+
+export const parseBilibiliDynamicFeed = (
+  items: readonly unknown[],
+  fallbackAuthor: string,
+  webUrl: string,
+): VtbDynamicFeed => {
+  const parsed = items
+    .map((item) => parseBilibiliDynamicItem(item, fallbackAuthor, webUrl))
+    .filter((item): item is { dynamic: VtbDynamic; avatarUrl?: string } => item !== undefined)
+    .sort((left, right) => right.dynamic.publishedAt.getTime() - left.dynamic.publishedAt.getTime());
+
+  return {
+    avatarUrl: parsed.find((item) => item.avatarUrl)?.avatarUrl ?? "",
+    items: parsed.map((item) => item.dynamic),
+  };
+};
+
+const parseBilibiliDynamicItem = (
+  value: unknown,
+  fallbackAuthor: string,
+  webUrl: string,
+): { dynamic: VtbDynamic; avatarUrl?: string } | undefined => {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const modules = asRecord(value.modules);
+  const author = asRecord(modules?.module_author);
+  const dynamic = asRecord(modules?.module_dynamic);
+  const major = asRecord(dynamic?.major);
+  const id = firstText(value.id_str, value.id);
+  const rawLink = firstText(
+    value.uri,
+    value.link,
+    getTextAt(major?.opus, "jump_url"),
+    getTextAt(major?.archive, "jump_url"),
+  );
+  const link = normalizeBilibiliDynamicLink(rawLink, id);
+  const publishedAt = parseBilibiliDate(
+    author?.pub_ts ?? author?.pub_time ?? value.pub_ts ?? value.pub_time,
+  );
+  if (!link || !publishedAt) {
+    return undefined;
+  }
+
+  const description = truncateDynamicText(cleanDynamicText([
+    getTextAt(dynamic?.desc, "text"),
+    getTextAt(major?.archive, "desc"),
+    getTextAt(major?.article, "desc"),
+    getTextAt(major?.article, "summary"),
+    getTextAt(major?.opus, "summary", "text"),
+    getTextAt(major?.common, "desc"),
+    getTextAt(major?.live, "desc_first"),
+    getTextAt(major?.live, "desc_second"),
+  ].filter(Boolean).join("\n")));
+  const formattedLink = formatDynamicUrl(link, webUrl);
+  const authorName = firstText(author?.name) || fallbackAuthor;
+  const title = firstText(
+    getTextAt(major?.archive, "title"),
+    getTextAt(major?.article, "title"),
+    getTextAt(major?.opus, "title"),
+    getTextAt(major?.common, "title"),
+    getTextAt(major?.live, "title"),
+    getTextAt(major?.opus, "summary", "text"),
+    getTextAt(dynamic?.desc, "text"),
+  ) || "B站动态";
+
+  return {
+    dynamic: {
+      title,
+      description,
+      containsDynamicUrl: description.includes(link) || description.includes(formattedLink),
+      publishedAt,
+      link,
+      author: authorName,
+    },
+    avatarUrl: cleanImageUrl(firstText(author?.face)),
+  };
+};
+
+const firstText = (...values: unknown[]) => {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+  }
+  return undefined;
+};
+
+const getTextAt = (value: unknown, ...path: string[]) => {
+  let current = value;
+  for (const key of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[key];
+  }
+  return firstText(current);
+};
+
+const normalizeBilibiliDynamicLink = (value: string | undefined, id: string | undefined) => {
+  if (value) {
+    if (value.startsWith("//")) return `https:${value}`;
+    if (value.startsWith("/")) return `https://www.bilibili.com${value}`;
+    if (/^https?:\/\//i.test(value)) return value;
+  }
+  return id ? `https://t.bilibili.com/${id}` : undefined;
+};
+
+const parseBilibiliDate = (value: unknown) => {
+  if (typeof value === "number") {
+    return parseDate(value);
+  }
+  if (typeof value === "string" && /^\d+(?:\.\d+)?$/.test(value.trim())) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? parseDate(numeric > 10_000_000_000 ? numeric / 1_000 : numeric) : undefined;
+  }
+  return typeof value === "string" ? parseDate(value) : undefined;
+};
+
+const createDmImgToken = () => Buffer.from("no webgl").toString("base64").slice(0, -2);
+
+const createDmImgList = () => {
+  const x = Math.max(Math.round(1_245 + (Math.random() * 2 - 1) * 5), 0);
+  const y = Math.max(Math.round(1_285 + (Math.random() * 2 - 1) * 5), 0);
+  const timestamp = Math.max(Math.round(30 + (Math.random() * 2 - 1) * 5), 0);
+  return JSON.stringify([{ x: 3 * x + 2 * y, y: 4 * x - 5 * y, z: 0, timestamp, type: 0 }]);
+};
+
 const normalizeRoomId = (value: string | number | bigint | null | undefined) => {
   if (value === undefined || value === null) return undefined;
   const roomId = String(value);
@@ -1859,11 +1984,6 @@ const cleanImageUrl = (value: string | null | undefined) => {
 const parseDate = (value: string | number | undefined) => {
   if (!value || value === "0000-00-00 00:00:00") return undefined;
   const date = typeof value === "number" ? new Date(value * 1000) : new Date(value);
-  return Number.isNaN(date.getTime()) ? undefined : date;
-};
-
-const parseRssDate = (value: string) => {
-  const date = new Date(value);
   return Number.isNaN(date.getTime()) ? undefined : date;
 };
 
