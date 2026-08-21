@@ -22,6 +22,10 @@ const toolsDirectory = path.resolve("tools");
 const githubHeaders = { Accept: "application/vnd.github+json", "User-Agent": "miz-tool-updater" };
 const NETWORK_TIMEOUT_MS = 30_000;
 const STARTUP_UPDATE_TIMEOUT_MS = 30_000;
+const YTDLP_MAX_BINARY_BYTES = 64 * 1024 * 1024;
+const YTDLP_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
+const YTDLP_PROGRESS_BYTES_STEP = 1024 * 1024;
+const YTDLP_PROGRESS_PERCENT_STEP = 5;
 type DependencyFetchInit = RequestInit & { proxy?: string };
 
 const fetchWithTimeout = (url: string, init: DependencyFetchInit = {}) =>
@@ -81,6 +85,92 @@ const calculateSha256 = async (filePath: string) => {
   return hasher.digest("hex");
 };
 
+const formatDownloadBytes = (bytes: number) => {
+  const mebibytes = bytes / 1024 / 1024;
+  return `${mebibytes.toFixed(mebibytes >= 10 ? 1 : 2)} MiB`;
+};
+
+const readYtDlpChunk = async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`yt-dlp download stalled for ${YTDLP_DOWNLOAD_IDLE_TIMEOUT_MS / 1000}s`)),
+          YTDLP_DOWNLOAD_IDLE_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+};
+
+const downloadYtDlpFile = async (
+  url: string,
+  destination: string,
+  proxyUrl: string,
+  platform: string,
+  assetName: string,
+) => {
+  const response = await fetchWithTimeout(url, proxyUrl ? { proxy: proxyUrl } : {});
+  if (!response.ok || !response.body) throw new Error(`yt-dlp download failed with HTTP ${response.status}`);
+  const contentLengthHeader = response.headers.get("content-length");
+  const parsedContentLength = contentLengthHeader ? Number(contentLengthHeader) : undefined;
+  const contentLength = parsedContentLength !== undefined &&
+      Number.isFinite(parsedContentLength) &&
+      parsedContentLength > 0
+    ? parsedContentLength
+    : undefined;
+  if (contentLength !== undefined && contentLength > YTDLP_MAX_BINARY_BYTES) {
+    throw new Error(`yt-dlp binary is too large: ${contentLength} bytes`);
+  }
+
+  const reader = response.body.getReader();
+  const writer = Bun.file(destination).writer();
+  let receivedBytes = 0;
+  let lastReportedBytes = -YTDLP_PROGRESS_BYTES_STEP;
+  let lastReportedPercentage = -YTDLP_PROGRESS_PERCENT_STEP;
+  const reportProgress = (done = false) => {
+    const percentage = contentLength === undefined
+      ? undefined
+      : Math.min(100, Math.floor(receivedBytes / contentLength * 100));
+    const reportDue = done || percentage === undefined
+      ? done || receivedBytes - lastReportedBytes >= YTDLP_PROGRESS_BYTES_STEP
+      : percentage - lastReportedPercentage >= YTDLP_PROGRESS_PERCENT_STEP;
+    if (!reportDue && !done) return;
+    const progress = percentage === undefined
+      ? formatDownloadBytes(receivedBytes)
+      : `${percentage}% (${formatDownloadBytes(receivedBytes)} / ${formatDownloadBytes(contentLength ?? 0)})`;
+    console.log(`yt-dlp ${platform}: ${done ? "downloaded" : "downloading"} ${assetName} ${progress}`);
+    lastReportedBytes = receivedBytes;
+    if (percentage !== undefined) lastReportedPercentage = percentage;
+  };
+
+  try {
+    reportProgress();
+    while (true) {
+      const { done, value } = await readYtDlpChunk(reader);
+      if (done) break;
+      receivedBytes += value.byteLength;
+      if (receivedBytes > YTDLP_MAX_BINARY_BYTES) {
+        throw new Error(`yt-dlp binary exceeded ${YTDLP_MAX_BINARY_BYTES} bytes`);
+      }
+      writer.write(value);
+      reportProgress();
+    }
+    await writer.end();
+    if (receivedBytes === 0) throw new Error("Downloaded yt-dlp binary is empty");
+    reportProgress(true);
+  } catch (error) {
+    reader.cancel().catch(() => undefined);
+    await Promise.resolve(writer.end()).catch(() => undefined);
+    await rm(destination, { force: true });
+    throw error;
+  }
+};
+
 const updateYtDlpBinaries = async (proxyUrl: string, arch: string) => {
   console.log("yt-dlp: checking latest release...");
   const release = await fetchJson("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest", proxyUrl);
@@ -120,10 +210,8 @@ const updateYtDlpBinaries = async (proxyUrl: string, arch: string) => {
       continue;
     }
     console.log(`yt-dlp ${platform}: downloading ${assetName}...`);
-    const response = await fetchWithTimeout(asset.browser_download_url, proxyUrl ? { proxy: proxyUrl } : {});
-    if (!response.ok || !response.body) throw new Error(`yt-dlp download failed with HTTP ${response.status}`);
     const staged = `${target}.install-${crypto.randomUUID()}`;
-    await Bun.write(staged, response);
+    await downloadYtDlpFile(asset.browser_download_url, staged, proxyUrl, platform, assetName);
     if (platform === "linux") await chmod(staged, 0o755);
     const backup = `${target}.backup-${crypto.randomUUID()}`;
     if (existing?.isFile()) await rename(target, backup);
