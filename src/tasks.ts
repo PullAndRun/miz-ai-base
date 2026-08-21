@@ -56,6 +56,19 @@ type VtbPollState = {
   cardInfos: Map<string, { fans?: number; avatarUrl?: string; expiresAt: number }>;
 };
 
+type VtbSubscriptionGroup = {
+  groupId: string | number;
+  atAll: boolean;
+  dynamic: boolean;
+  dynamicAtAll: boolean;
+};
+
+type VtbResolvedSubscription = {
+  streamerName: string;
+  groups: Map<string, VtbSubscriptionGroup>;
+  streamer: VtbStreamer;
+};
+
 export const getUndeliveredVtbLiveEndGroupIds = (
   currentGroupIds: readonly (string | number)[],
   liveDeliveredGroupIds: readonly string[],
@@ -532,24 +545,17 @@ const pollVtbSubscriptions = async (
   repository: Awaited<ReturnType<typeof getVtbRepository>>,
   pollState: VtbPollState,
 ) => {
-  const streamerGroups = new Map<string, Map<string, {
-    groupId: string | number;
-    atAll: boolean;
-    dynamic: boolean;
-  }>>();
+  const streamerGroups = new Map<string, Map<string, VtbSubscriptionGroup>>();
   for (const subscription of config.vtb.subscriptions) {
     for (const streamer of subscription.streamers) {
-      const groups = streamerGroups.get(streamer) ?? new Map<string, {
-        groupId: string | number;
-        atAll: boolean;
-        dynamic: boolean;
-      }>();
+      const groups = streamerGroups.get(streamer) ?? new Map<string, VtbSubscriptionGroup>();
       const groupKey = String(subscription.groupId);
       const existing = groups.get(groupKey);
       groups.set(groupKey, {
         groupId: existing?.groupId ?? subscription.groupId,
         atAll: existing?.atAll === true || subscription.atAllStreamers?.includes(streamer) === true,
         dynamic: existing?.dynamic === true || subscription.dynamicStreamers?.includes(streamer) === true,
+        dynamicAtAll: existing?.dynamicAtAll === true || subscription.dynamicAtAllStreamers?.includes(streamer) === true,
       });
       streamerGroups.set(streamer, groups);
     }
@@ -566,11 +572,7 @@ const pollVtbSubscriptions = async (
   >();
 
   try {
-    const resolvedSubscriptions: Array<{
-      streamerName: string;
-      groups: Map<string, { groupId: string | number; atAll: boolean; dynamic: boolean }>;
-      streamer: VtbStreamer;
-    }> = [];
+    const resolvedSubscriptions: VtbResolvedSubscription[] = [];
     for (const [streamerName, groups] of streamerGroups) {
       try {
         const streamer = await resolveTrackedVtbStreamer(streamerName, config.vtb, repository);
@@ -584,10 +586,16 @@ const pollVtbSubscriptions = async (
       }
     }
 
+    // A streamer can occur in several groups, and a nickname can temporarily
+    // differ between configuration and the database after a rename. Merge by
+    // stable MID before any polling or delivery work so each streamer is
+    // queried once and its feed is fanned out to all subscribed groups.
+    const uniqueStreamerSubscriptions = mergeVtbSubscriptionsByMid(resolvedSubscriptions);
+
     let liveInfos: Map<string, VtbLiveInfo>;
     try {
       liveInfos = await getVtbLiveInfos(
-        resolvedSubscriptions.map((subscription) => subscription.streamer),
+        uniqueStreamerSubscriptions.map((subscription) => subscription.streamer),
         config.vtb,
       );
     } catch (error) {
@@ -596,7 +604,7 @@ const pollVtbSubscriptions = async (
     }
 
     const streamerMids = Array.from(new Set(
-      resolvedSubscriptions.map((subscription) => subscription.streamer.mid),
+      uniqueStreamerSubscriptions.map((subscription) => subscription.streamer.mid),
     ));
     const now = Date.now();
     // Dynamic feeds and card metadata require the persisted Bilibili login.
@@ -607,7 +615,7 @@ const pollVtbSubscriptions = async (
       .catch(() => false);
     const cardCacheMs = config.vtb.cardCacheMinutes * 60_000;
     const liveNameChangedMids = new Set(
-      resolvedSubscriptions.flatMap(({ streamer }) => {
+      uniqueStreamerSubscriptions.flatMap(({ streamer }) => {
         const liveName = liveInfos.get(streamer.mid)?.name.trim();
         return liveName && liveName !== streamer.name ? [streamer.mid] : [];
       }),
@@ -635,7 +643,7 @@ const pollVtbSubscriptions = async (
     }
 
     const renamed = findVtbNameChanges(
-      resolvedSubscriptions.map((subscription) => subscription.streamer),
+      uniqueStreamerSubscriptions.map((subscription) => subscription.streamer),
       refreshedCards,
     );
     if (renamed.length > 0) {
@@ -643,7 +651,7 @@ const pollVtbSubscriptions = async (
         renamed.map((item) => [item.previousName, item.name]),
       ));
       const namesByMid = new Map(renamed.map((item) => [item.mid, item.name]));
-      for (const subscription of resolvedSubscriptions) {
+      for (const subscription of uniqueStreamerSubscriptions) {
         const latestName = namesByMid.get(subscription.streamer.mid);
         if (!latestName) {
           continue;
@@ -662,17 +670,13 @@ const pollVtbSubscriptions = async (
       }]),
     );
 
-    const uniqueDynamicSubscriptions = hasBilibiliCredential
-      ? Array.from(
-          new Map(
-            resolvedSubscriptions
-              .filter((subscription) => [...subscription.groups.values()].some((group) => group.dynamic))
-              .map((subscription) => [subscription.streamer.mid, subscription]),
-          ).values(),
+    const dynamicPollSubscriptions = hasBilibiliCredential
+      ? uniqueStreamerSubscriptions.filter((subscription) =>
+          [...subscription.groups.values()].some((group) => group.dynamic),
         )
       : [];
     const dynamicSubscriptions = selectVtbDynamicPollBatch(
-      uniqueDynamicSubscriptions,
+      dynamicPollSubscriptions,
       pollState,
       getVtbPollingIntervalMs(config.vtb.cron),
       config.vtb.dynamicPollMinutes * 60_000,
@@ -690,7 +694,7 @@ const pollVtbSubscriptions = async (
       dynamicSubscriptions.map((subscription, index) => [subscription.streamer.mid, dynamicTasks[index]]),
     );
 
-    for (const { streamerName, groups, streamer } of resolvedSubscriptions) {
+    for (const { streamerName, groups, streamer } of uniqueStreamerSubscriptions) {
       try {
         const groupIds = [...groups.values()].map((group) => group.groupId);
         const atAllGroupIds = new Set(
@@ -813,6 +817,16 @@ const pollVtbSubscriptions = async (
         if (!feed) {
           continue;
         }
+        const dynamicGroupEntries = [...groups.entries()].filter(([, group]) => group.dynamic);
+        const dynamicGroupIds = dynamicGroupEntries.map(([, group]) => group.groupId);
+        if (dynamicGroupIds.length === 0) {
+          continue;
+        }
+        const dynamicAtAllGroupIds = new Set(
+          dynamicGroupEntries
+            .filter(([, group]) => group.dynamicAtAll)
+            .map(([groupId]) => groupId),
+        );
         const latestDynamic = feed.items[0];
         if (!latestDynamic) {
           logger.warn("plugin", "vtb dynamic poll skipped: feed contains no valid dated item", {
@@ -831,7 +845,7 @@ const pollVtbSubscriptions = async (
             const deliveredGroupIds = isCurrentDynamic ? dynamicState.deliveredGroupIds : [];
             const undeliveredDynamicGroupIds = deliveredGroupIds.includes(ALL_GROUPS_DELIVERED_MARKER)
               ? []
-              : groupIds.filter((groupId) => !deliveredGroupIds.includes(String(groupId)));
+              : dynamicGroupIds.filter((groupId) => !deliveredGroupIds.includes(String(groupId)));
             if (undeliveredDynamicGroupIds.length === 0) {
               continue;
             }
@@ -853,6 +867,11 @@ const pollVtbSubscriptions = async (
               logger,
               "dynamic",
               streamer.name,
+              new Set(
+                [...dynamicAtAllGroupIds].filter((groupId) =>
+                  undeliveredDynamicGroupIds.some((id) => String(id) === groupId),
+                ),
+              ),
             );
             if (isNewDynamic) {
               await repository.startDynamicDelivery(streamer.mid, latestDynamic.publishedAt, deliveredGroups.map(String));
@@ -899,6 +918,33 @@ const selectVtbDynamicPollBatch = <T>(
   const batch = subscriptions.slice(cursor, cursor + batchSize);
   pollState.dynamicCursor = (cursor + batch.length) % subscriptions.length;
   return batch;
+};
+
+const mergeVtbSubscriptionsByMid = (
+  subscriptions: readonly VtbResolvedSubscription[],
+): VtbResolvedSubscription[] => {
+  const merged = new Map<string, VtbResolvedSubscription>();
+  for (const subscription of subscriptions) {
+    const existing = merged.get(subscription.streamer.mid);
+    if (!existing) {
+      merged.set(subscription.streamer.mid, {
+        ...subscription,
+        groups: new Map(subscription.groups),
+      });
+      continue;
+    }
+
+    for (const [groupId, group] of subscription.groups) {
+      const previous = existing.groups.get(groupId);
+      existing.groups.set(groupId, {
+        groupId: previous?.groupId ?? group.groupId,
+        atAll: previous?.atAll === true || group.atAll,
+        dynamic: previous?.dynamic === true || group.dynamic,
+        dynamicAtAll: previous?.dynamicAtAll === true || group.dynamicAtAll,
+      });
+    }
+  }
+  return [...merged.values()];
 };
 
 const sendVtbGroupMessage = async (

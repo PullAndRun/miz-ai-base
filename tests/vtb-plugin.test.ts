@@ -175,6 +175,85 @@ describe("VTB subscription commands", () => {
     expect(replyText).toContain("已开启 主播甲");
   });
 
+  test("dynamic command toggles delivery for a subscribed streamer", async () => {
+    const config = createConfig([{ groupId: 100, streamers: ["主播甲"] }]);
+    const calls: unknown[][] = [];
+    let replyText = "";
+    const plugin = createVtbPlugin({
+      setDynamicStreamer: async (...args) => {
+        calls.push(args);
+        return { changed: true, subscribed: true, dynamicStreamers: ["主播甲"] };
+      },
+      loadCurrentConfig: async () => config,
+    });
+
+    await plugin.handle!({
+      command: { name: "vtb", args: "dynamic enable 主播甲", raw: "vtb dynamic enable 主播甲" },
+      config,
+      message: adminMessage,
+      logger: { info: () => undefined },
+      reply: async (message: unknown) => {
+        replyText = String(message);
+      },
+    } as never);
+
+    expect(calls).toEqual([[100, "主播甲", true]]);
+    expect(replyText).toContain("动态推送已开启");
+  });
+
+  test("dynamic command accepts a VTB whitelist user but rejects ordinary members", async () => {
+    const config = createConfig([{ groupId: 100, streamers: ["主播甲"] }]);
+    config.vtb.adminWhitelistUserIds = [99];
+    let calls = 0;
+    const plugin = createVtbPlugin({
+      setDynamicStreamer: async () => {
+        calls += 1;
+        return { changed: true, subscribed: true, dynamicStreamers: [] };
+      },
+      loadCurrentConfig: async () => config,
+    });
+
+    await plugin.handle!({
+      command: { name: "vtb", args: "dynamic disable 主播甲", raw: "vtb dynamic disable 主播甲" },
+      config,
+      message: { groupId: 100, userId: 99, raw: {} },
+      logger: { info: () => undefined },
+      reply: async () => undefined,
+    } as never);
+    expect(calls).toBe(1);
+
+    await plugin.handle!({
+      command: { name: "vtb", args: "dynamic enable 主播甲", raw: "vtb dynamic enable 主播甲" },
+      config,
+      message: { groupId: 100, userId: 98, raw: {} },
+      logger: { info: () => undefined },
+      reply: async () => undefined,
+    } as never);
+    expect(calls).toBe(1);
+  });
+
+  test("dynamicatall command toggles dynamic @all independently", async () => {
+    const config = createConfig([{ groupId: 100, streamers: ["主播甲"] }]);
+    const calls: unknown[][] = [];
+    const plugin = createVtbPlugin({
+      setDynamicAtAllStreamer: async (...args) => {
+        calls.push(args);
+        return { changed: true, subscribed: true, dynamicAtAllStreamers: ["主播甲"] };
+      },
+      loadCurrentConfig: async () => config,
+    });
+
+    await plugin.handle!({
+      command: { name: "vtb", args: "dynamicatall enable 主播甲", raw: "vtb dynamicatall enable 主播甲" },
+      config,
+      message: adminMessage,
+      logger: { info: () => undefined },
+      reply: async () => undefined,
+    } as never);
+
+    expect(calls).toEqual([[100, "主播甲", true]]);
+  });
+
   test("publishes the latest subscriptions after a successful subscribe", async () => {
     const staleConfig = createConfig([]);
     const latestConfig = createConfig([{ groupId: 100, streamers: ["新主播"] }]);

@@ -164,6 +164,7 @@ const rawMizConfigSchema = z.object({
             streamers: z.array(nonEmptyStringSchema).min(1),
             atAllStreamers: z.array(nonEmptyStringSchema).optional(),
             dynamicStreamers: z.array(nonEmptyStringSchema).optional(),
+            dynamicAtAllStreamers: z.array(nonEmptyStringSchema).optional(),
           }),
         )
         .optional(),
@@ -293,6 +294,9 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
       ...(subscription.dynamicStreamers === undefined
         ? {}
         : { dynamicStreamers: subscription.dynamicStreamers.filter((name) => subscription.streamers.includes(name)) }),
+      ...(subscription.dynamicAtAllStreamers === undefined
+        ? {}
+        : { dynamicAtAllStreamers: subscription.dynamicAtAllStreamers.filter((name) => subscription.streamers.includes(name)) }),
     })),
   },
 }));
@@ -405,6 +409,8 @@ export type VtbConfig = {
     readonly atAllStreamers?: readonly string[];
     /** Streamers whose dynamic feed should be polled for this group. */
     readonly dynamicStreamers?: readonly string[];
+    /** Streamers whose dynamic notifications should mention every group member. */
+    readonly dynamicAtAllStreamers?: readonly string[];
   }>;
 };
 
@@ -525,6 +531,108 @@ export const setVtbAtAllStreamer = (
   };
 });
 
+export const setVtbDynamicStreamer = (
+  groupId: string | number,
+  streamerName: string,
+  enabled: boolean,
+) => queueVtbSubscriptionUpdate(async () => {
+  const source = await readVtbSubscriptionConfig();
+  const result = setVtbDynamicStreamerInSource(source, groupId, streamerName, enabled);
+  if (result.changed) {
+    await writeVtbSubscriptionConfig(result.source);
+  }
+  return {
+    changed: result.changed,
+    subscribed: result.subscribed,
+    dynamicStreamers: result.dynamicStreamers,
+  };
+});
+
+export const setVtbDynamicStreamerInSource = (
+  source: string,
+  groupId: string | number,
+  streamerName: string,
+  enabled: boolean,
+) => {
+  const subscription = findVtbSubscriptionBlock(source, groupId);
+  if (!subscription || !subscription.streamers.includes(streamerName)) {
+    return {
+      changed: false,
+      subscribed: false,
+      source,
+      dynamicStreamers: subscription?.dynamicStreamers ?? [],
+    };
+  }
+
+  const current = subscription.dynamicStreamers ?? [];
+  const alreadyEnabled = current.includes(streamerName);
+  if (alreadyEnabled === enabled) {
+    return { changed: false, subscribed: true, source, dynamicStreamers: current };
+  }
+
+  const dynamicStreamers = enabled
+    ? [...current, streamerName]
+    : current.filter((name) => name !== streamerName);
+  const updatedBlock = replaceDynamicStreamersInBlock(subscription.text, dynamicStreamers);
+  return {
+    changed: true,
+    subscribed: true,
+    source: `${source.slice(0, subscription.start)}${updatedBlock}${source.slice(subscription.end)}`,
+    dynamicStreamers,
+  };
+};
+
+export const setVtbDynamicAtAllStreamer = (
+  groupId: string | number,
+  streamerName: string,
+  enabled: boolean,
+) => queueVtbSubscriptionUpdate(async () => {
+  const source = await readVtbSubscriptionConfig();
+  const result = setVtbDynamicAtAllStreamerInSource(source, groupId, streamerName, enabled);
+  if (result.changed) {
+    await writeVtbSubscriptionConfig(result.source);
+  }
+  return {
+    changed: result.changed,
+    subscribed: result.subscribed,
+    dynamicAtAllStreamers: result.dynamicAtAllStreamers,
+  };
+});
+
+export const setVtbDynamicAtAllStreamerInSource = (
+  source: string,
+  groupId: string | number,
+  streamerName: string,
+  enabled: boolean,
+) => {
+  const subscription = findVtbSubscriptionBlock(source, groupId);
+  if (!subscription || !subscription.streamers.includes(streamerName)) {
+    return {
+      changed: false,
+      subscribed: false,
+      source,
+      dynamicAtAllStreamers: subscription?.dynamicAtAllStreamers ?? [],
+    };
+  }
+
+  const current = subscription.dynamicAtAllStreamers ?? [];
+  const alreadyEnabled = current.includes(streamerName);
+  if (alreadyEnabled === enabled) {
+    return { changed: false, subscribed: true, source, dynamicAtAllStreamers: current };
+  }
+
+  const dynamicAtAllStreamers = enabled
+    ? [...current, streamerName]
+    : current.filter((name) => name !== streamerName);
+  const updatedBlock = replaceDynamicAtAllStreamersInBlock(subscription.text, dynamicAtAllStreamers);
+  return {
+    changed: true,
+    subscribed: true,
+    source: `${source.slice(0, subscription.start)}${updatedBlock}${source.slice(subscription.end)}`,
+    dynamicAtAllStreamers,
+  };
+};
+
 export const setVtbAtAllStreamerInSource = (
   source: string,
   groupId: string | number,
@@ -638,7 +746,7 @@ const writeVtbSubscriptionNames = async (renames: ReadonlyMap<string, string>) =
 
   const source = await readVtbSubscriptionConfig();
   let changed = false;
-  const updated = source.replace(/^(streamers|atAllStreamers|dynamicStreamers)[ \t]*=[ \t]*(\[[^\r\n]*\])[ \t]*$/gm, (line, key: string, value: string) => {
+  const updated = source.replace(/^(streamers|atAllStreamers|dynamicStreamers|dynamicAtAllStreamers)[ \t]*=[ \t]*(\[[^\r\n]*\])[ \t]*$/gm, (line, key: string, value: string) => {
     const parsed = Bun.TOML.parse(`${key} = ${value}`) as Record<string, unknown>;
     const names = parsed[key];
     if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) {
@@ -677,6 +785,7 @@ type VtbSubscriptionBlock = {
   streamers: string[];
   atAllStreamers?: string[];
   dynamicStreamers?: string[];
+  dynamicAtAllStreamers?: string[];
 };
 
 const queueFf14PriceAlertUpdate = <T>(operation: () => Promise<T>) => {
@@ -757,7 +866,13 @@ const findVtbSubscriptionBlock = (source: string, groupId: string | number): Vtb
         throw new Error(`Invalid dynamicStreamers for VTB subscription group ${groupId}`);
       }
       const dynamicStreamers = rawDynamicStreamers as string[] | undefined;
-      return { start, end, text, streamers, atAllStreamers, dynamicStreamers };
+      const rawDynamicAtAllStreamers = parseTomlAssignment(text, "dynamicAtAllStreamers");
+      if (rawDynamicAtAllStreamers !== undefined &&
+        (!Array.isArray(rawDynamicAtAllStreamers) || !rawDynamicAtAllStreamers.every((name) => typeof name === "string"))) {
+        throw new Error(`Invalid dynamicAtAllStreamers for VTB subscription group ${groupId}`);
+      }
+      const dynamicAtAllStreamers = rawDynamicAtAllStreamers as string[] | undefined;
+      return { start, end, text, streamers, atAllStreamers, dynamicStreamers, dynamicAtAllStreamers };
     }
     start = nextStart;
   }
@@ -795,6 +910,13 @@ const replaceSubscriptionBlock = (
       `dynamicStreamers = ${JSON.stringify(dynamicStreamers)}`,
     );
   }
+  if (subscription.dynamicAtAllStreamers) {
+    const dynamicAtAllStreamers = subscription.dynamicAtAllStreamers.filter((name) => streamers.includes(name));
+    updatedBlock = updatedBlock.replace(
+      /^dynamicAtAllStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m,
+      `dynamicAtAllStreamers = ${JSON.stringify(dynamicAtAllStreamers)}`,
+    );
+  }
   return `${source.slice(0, subscription.start)}${updatedBlock}${source.slice(subscription.end)}`;
 };
 
@@ -813,6 +935,47 @@ const replaceAtAllStreamersInBlock = (
   const newline = block.includes("\r\n") ? "\r\n" : "\n";
   return block.replace(
     /^(streamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*)$/m,
+    `$1${newline}${assignment}`,
+  );
+};
+
+const replaceDynamicStreamersInBlock = (
+  block: string,
+  dynamicStreamers: readonly string[],
+) => {
+  const assignment = `dynamicStreamers = ${JSON.stringify(dynamicStreamers)}`;
+  if (/^dynamicStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m.test(block)) {
+    return block.replace(
+      /^dynamicStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m,
+      assignment,
+    );
+  }
+
+  const newline = block.includes("\r\n") ? "\r\n" : "\n";
+  return block.replace(
+    /^(streamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*)$/m,
+    `$1${newline}${assignment}`,
+  );
+};
+
+const replaceDynamicAtAllStreamersInBlock = (
+  block: string,
+  dynamicAtAllStreamers: readonly string[],
+) => {
+  const assignment = `dynamicAtAllStreamers = ${JSON.stringify(dynamicAtAllStreamers)}`;
+  if (/^dynamicAtAllStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m.test(block)) {
+    return block.replace(
+      /^dynamicAtAllStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m,
+      assignment,
+    );
+  }
+
+  const newline = block.includes("\r\n") ? "\r\n" : "\n";
+  const anchor = /^dynamicStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m.test(block)
+    ? /^dynamicStreamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*$/m
+    : /^(streamers[ \t]*=[ \t]*\[[^\r\n]*\][ \t]*)$/m;
+  return block.replace(
+    anchor,
     `$1${newline}${assignment}`,
   );
 };

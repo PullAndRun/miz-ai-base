@@ -7,6 +7,7 @@ export type VtbSubscription = Readonly<{
   streamers: readonly string[];
   atAllStreamers?: readonly string[];
   dynamicStreamers?: readonly string[];
+  dynamicAtAllStreamers?: readonly string[];
 }>;
 
 export type UpdatedVtbSubscription = {
@@ -14,6 +15,7 @@ export type UpdatedVtbSubscription = {
   streamers: string[];
   atAllStreamers?: string[];
   dynamicStreamers?: string[];
+  dynamicAtAllStreamers?: string[];
 };
 
 export type SubscriptionChange = "subscribe" | "unsubscribe";
@@ -67,6 +69,9 @@ export const renameVtbSubscriptions = (
   ...(subscription.dynamicStreamers === undefined
     ? {}
     : { dynamicStreamers: subscription.dynamicStreamers.map((name) => renames.get(name) ?? name) }),
+  ...(subscription.dynamicAtAllStreamers === undefined
+    ? {}
+    : { dynamicAtAllStreamers: subscription.dynamicAtAllStreamers.map((name) => renames.get(name) ?? name) }),
 }));
 
 export const partitionVtbSubscriptionsByGroup = (
@@ -92,6 +97,9 @@ const copySubscriptionWithStreamers = (
   ...(subscription.dynamicStreamers === undefined
     ? {}
     : { dynamicStreamers: subscription.dynamicStreamers.filter((name) => streamers.includes(name)) }),
+  ...(subscription.dynamicAtAllStreamers === undefined
+    ? {}
+    : { dynamicAtAllStreamers: subscription.dynamicAtAllStreamers.filter((name) => streamers.includes(name)) }),
   groupId: subscription.groupId,
   streamers,
 });

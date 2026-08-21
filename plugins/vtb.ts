@@ -20,6 +20,8 @@ import {
   loadConfig,
   removeVtbSubscription,
   setVtbAtAllStreamer,
+  setVtbDynamicStreamer,
+  setVtbDynamicAtAllStreamer,
   updateVtbSubscriptionNames,
 } from "@/config";
 import { findVtbSubscription } from "@/vtb-subscriptions";
@@ -35,6 +37,8 @@ type VtbPluginDependencies = {
   addSubscription?: typeof addVtbSubscription;
   removeSubscription?: typeof removeVtbSubscription;
   setAtAllStreamer?: typeof setVtbAtAllStreamer;
+  setDynamicStreamer?: typeof setVtbDynamicStreamer;
+  setDynamicAtAllStreamer?: typeof setVtbDynamicAtAllStreamer;
   getRepository?: typeof getVtbRepository;
   notifySubscriptionChange?: typeof notifyVtbSubscriptionChange;
 };
@@ -46,12 +50,16 @@ export const createVtbPlugin = ({
   addSubscription = addVtbSubscription,
   removeSubscription = removeVtbSubscription,
   setAtAllStreamer = setVtbAtAllStreamer,
+  setDynamicStreamer = setVtbDynamicStreamer,
+  setDynamicAtAllStreamer = setVtbDynamicAtAllStreamer,
   getRepository = getVtbRepository,
   notifySubscriptionChange = notifyVtbSubscriptionChange,
 }: VtbPluginDependencies = {}): MizPlugin => ({
   name: "vtb",
   commands: ["vtb"],
   description: [
+    "Dynamic push toggle: miz vtb dynamic enable/disable streamer name",
+    "Dynamic @all toggle: miz vtb dynamicatall enable/disable streamer name",
     "追踪 B 站主播的直播和动态，也能管理本群的关注名单。",
     "查询直播：miz vtb live 主播昵称",
     "查询动态：miz vtb dynamic 主播昵称",
@@ -65,12 +73,21 @@ export const createVtbPlugin = ({
   async handle({ command, config, logger, message, reply }) {
     const [type, ...argumentParts] = command.args.trim().split(/\s+/);
     const atAllAction = type === "atall" ? parseAtAllAction(argumentParts[0]) : undefined;
-    const nameParts = type === "atall" ? argumentParts.slice(1) : argumentParts;
+    const dynamicAction = type === "dynamic" ? parseAtAllAction(argumentParts[0]) : undefined;
+    const dynamicAtAllAction = type === "dynamicatall" || type === "dynamic-atall"
+      ? parseAtAllAction(argumentParts[0])
+      : undefined;
+    const nameParts = type === "atall" || type === "dynamicatall" || type === "dynamic-atall"
+      ? argumentParts.slice(1)
+      : type === "dynamic" && dynamicAction !== undefined
+        ? argumentParts.slice(1)
+        : argumentParts;
     const streamerName = nameParts.join(" ").trim();
     if (
-      (type !== "live" && type !== "dynamic" && type !== "sync" && type !== "list" && type !== "subscribe" && type !== "unsubscribe" && type !== "atall" && type !== "login" && type !== "logout") ||
-      ((type === "live" || type === "dynamic" || type === "subscribe" || type === "unsubscribe" || type === "atall") && !streamerName) ||
-      (type === "atall" && atAllAction === undefined)
+      (type !== "live" && type !== "dynamic" && type !== "sync" && type !== "list" && type !== "subscribe" && type !== "unsubscribe" && type !== "atall" && type !== "dynamicatall" && type !== "dynamic-atall" && type !== "login" && type !== "logout") ||
+      ((type === "live" || type === "dynamic" || type === "subscribe" || type === "unsubscribe" || type === "atall" || type === "dynamicatall" || type === "dynamic-atall") && !streamerName) ||
+      (type === "atall" && atAllAction === undefined) ||
+      ((type === "dynamicatall" || type === "dynamic-atall") && dynamicAtAllAction === undefined)
     ) {
       await reply([
         "📺 B 站主播功能这样用：",
@@ -139,7 +156,7 @@ export const createVtbPlugin = ({
     const missingLiveApi = type === "live" &&
       (!config.vtb.userApiUrl || !config.vtb.cardApiUrl || !config.vtb.liveApiUrl ||
         !config.vtb.webUrl || !config.vtb.liveWebUrl);
-    const missingDynamicApi = type === "dynamic" &&
+    const missingDynamicApi = type === "dynamic" && dynamicAction === undefined &&
       (!config.vtb.userApiUrl || !config.vtb.webUrl);
     const missingSyncApi = type === "sync" &&
       (!config.vtb.userApiUrl || !config.vtb.cardApiUrl || !config.vtb.liveApiUrl || !config.vtb.webUrl);
@@ -149,7 +166,10 @@ export const createVtbPlugin = ({
     }
 
     try {
-      if (type === "list" || type === "subscribe" || type === "unsubscribe" || type === "atall") {
+      const isDynamicMutation = type === "dynamic" && dynamicAction !== undefined;
+      const isDynamicAtAllMutation =
+        (type === "dynamicatall" || type === "dynamic-atall") && dynamicAtAllAction !== undefined;
+      if (type === "list" || type === "subscribe" || type === "unsubscribe" || type === "atall" || isDynamicMutation || isDynamicAtAllMutation) {
         if (message.groupId === undefined) {
           await reply("主播关注名单跟着群聊走，回到目标群里管理吧。私聊仍然可以查询直播和动态。");
           return;
@@ -202,6 +222,56 @@ export const createVtbPlugin = ({
             subscriptions: (await loadCurrentConfig()).vtb.subscriptions,
           });
           await reply(`已${enabled ? "开启" : "关闭"} ${streamerName} 的开播 @全体成员。`);
+          return;
+        }
+
+        if (isDynamicMutation) {
+          const enabled = dynamicAction === "enable";
+          const result = await setDynamicStreamer(message.groupId, streamerName, enabled);
+          if (!result.subscribed) {
+            await reply(`关注名单里没有 ${streamerName}，请先用 miz vtb subscribe ${streamerName} 添加订阅。`);
+            return;
+          }
+          if (!result.changed) {
+            await reply(`${streamerName} 的动态推送已经${enabled ? "开启" : "关闭"}了。`);
+            return;
+          }
+          const nextSubscriptions = (await loadCurrentConfig()).vtb.subscriptions;
+          logger.info("plugin", "vtb group dynamic setting updated", {
+            action: enabled ? "enable" : "disable",
+            groupId: message.groupId,
+            streamerName,
+          });
+          notifySubscriptionChange({
+            groupId: message.groupId,
+            subscriptions: nextSubscriptions,
+          });
+          await reply(`${streamerName} 的动态推送已${enabled ? "开启" : "关闭"}。`);
+          return;
+        }
+
+        if (isDynamicAtAllMutation) {
+          const enabled = dynamicAtAllAction === "enable";
+          const result = await setDynamicAtAllStreamer(message.groupId, streamerName, enabled);
+          if (!result.subscribed) {
+            await reply(`未在关注名单里找到 ${streamerName}，请先用 miz vtb subscribe ${streamerName} 添加订阅。`);
+            return;
+          }
+          if (!result.changed) {
+            await reply(`${streamerName} 的动态 @全体成员已经${enabled ? "开启" : "关闭"}了。`);
+            return;
+          }
+          const nextSubscriptions = (await loadCurrentConfig()).vtb.subscriptions;
+          logger.info("plugin", "vtb group dynamic at-all setting updated", {
+            action: enabled ? "enable" : "disable",
+            groupId: message.groupId,
+            streamerName,
+          });
+          notifySubscriptionChange({
+            groupId: message.groupId,
+            subscriptions: nextSubscriptions,
+          });
+          await reply(`动态推送的 @全体成员已${enabled ? "开启" : "关闭"}：${streamerName}。`);
           return;
         }
 
