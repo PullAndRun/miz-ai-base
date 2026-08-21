@@ -53,6 +53,10 @@ const repeatIfNeeded = async ({ commandPrefix, message, plugins, reply }: Plugin
 const getRepeatCandidate = (text: string, rawMessage: unknown) => {
   const normalizedText = text.trim();
   if (normalizedText) {
+    if (normalizedText.startsWith("/")) {
+      return undefined;
+    }
+
     return {
       signature: `text:${normalizedText}`,
       payload: rawMessage ?? normalizedText,
