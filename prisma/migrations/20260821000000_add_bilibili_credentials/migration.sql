@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS "bilibili_credentials" (
+  "id" INTEGER PRIMARY KEY,
+  "credential_json" TEXT NOT NULL,
+  "updated_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

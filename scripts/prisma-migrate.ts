@@ -1,5 +1,5 @@
 import { loadConfig } from "@/config";
-import { getDatabaseUrl } from "@/vtb";
+import { getDatabaseUrl } from "@/database";
 
 export const runPrismaMigrations = async () => {
   const config = await loadConfig();

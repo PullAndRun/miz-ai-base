@@ -1,8 +1,9 @@
-import { rename, rm } from "node:fs/promises";
 import { createQrCode } from "@/qrcode";
 import { fetchWithRetry, readResponseJson } from "@/http";
+import { createDatabaseClient } from "@/database";
+import type { PrismaClient } from "@/generated/prisma/client";
 
-const CREDENTIAL_PATH = "config/bilibili-credential.json";
+const CREDENTIAL_ID = 1;
 const BILIBILI_HEADERS = {
   "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
   referer: "https://www.bilibili.com/",
@@ -29,7 +30,15 @@ export type BilibiliQrLoginResult =
   | { status: "done"; credential: BilibiliCredential };
 
 let loadedCredential: BilibiliCredential | undefined;
-let loadedFromFile = false;
+let loadedFromDatabase = false;
+let credentialDatabase: PrismaClient | undefined;
+
+export const configureBilibiliCredentialStore = (databaseUrl: string) => {
+  if (credentialDatabase && credentialDatabase !== undefined) return;
+  credentialDatabase = createDatabaseClient(databaseUrl);
+  loadedFromDatabase = false;
+  loadedCredential = undefined;
+};
 
 /** Returns the credential obtained by QR login; configured cookies are not used. */
 export const getBilibiliCredentialHeader = async () => {
@@ -92,30 +101,33 @@ export const waitForBilibiliQrLogin = async (qrcodeKey: string, proxyUrl = "", s
 };
 
 export const getBilibiliCredential = async () => {
-  if (!loadedFromFile) {
-    loadedFromFile = true;
-    loadedCredential = await readSavedCredential();
+  if (!loadedFromDatabase) {
+    loadedFromDatabase = true;
+    if (credentialDatabase) {
+      const stored = await credentialDatabase.bilibiliCredential.findUnique({ where: { id: CREDENTIAL_ID } });
+      loadedCredential = stored ? normalizeCredential(JSON.parse(stored.credentialJson)) : undefined;
+    }
   }
   return loadedCredential;
 };
 
 export const saveBilibiliCredential = async (credential: BilibiliCredential) => {
+  if (!credentialDatabase) throw new Error("Bilibili credential database is not configured");
   loadedCredential = normalizeCredential(credential);
-  loadedFromFile = true;
-  const temporaryPath = `${CREDENTIAL_PATH}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    await Bun.write(temporaryPath, JSON.stringify(loadedCredential, null, 2));
-    await rename(temporaryPath, CREDENTIAL_PATH);
-  } catch (error) {
-    await rm(temporaryPath, { force: true }).catch(() => undefined);
-    throw error;
-  }
+  loadedFromDatabase = true;
+  await credentialDatabase.bilibiliCredential.upsert({
+    where: { id: CREDENTIAL_ID },
+    create: { id: CREDENTIAL_ID, credentialJson: JSON.stringify(loadedCredential) },
+    update: { credentialJson: JSON.stringify(loadedCredential) },
+  });
 };
 
 export const clearBilibiliCredential = async () => {
   loadedCredential = undefined;
-  loadedFromFile = true;
-  await rm(CREDENTIAL_PATH, { force: true });
+  loadedFromDatabase = true;
+  if (credentialDatabase) {
+    await credentialDatabase.bilibiliCredential.deleteMany({ where: { id: CREDENTIAL_ID } });
+  }
 };
 
 export const serializeBilibiliCredential = (credential: BilibiliCredential) => {
@@ -150,16 +162,6 @@ const parseLoginUrlCredential = (loginUrl: string, refreshToken: string): Bilibi
     dedeUserId: values.get("DedeUserID") ?? undefined,
     acTimeValue: refreshToken,
   });
-};
-
-const readSavedCredential = async () => {
-  try {
-    const file = Bun.file(CREDENTIAL_PATH);
-    if (!(await file.exists())) return undefined;
-    return normalizeCredential(JSON.parse(await file.text()));
-  } catch {
-    return undefined;
-  }
 };
 
 const normalizeCredential = (value: unknown): BilibiliCredential => {

@@ -1,6 +1,5 @@
 import dayjs from "dayjs";
 import { XMLParser } from "fast-xml-parser";
-import { PrismaPg } from "@prisma/adapter-pg";
 import { createHash } from "node:crypto";
 import {
   PrismaClient,
@@ -14,6 +13,7 @@ import { z } from "zod";
 import { createExpiringCache, readExpiringCache, writeExpiringCache } from "@/cache";
 import { getBilibiliCredentialHeader } from "@/bilibili-credential";
 import type { MizConfig, VtbConfig } from "@/config";
+import { createDatabaseClient, getDatabaseUrl } from "@/database";
 import { fetchWithRetry, readResponseBytes, readResponseJson, readResponseText } from "@/http";
 import { partitionVtbSubscriptionsByGroup } from "@/vtb-subscriptions";
 
@@ -1485,7 +1485,7 @@ export const formatDynamicUrl = (link: string, webUrl: string) => {
 };
 
 const createConfiguredVtbRepository = async (config: MizConfig) => {
-  const prisma = new PrismaClient({ adapter: new PrismaPg(getDatabaseUrl(config)) });
+  const prisma = createDatabaseClient(getDatabaseUrl(config));
   try {
     const repository = createVtbRepository(prisma);
     await repository.initialize();
@@ -1496,20 +1496,6 @@ const createConfiguredVtbRepository = async (config: MizConfig) => {
   }
 };
 
-export const getDatabaseUrl = (config: MizConfig) => {
-  const host = new URL(config.postgresql.url);
-  return [
-    "postgresql://",
-    encodeURIComponent(config.postgresql.username),
-    ":",
-    encodeURIComponent(config.postgresql.password),
-    "@",
-    host.host,
-    "/",
-    encodeURIComponent(config.postgresql.database),
-    host.search,
-  ].join("");
-};
 
 const fromStoredStreamer = (streamer: { name: string; mid: bigint; liveRoom: bigint | null }): VtbStreamer => ({
   name: streamer.name,

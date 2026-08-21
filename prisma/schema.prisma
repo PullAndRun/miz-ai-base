@@ -7,6 +7,14 @@ datasource db {
   provider = "postgresql"
 }
 
+model BilibiliCredential {
+  id             Int      @id
+  credentialJson String   @map("credential_json")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("bilibili_credentials")
+}
+
 model VtbStreamer {
   mid           BigInt    @id
   name          String
