@@ -70,6 +70,14 @@ describe("user-facing copy", () => {
     }, "https://www.example.test");
     expect(descriptionContainsTitle).toContain("短标题以及更完整的正文内容");
     expect(descriptionContainsTitle).not.toContain("「短标题」");
+
+    const partiallyOverlapping = formatDynamicMessage({
+      ...shared,
+      title: "今晚直播预告",
+      description: "直播预告与新的安排",
+    }, "https://www.example.test");
+    expect(partiallyOverlapping).toContain("「今晚直播预告」");
+    expect(partiallyOverlapping).toContain("直播预告与新的安排");
   });
 
   test("general content stays natural without forcing live terminology", () => {

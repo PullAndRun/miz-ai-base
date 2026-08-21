@@ -1476,6 +1476,8 @@ const selectDynamicDisplayText = (title: string, description: string) => {
   if (!normalizedTitle && !normalizedDescription) {
     return { title: "", description: "" };
   }
+  // The complete counterpart must be contained; sharing only a fragment does
+  // not qualify for de-duplication.
   if (normalizedTitle && normalizedDescription && normalizedTitle.includes(normalizedDescription)) {
     return { title, description: "" };
   }
