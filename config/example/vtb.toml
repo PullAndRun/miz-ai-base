@@ -1,9 +1,15 @@
-[[miz.vtb.subscriptions]]
-groupId = ""
-streamers = [""]
-# 只有同时出现在 streamers 和 dynamicStreamers 中的主播才会轮询动态。
-dynamicStreamers = []
-# Dynamic notifications mention @all only for streamers listed here.
-dynamicAtAllStreamers = []
-# 仅在机器人是群主或管理员，且该 QQ 账号在本群仍有 @全体 次数时，这些主播开播会 @全体成员；否则发送普通开播通知。动态和下播通知不会 @。
-atAllStreamers = []
+# 复制为 config/vtb.toml 后，取消下面各行的注释并填写真实群号和主播昵称。
+# 保持全部注释时代表没有 VTB 群订阅，可以正常通过配置校验。
+
+# [[miz.vtb.subscriptions]]
+# groupId = 123456789
+# streamers = ["主播昵称"]
+# dynamicStreamers = []
+# atAllStreamers = []
+# dynamicAtAllStreamers = []
+
+# 字段说明：
+# streamers：本群关注的主播。
+# dynamicStreamers：需要轮询并推送动态的主播，必须同时存在于 streamers。
+# atAllStreamers：主播开播时 @全体成员，必须同时存在于 streamers。
+# dynamicAtAllStreamers：主播发布动态时 @全体成员，必须同时存在于 dynamicStreamers。

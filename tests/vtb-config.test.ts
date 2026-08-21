@@ -100,3 +100,10 @@ describe("VTB dynamic config updates", () => {
     expect(disabled.dynamicAtAllStreamers).toEqual([]);
   });
 });
+
+test("VTB example config does not create an invalid placeholder subscription", async () => {
+  const example = Bun.TOML.parse(await Bun.file("config/example/vtb.toml").text()) as {
+    miz?: { vtb?: { subscriptions?: unknown[] } };
+  };
+  expect(example.miz?.vtb?.subscriptions ?? []).toEqual([]);
+});
