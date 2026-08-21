@@ -114,7 +114,6 @@ const processVideo = async ({
       url,
       config: config.video,
       network: config.network,
-      bilibili: config.bilibili,
     });
     try {
       deliveryAttempted = true;

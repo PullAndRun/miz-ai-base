@@ -2,7 +2,8 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { BilibiliConfig, NetworkConfig, VideoConfig } from "@/config";
+import { getBilibiliCredentialHeader } from "@/bilibili-credential";
+import type { NetworkConfig, VideoConfig } from "@/config";
 import { isWhitelistedUser } from "@/group-permissions";
 
 const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
@@ -46,12 +47,10 @@ export const downloadVideo = async ({
   url,
   config,
   network,
-  bilibili,
 }: {
   url: string;
   config: VideoConfig;
   network: NetworkConfig;
-  bilibili: BilibiliConfig;
 }) => {
   const downloadDirectory = getDownloadDirectory(config);
   await mkdir(downloadDirectory, { recursive: true });
@@ -78,7 +77,7 @@ export const downloadVideo = async ({
     "after_move:filepath",
   ];
   try {
-    const output = await withYtDlpRequest(url, config, network, bilibili, (requestArgs) =>
+    const output = await withYtDlpRequest(url, config, network, (requestArgs) =>
       runYtDlpWithTransientRetry(config, [...args, ...requestArgs]));
     const sourceVideoPath = await findDownloadedVideo(output, downloadDirectory, downloadStartedAt, requestId);
     if (!sourceVideoPath) {
@@ -196,13 +195,14 @@ export const createYtDlpRequestArgs = (
 export const createYtDlpCookieFileContents = (
   url: string,
   config: VideoConfig,
-  bilibili: BilibiliConfig,
+  credentialCookie = "",
 ) => {
-  if (!isBilibiliUrl(url, config.bilibiliHosts) || !bilibili.cookie) {
+  const cookieHeader = credentialCookie.trim();
+  if (!isBilibiliUrl(url, config.bilibiliHosts) || !cookieHeader) {
     return undefined;
   }
 
-  const cookies = bilibili.cookie
+  const cookies = cookieHeader
     .split(";")
     .map((part) => {
       const separatorIndex = part.indexOf("=");
@@ -246,10 +246,10 @@ const withYtDlpRequest = async <T>(
   url: string,
   config: VideoConfig,
   network: NetworkConfig,
-  bilibili: BilibiliConfig,
   callback: (requestArgs: string[]) => Promise<T>,
 ) => {
-  const cookieContents = createYtDlpCookieFileContents(url, config, bilibili);
+  const credentialCookie = await getBilibiliCredentialHeader() ?? "";
+  const cookieContents = createYtDlpCookieFileContents(url, config, credentialCookie);
   if (!cookieContents) {
     return callback(createYtDlpRequestArgs(url, network));
   }

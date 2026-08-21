@@ -47,11 +47,6 @@ const rawMizConfigSchema = z.object({
       proxyUrl: nonEmptyStringSchema.optional(),
     })
     .optional(),
-  bilibili: z
-    .object({
-      cookie: z.string().optional(),
-    })
-    .optional(),
   ff14: z
     .object({
       priceAlertEnabled: z.boolean().optional(),
@@ -160,6 +155,7 @@ const rawMizConfigSchema = z.object({
       webUrl: nonEmptyStringSchema.optional(),
       liveWebUrl: nonEmptyStringSchema.optional(),
       nameSyncCron: nonEmptyStringSchema.optional(),
+      adminWhitelistUserIds: z.array(targetIdSchema).optional(),
       syncWhitelistUserIds: z.array(targetIdSchema).optional(),
       subscriptionWhitelistUserIds: z.array(targetIdSchema).optional(),
       subscriptions: z
@@ -194,9 +190,6 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
   },
   network: {
     proxyUrl: config.network?.proxyUrl ?? "",
-  },
-  bilibili: {
-    cookie: config.bilibili?.cookie?.trim() ?? "",
   },
   ff14: {
     priceAlertEnabled: config.ff14?.priceAlertEnabled ?? true,
@@ -287,9 +280,12 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     webUrl: config.vtb?.webUrl ?? "",
     liveWebUrl: config.vtb?.liveWebUrl ?? "",
     nameSyncCron: config.vtb?.nameSyncCron ?? "0 0 * * 0",
-    syncWhitelistUserIds: config.vtb?.syncWhitelistUserIds ?? [],
-    subscriptionWhitelistUserIds: config.vtb?.subscriptionWhitelistUserIds ?? [],
-    bilibiliCookie: config.bilibili?.cookie?.trim() ?? "",
+    adminWhitelistUserIds: Array.from(new Map([
+      ...(config.vtb?.adminWhitelistUserIds ?? []),
+      ...(config.vtb?.syncWhitelistUserIds ?? []),
+      ...(config.vtb?.subscriptionWhitelistUserIds ?? []),
+    ].map((userId) => [String(userId), userId])).values()),
+    proxyUrl: config.network?.proxyUrl ?? "",
     subscriptions: config.vtb?.subscriptions ?? [],
   },
 }));
@@ -367,10 +363,6 @@ export type NetworkConfig = {
   proxyUrl: string;
 };
 
-export type BilibiliConfig = {
-  cookie: string;
-};
-
 export type VideoConfig = {
   enabled: boolean;
   runtimeMode: RuntimeMode;
@@ -398,9 +390,8 @@ export type VtbConfig = {
   webUrl: string;
   liveWebUrl: string;
   nameSyncCron: string;
-  syncWhitelistUserIds: Array<string | number>;
-  subscriptionWhitelistUserIds: Array<string | number>;
-  bilibiliCookie: string;
+  adminWhitelistUserIds: Array<string | number>;
+  proxyUrl: string;
   subscriptions: ReadonlyArray<{
     readonly groupId: string | number;
     readonly streamers: readonly string[];
@@ -415,7 +406,6 @@ export type VtbConfig = {
 export type MizConfig = z.infer<typeof mizConfigSchema> & {
   runtime: RuntimeConfig;
   network: NetworkConfig;
-  bilibili: BilibiliConfig;
   wallpaper: WallpaperConfig;
   news: NewsConfig;
   reminder: ReminderConfig;

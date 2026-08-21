@@ -42,7 +42,6 @@ const videoConfig: VideoConfig = {
   maxConcurrentJobs: 2,
 };
 const networkConfig = { proxyUrl: "" };
-const bilibiliConfig = { cookie: "SESSDATA=test-cookie" };
 
 describe("video download filenames", () => {
   test("keeps the NapCat-visible temporary filename ASCII-only", () => {
@@ -192,7 +191,7 @@ describe("Bilibili download authentication", () => {
   test.each([
     "https://www.bilibili.com/video/BV1",
     "https://b23.tv/abc123",
-  ])("passes the app.toml cookie to yt-dlp for %s", (url) => {
+  ])("passes the credential cookie file to yt-dlp for %s", (url) => {
     expect(createYtDlpRequestArgs(url, networkConfig, "/temp/miz.cookies")).toEqual([
       "--cookies",
       "/temp/miz.cookies",
@@ -200,20 +199,29 @@ describe("Bilibili download authentication", () => {
     ]);
   });
 
-  test("converts the configured header into a scoped Netscape cookie file", () => {
+  test("converts the saved credential into a scoped Netscape cookie file", () => {
     const contents = createYtDlpCookieFileContents("https://b23.tv/abc123", {
       ...videoConfig,
-    }, { cookie: "SESSDATA=test-cookie; bili_jct=csrf=value" });
+    }, "SESSDATA=test-cookie; bili_jct=csrf=value");
 
     expect(contents).toContain(".bilibili.com\tTRUE\t/\tTRUE\t0\tSESSDATA\ttest-cookie");
     expect(contents).toContain(".bilibili.com\tTRUE\t/\tTRUE\t0\tbili_jct\tcsrf=value");
     expect(contents).not.toContain("Cookie:");
   });
 
+  test("converts the saved VTB credential into a Netscape cookie file", () => {
+    const contents = createYtDlpCookieFileContents("https://www.bilibili.com/video/BV1", {
+      ...videoConfig,
+    }, "SESSDATA=qr-session; bili_jct=qr-csrf");
+
+    expect(contents).toContain(".bilibili.com\tTRUE\t/\tTRUE\t0\tSESSDATA\tqr-session");
+    expect(contents).toContain(".bilibili.com\tTRUE\t/\tTRUE\t0\tbili_jct\tqr-csrf");
+  });
+
   test("does not send the Bilibili cookie to unrelated hosts", () => {
     const url = "https://example.com/video.mp4";
     expect(createYtDlpRequestArgs(url, networkConfig)).toEqual([url]);
-    expect(createYtDlpCookieFileContents(url, videoConfig, bilibiliConfig)).toBeUndefined();
+    expect(createYtDlpCookieFileContents(url, videoConfig, "SESSDATA=test-cookie")).toBeUndefined();
   });
 
   test("uses the proxy from miz.network for video requests", () => {

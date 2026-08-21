@@ -12,6 +12,7 @@ import {
 } from "@/generated/prisma/client";
 import { z } from "zod";
 import { createExpiringCache, readExpiringCache, writeExpiringCache } from "@/cache";
+import { getBilibiliCredentialHeader } from "@/bilibili-credential";
 import type { MizConfig, VtbConfig } from "@/config";
 import { fetchWithRetry, readResponseBytes, readResponseJson, readResponseText } from "@/http";
 import { partitionVtbSubscriptionsByGroup } from "@/vtb-subscriptions";
@@ -168,11 +169,14 @@ export const closeVtbRepository = async () => {
 
 export const resolveVtbStreamer = async (name: string, config: VtbConfig): Promise<VtbStreamer | undefined> => {
   const url = `${config.userApiUrl}${encodeURIComponent(name)}`;
+  const cookie = await getBilibiliCredentialHeader();
   const response = userResponseSchema.parse(
     await fetchJson(
       url,
       config.webUrl,
-      config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined,
+      cookie ? { Cookie: cookie } : undefined,
+      undefined,
+      config.proxyUrl,
     ),
   );
   assertVtbApiSuccess(url, "user", response.code);
@@ -342,18 +346,21 @@ export const getVtbCardInfos = async (mids: readonly string[], config: VtbConfig
   const cards = new Map<string, VtbCardInfo>();
   for (const batch of chunk(uniqueMids, 50)) {
     const url = createCardApiUrl(config.cardApiUrl, batch);
+    const cookie = await getBilibiliCredentialHeader();
     const response = cardResponseSchema.parse(
       await fetchJson(
         url,
         config.webUrl,
-        config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined,
+        cookie ? { Cookie: cookie } : undefined,
+        undefined,
+        config.proxyUrl,
       ),
     );
     if (response.code !== 0) {
       recordVtbBusinessFailure(url, response.code);
       throw new Error(
-        response.code === -101
-          ? "Bilibili card API rejected the configured cookie: code -101"
+          response.code === -101
+          ? "Bilibili card API rejected the QR login credential: code -101"
           : `Bilibili card API failed: code ${response.code}`,
       );
     }
@@ -427,12 +434,13 @@ export const getVtbLiveInfos = async (streamers: readonly VtbStreamer[], config:
   );
   for (const batch of chunk(uniqueStreamers, 50)) {
     const url = config.liveApiUrl;
+    const cookie = await getBilibiliCredentialHeader();
     const response = liveResponseSchema.parse(
-      await fetchJson(url, config.webUrl, config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined, {
+      await fetchJson(url, config.webUrl, cookie ? { Cookie: cookie } : undefined, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ uids: batch.map((streamer) => streamer.mid) }),
-      }),
+      }, config.proxyUrl),
     );
     assertVtbApiSuccess(url, "live", response.code);
 
@@ -473,7 +481,7 @@ export const getVtbDynamics = async (
   if (cached) {
     return cached;
   }
-  const channel = dynamicSchema.parse(xmlParser.parse(await fetchDynamicText(dynamicUrl, retryCount))).rss.channel;
+  const channel = dynamicSchema.parse(xmlParser.parse(await fetchDynamicText(dynamicUrl, retryCount, config.proxyUrl))).rss.channel;
   const feed = {
     avatarUrl: channel.image.url,
     items: channel.item
@@ -508,7 +516,7 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
     return undefined;
   }
 
-  const cacheKey = `${url}\n${config.webUrl}\n${getVtbCredentialKey(config.bilibiliCookie)}`;
+  const cacheKey = `${url}\n${config.webUrl}`;
   const cacheRead = readExpiringCache(vtbImageCache, cacheKey, Date.now());
   vtbImageCache = cacheRead.cache;
   const cached = cacheRead.value;
@@ -516,9 +524,10 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
     return cached;
   }
 
+  const cookie = await getBilibiliCredentialHeader();
   const requestHeaders = createVtbRequestHeaders(
     config.webUrl,
-    config.bilibiliCookie ? { Cookie: config.bilibiliCookie } : undefined,
+    cookie ? { Cookie: cookie } : undefined,
   );
   const requestInit = { headers: requestHeaders } satisfies RequestInit;
   const file = await runProtectedVtbRequest(
@@ -533,6 +542,7 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
         retryDelayMs: 2_000,
         retryJitterMs: 2_000,
         retryRateLimited: false,
+        ...(config.proxyUrl ? { proxy: config.proxyUrl } : {}),
       });
       const contentType = response.headers.get("content-type")?.toLowerCase();
       if (contentType && !contentType.startsWith("image/") && contentType !== "application/octet-stream") {
@@ -1518,6 +1528,7 @@ const fetchJson = async (
   webUrl: string,
   headers?: Record<string, string>,
   init?: RequestInit,
+  proxyUrl = "",
 ) => {
   const requestInit: RequestInit = {
     ...init,
@@ -1535,13 +1546,14 @@ const fetchJson = async (
         retryDelayMs: 2_000,
         retryJitterMs: 3_000,
         retryRateLimited: false,
+        ...(proxyUrl ? { proxy: proxyUrl } : {}),
       });
       return readResponseJson(response, MAX_VTB_RESPONSE_BYTES);
     },
   );
 };
 
-const fetchText = async (url: string) => {
+const fetchText = async (url: string, proxyUrl = "") => {
   const text = await runProtectedVtbRequest(
     url,
     undefined,
@@ -1551,6 +1563,7 @@ const fetchText = async (url: string) => {
         timeoutMs: FETCH_TIMEOUT_MS,
         retryCount: 0,
         retryRateLimited: false,
+        ...(proxyUrl ? { proxy: proxyUrl } : {}),
       });
       return readResponseText(response, MAX_VTB_RESPONSE_BYTES);
     },
@@ -1559,7 +1572,7 @@ const fetchText = async (url: string) => {
   return text;
 };
 
-const fetchDynamicText = async (url: string, _retryCount: number) => fetchText(url);
+const fetchDynamicText = async (url: string, _retryCount: number, proxyUrl = "") => fetchText(url, proxyUrl);
 
 const runProtectedVtbRequest = async <T>(
   url: string,
@@ -1750,13 +1763,10 @@ const getRequestHeadersKey = (headers: HeadersInit | undefined) => {
 };
 
 const getVtbLiveCacheKey = (config: VtbConfig, mid: string) =>
-  `${config.liveApiUrl}\n${getVtbCredentialKey(config.bilibiliCookie)}\n${mid}`;
+  `${config.liveApiUrl}\n${mid}`;
 
 const getVtbCardCacheKey = (config: VtbConfig, mid: string) =>
-  `${config.cardApiUrl}\n${getVtbCredentialKey(config.bilibiliCookie)}\n${mid}`;
-
-const getVtbCredentialKey = (cookie: string) =>
-  cookie ? createHash("sha256").update(cookie).digest("base64url") : "";
+  `${config.cardApiUrl}\n${mid}`;
 
 const getVtbDynamicQueryCacheMs = (config: VtbConfig) =>
   Math.max(60_000, Math.min(10 * 60_000, (config.dynamicPollMinutes ?? 15) * 30_000));

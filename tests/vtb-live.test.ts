@@ -17,7 +17,6 @@ const config = {
   liveApiUrl: "https://example.test/live",
   webUrl: "https://www.example.test",
   liveWebUrl: "https://live.example.test",
-  bilibiliCookie: "",
 } as VtbConfig;
 
 afterEach(() => {
@@ -103,41 +102,6 @@ describe("Bilibili live lookup", () => {
     await getVtbLiveInfo({ name: "示例主播", mid: "123" }, singleFlightConfig);
     expect(calls).toBe(1);
   });
-
-  test("does not share authenticated requests or caches across cookies", async () => {
-    let calls = 0;
-    globalThis.fetch = (async (
-      _url: Parameters<typeof fetch>[0],
-      init?: Parameters<typeof fetch>[1],
-    ) => {
-      calls += 1;
-      const cookie = new Headers(init?.headers).get("cookie") ?? "missing";
-      return new Response(JSON.stringify({
-        code: 0,
-        data: [{ uid: "cookie-mid", live_status: 0, uname: cookie }],
-      }));
-    }) as unknown as typeof fetch;
-    const authenticatedConfig = {
-      ...config,
-      liveApiUrl: "https://cookie-cache.example.test/live",
-    };
-
-    const [first, second] = await Promise.all([
-      getVtbLiveInfo(
-        { name: "first", mid: "cookie-mid" },
-        { ...authenticatedConfig, bilibiliCookie: "session=first" },
-      ),
-      getVtbLiveInfo(
-        { name: "second", mid: "cookie-mid" },
-        { ...authenticatedConfig, bilibiliCookie: "session=second" },
-      ),
-    ]);
-
-    expect(first.name).toBe("session=first");
-    expect(second.name).toBe("session=second");
-    expect(calls).toBe(2);
-  });
-
   test("opens a cooldown after a rate-limit response", async () => {
     let calls = 0;
     globalThis.fetch = (async () => {

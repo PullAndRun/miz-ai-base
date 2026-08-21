@@ -32,6 +32,7 @@ export const fetchWithRetry = async (url: string | URL, init: RetryRequestInit =
     retryDelayMs = HTTP_RETRY_DELAY_MS,
     retryJitterMs = 0,
     retryRateLimited = true,
+    proxy,
     ...requestInit
   } = init;
   let lastError: unknown;
@@ -48,7 +49,11 @@ export const fetchWithRetry = async (url: string | URL, init: RetryRequestInit =
       const requestSignal = signal && timeoutSignal
         ? AbortSignal.any([signal, timeoutSignal])
         : signal ?? timeoutSignal;
-      const response = await fetch(url, { ...requestInit, signal: requestSignal });
+      const response = await fetch(url, {
+        ...requestInit,
+        ...(proxy ? { proxy } : {}),
+        signal: requestSignal,
+      });
       if (!response.ok) {
         const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
         await response.body?.cancel().catch(() => undefined);

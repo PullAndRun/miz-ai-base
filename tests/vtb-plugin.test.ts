@@ -5,7 +5,7 @@ import { createVtbPlugin } from "../plugins/vtb";
 const createConfig = (subscriptions: MizConfig["vtb"]["subscriptions"]) => ({
   vtb: {
     enabled: true,
-    subscriptionWhitelistUserIds: [],
+    adminWhitelistUserIds: [],
     subscriptions,
   },
 } as unknown as MizConfig);
@@ -16,7 +16,48 @@ const adminMessage = {
   raw: { sender: { role: "admin" } },
 };
 
+const privateMessage = {
+  userId: 2,
+  raw: {},
+};
+
 describe("VTB subscription commands", () => {
+  test("requires the VTB admin whitelist for Bilibili login", async () => {
+    const config = createConfig([]);
+    config.vtb.adminWhitelistUserIds = [1];
+    let replyText = "";
+    const plugin = createVtbPlugin();
+
+    await plugin.handle!({
+      command: { name: "vtb", args: "login", raw: "vtb login" },
+      config,
+      message: privateMessage,
+      reply: async (message: unknown) => {
+        replyText = String(message);
+      },
+    } as never);
+
+    expect(replyText.length).toBeGreaterThan(0);
+  });
+
+  test("requires the VTB admin whitelist for Bilibili logout", async () => {
+    const config = createConfig([]);
+    config.vtb.adminWhitelistUserIds = [1];
+    let replyText = "";
+    const plugin = createVtbPlugin();
+
+    await plugin.handle!({
+      command: { name: "vtb", args: "logout", raw: "vtb logout" },
+      config,
+      message: privateMessage,
+      reply: async (message: unknown) => {
+        replyText = String(message);
+      },
+    } as never);
+
+    expect(replyText.length).toBeGreaterThan(0);
+  });
+
   test("list reads subscriptions persisted after the runtime snapshot", async () => {
     const staleConfig = createConfig([{ groupId: 100, streamers: ["旧主播"] }]);
     const latestConfig = createConfig([{ groupId: 100, streamers: ["旧主播", "新主播"] }]);

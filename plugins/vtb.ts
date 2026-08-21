@@ -24,6 +24,11 @@ import {
 } from "@/config";
 import { findVtbSubscription } from "@/vtb-subscriptions";
 import { notifyVtbSubscriptionChange } from "@/vtb-subscription-runtime";
+import {
+  clearBilibiliCredential,
+  generateBilibiliQrLogin,
+  waitForBilibiliQrLogin,
+} from "@/bilibili-credential";
 
 type VtbPluginDependencies = {
   loadCurrentConfig?: typeof loadConfig;
@@ -33,6 +38,8 @@ type VtbPluginDependencies = {
   getRepository?: typeof getVtbRepository;
   notifySubscriptionChange?: typeof notifyVtbSubscriptionChange;
 };
+
+let vtbLoginInProgress = false;
 
 export const createVtbPlugin = ({
   loadCurrentConfig = loadConfig,
@@ -53,15 +60,15 @@ export const createVtbPlugin = ({
     "取消订阅：miz vtb unsubscribe 主播昵称",
     "开播 @全体：miz vtb atall enable/disable 主播昵称",
     "同步昵称与直播间：miz vtb sync",
-    "订阅管理需要管理员或直播订阅白名单权限，资料同步需要同步白名单权限。",
-  ].join("\n"),
+    "订阅管理和资料同步都需要 VTB 管理员白名单权限。",
+  ].join("\n") + "\nB 站扫码登录/退出：miz vtb login/logout（仅限私聊和 VTB 管理员白名单）",
   async handle({ command, config, logger, message, reply }) {
     const [type, ...argumentParts] = command.args.trim().split(/\s+/);
     const atAllAction = type === "atall" ? parseAtAllAction(argumentParts[0]) : undefined;
     const nameParts = type === "atall" ? argumentParts.slice(1) : argumentParts;
     const streamerName = nameParts.join(" ").trim();
     if (
-      (type !== "live" && type !== "dynamic" && type !== "sync" && type !== "list" && type !== "subscribe" && type !== "unsubscribe" && type !== "atall") ||
+      (type !== "live" && type !== "dynamic" && type !== "sync" && type !== "list" && type !== "subscribe" && type !== "unsubscribe" && type !== "atall" && type !== "login" && type !== "logout") ||
       ((type === "live" || type === "dynamic" || type === "subscribe" || type === "unsubscribe" || type === "atall") && !streamerName) ||
       (type === "atall" && atAllAction === undefined)
     ) {
@@ -80,6 +87,52 @@ export const createVtbPlugin = ({
 
     if (!config.vtb.enabled) {
       await reply("主播追踪频道还没开启，喊管理员来接通一下吧。");
+      return;
+    }
+
+    if (type === "login") {
+      if (message.groupId !== undefined) {
+        await reply("B 站扫码登录只允许在私聊中发起，避免二维码泄露。");
+        return;
+      }
+      if (!isWhitelistedUser(message.userId, config.vtb.adminWhitelistUserIds)) {
+        await reply("B 站登录只对 VTB 管理员白名单开放。");
+        return;
+      }
+      if (vtbLoginInProgress) {
+        await reply("已经有一个 B 站扫码登录在进行中了，请先完成或等待二维码过期。");
+        return;
+      }
+
+      vtbLoginInProgress = true;
+      try {
+        const qr = await generateBilibiliQrLogin(config.vtb.proxyUrl);
+        await reply([
+          { type: "text", data: { text: "请使用 Bilibili App 扫描下方二维码登录；二维码 5 分钟内有效。" } },
+          { type: "image", data: { file: `base64://${qr.image.toString("base64")}` } },
+        ]);
+        await waitForBilibiliQrLogin(qr.qrcodeKey, config.vtb.proxyUrl);
+        await reply("B 站登录成功，完整凭据已保存，后续 VTB 请求会自动使用。\n如需重新登录，再次发送 miz vtb login 即可。");
+      } catch (error) {
+        logger.warn("plugin", "vtb bilibili QR login failed", { error: summarizeError(error) });
+        await reply("B 站扫码登录没有完成，请稍后重新发送 miz vtb login 再试。");
+      } finally {
+        vtbLoginInProgress = false;
+      }
+      return;
+    }
+
+    if (type === "logout") {
+      if (message.groupId !== undefined) {
+        await reply("B 站登录凭据只允许在私聊中清除。");
+        return;
+      }
+      if (!isWhitelistedUser(message.userId, config.vtb.adminWhitelistUserIds)) {
+        await reply("B 站登录只对 VTB 管理员白名单开放。");
+        return;
+      }
+      await clearBilibiliCredential();
+      await reply("B 站已退出扫码登录；后续 VTB 和视频下载将不再携带登录凭据。");
       return;
     }
 
@@ -103,9 +156,9 @@ export const createVtbPlugin = ({
         }
         if (!isGroupAdministrator(message.raw) && !isWhitelistedUser(
           message.userId,
-          config.vtb.subscriptionWhitelistUserIds,
+          config.vtb.adminWhitelistUserIds,
         )) {
-          await reply("查询直播和动态可以直接用；调整本群关注名单需要管理员或主播订阅白名单权限。");
+          await reply("查询直播和动态可以直接用；调整本群关注名单需要群管理员或 VTB 管理员白名单权限。");
           return;
         }
 
@@ -216,8 +269,8 @@ export const createVtbPlugin = ({
       }
 
       if (type === "sync") {
-        if (!isWhitelistedUser(message.userId, config.vtb.syncWhitelistUserIds)) {
-          await reply("资料同步通道只对同步白名单成员开放。");
+        if (!isWhitelistedUser(message.userId, config.vtb.adminWhitelistUserIds)) {
+          await reply("资料同步通道只对 VTB 管理员白名单成员开放。");
           return;
         }
 

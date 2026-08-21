@@ -23,9 +23,6 @@ directory = ""
 [miz.network]
 proxyUrl = ""
 
-[miz.bilibili]
-cookie = ""
-
 [miz.ff14]
 manageWhitelistUserIds = []
 priceAlertEnabled = true
@@ -113,5 +110,4 @@ dynamicApiUrl = ""
 webUrl = "https://www.bilibili.com"
 liveWebUrl = "https://live.bilibili.com"
 nameSyncCron = "0 0 * * 0"
-syncWhitelistUserIds = []
-subscriptionWhitelistUserIds = []
+adminWhitelistUserIds = []
