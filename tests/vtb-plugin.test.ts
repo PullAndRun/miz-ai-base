@@ -128,12 +128,13 @@ describe("VTB subscription commands", () => {
     expect(repositoryLoads).toBe(0);
   });
 
-  test("list shows whether each streamer has at-all enabled", async () => {
+  test("list shows only enabled settings in a readable grouped format", async () => {
     const config = createConfig([{
       groupId: 100,
       streamers: ["主播甲", "主播乙"],
       atAllStreamers: ["主播乙"],
       dynamicStreamers: ["主播乙"],
+      dynamicAtAllStreamers: ["主播乙"],
     }]);
     let replyText = "";
     const plugin = createVtbPlugin({ loadCurrentConfig: async () => config });
@@ -147,10 +148,10 @@ describe("VTB subscription commands", () => {
       },
     } as never);
 
-    expect(replyText).toContain("主播甲（开播 @全体成员：否）");
-    expect(replyText).toContain("主播乙（开播 @全体成员：是）");
-    expect(replyText).toContain("· 主播甲（开播 @全体成员：否）\n  直播推送：是；动态推送：否");
-    expect(replyText).toContain("· 主播乙（开播 @全体成员：是）\n  直播推送：是；动态推送：是");
+    expect(replyText).toContain("📺 本群已订阅 2 位主播：\n1. 主播甲\n   · 直播推送\n\n2. 主播乙\n   · 直播推送\n   · 动态推送\n   · 开播 @全体成员\n   · 动态 @全体成员");
+    expect(replyText).not.toContain("动态推送：否");
+    expect(replyText).not.toContain("动态 @全体成员：否");
+    expect(replyText).not.toContain("开播 @全体成员：否");
   });
 
   test("atall command updates a subscribed streamer", async () => {

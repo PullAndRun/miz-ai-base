@@ -205,12 +205,20 @@ export const createVtbPlugin = ({
           await reply(
             subscription?.streamers.length
               ? [
-                  `📺 这个群正在关注 ${subscription.streamers.length} 位主播：`,
-                  ...subscription.streamers.map((name) =>
-                    [
-                      `· ${name}（开播 @全体成员：${subscription.atAllStreamers?.includes(name) ? "是" : "否"}）`,
-                      `  直播推送：是；动态推送：${subscription.dynamicStreamers?.includes(name) ? "是" : "否"}`,
-                    ].join("\n")),
+                  `📺 本群已订阅 ${subscription.streamers.length} 位主播：`,
+                  ...subscription.streamers.flatMap((name, index) => {
+                    const enabledItems = [
+                      "直播推送",
+                      ...(subscription.dynamicStreamers?.includes(name) ? ["动态推送"] : []),
+                      ...(subscription.atAllStreamers?.includes(name) ? ["开播 @全体成员"] : []),
+                      ...(subscription.dynamicAtAllStreamers?.includes(name) ? ["动态 @全体成员"] : []),
+                    ];
+                    return [
+                      `${index + 1}. ${name}`,
+                      ...enabledItems.map((item) => `   · ${item}`),
+                      ...(index < subscription.streamers.length - 1 ? [""] : []),
+                    ];
+                  }),
                 ].join("\n")
               : "📺 关注名单还是空的。\n添加：miz vtb subscribe 主播昵称",
           );
