@@ -55,7 +55,9 @@ const userSchema = z.looseObject({
 });
 const userResponseSchema = z.looseObject({
   code: z.number(),
-  data: z.looseObject({ result: z.array(userSchema).optional().default([]) }),
+  data: z.looseObject({ result: z.array(userSchema).optional().default([]) })
+    .optional()
+    .default({ result: [] }),
 });
 const cardResponseSchema = z.looseObject({
   code: z.number(),
@@ -187,17 +189,31 @@ export const resolveVtbStreamer = async (name: string, config: VtbConfig): Promi
   }
 
   const url = `${config.userApiUrl}${encodeURIComponent(name)}`;
-  const cookie = await getBilibiliCredentialHeader();
-  const response = userResponseSchema.parse(
+  let response = userResponseSchema.parse(
     await fetchJson(
       url,
       config.webUrl,
-      cookie ? { Cookie: cookie } : undefined,
+      undefined,
       undefined,
       config.proxyUrl,
       VTB_USER_SEARCH_REQUEST_INTERVAL_MS,
     ),
   );
+  if (response.code === -101) {
+    const cookie = await getBilibiliCredentialHeader();
+    if (cookie) {
+      response = userResponseSchema.parse(
+        await fetchJson(
+          url,
+          config.webUrl,
+          { Cookie: cookie },
+          undefined,
+          config.proxyUrl,
+          VTB_USER_SEARCH_REQUEST_INTERVAL_MS,
+        ),
+      );
+    }
+  }
   assertVtbApiSuccess(url, "user", response.code);
 
   const user = response.data.result.find((item) => item.uname === name);
@@ -1675,13 +1691,14 @@ const runProtectedVtbRequest = async <T>(
 
   const pendingRequest = (async () => {
     const host = getVtbRequestHost(url);
-    assertVtbRequestAvailable(host);
-    await reserveVtbRequestSlot(host, minimumIntervalMs);
-    assertVtbRequestAvailable(host);
+    const protectionKey = getVtbProtectionKey(url);
+    assertVtbRequestAvailable(protectionKey);
+    await reserveVtbRequestSlot(host, protectionKey, minimumIntervalMs);
+    assertVtbRequestAvailable(protectionKey);
     try {
       return await request();
     } catch (error) {
-      recordVtbTransportFailure(host, error);
+      recordVtbTransportFailure(protectionKey, error);
       throw error;
     }
   })();
@@ -1695,10 +1712,14 @@ const runProtectedVtbRequest = async <T>(
   }
 };
 
-const reserveVtbRequestSlot = async (host: string, minimumIntervalMs: number) => {
+const reserveVtbRequestSlot = async (
+  host: string,
+  protectionKey: string,
+  minimumIntervalMs: number,
+) => {
   const state = getVtbRequestState(host);
   const queued = state.queue.catch(() => undefined).then(async () => {
-    assertVtbRequestAvailable(host);
+    assertVtbRequestAvailable(protectionKey);
     // Carry a bounded part of a stricter interval across endpoint types. This
     // prevents a sensitive user-search request (5s) from being followed by a
     // dynamic request immediately, without making an interactive query wait
@@ -1712,7 +1733,7 @@ const reserveVtbRequestSlot = async (host: string, minimumIntervalMs: number) =>
     if (waitMs > 0) {
       await waitForVtbRequest(waitMs);
     }
-    assertVtbRequestAvailable(host);
+    assertVtbRequestAvailable(protectionKey);
     state.lastRequestAt = Date.now();
     state.lastMinimumIntervalMs = minimumIntervalMs;
   });
@@ -1732,7 +1753,7 @@ const assertVtbApiSuccess = (url: string, apiName: string, code: number) => {
     throw error;
   }
 
-  const state = getVtbRequestState(getVtbRequestHost(url));
+  const state = getVtbRequestState(getVtbProtectionKey(url));
   throw Object.assign(error, {
     name: "VtbRateLimitError",
     code,
@@ -1741,7 +1762,7 @@ const assertVtbApiSuccess = (url: string, apiName: string, code: number) => {
 };
 
 const recordVtbRequestSuccess = (url: string) => {
-  const state = getVtbRequestState(getVtbRequestHost(url));
+  const state = getVtbRequestState(getVtbProtectionKey(url));
   state.consecutiveFailures = 0;
   if (state.cooldownUntil <= Date.now()) {
     state.cooldownReason = undefined;
@@ -1749,8 +1770,7 @@ const recordVtbRequestSuccess = (url: string) => {
 };
 
 const recordVtbBusinessFailure = (url: string, code: number) => {
-  const host = getVtbRequestHost(url);
-  const state = getVtbRequestState(host);
+  const state = getVtbRequestState(getVtbProtectionKey(url));
   if (!VTB_RATE_LIMIT_CODES.has(code)) {
     // A parsed business response proves transport is healthy. Invalid input or
     // an endpoint-specific rejection must not contribute to a host-wide
@@ -1764,12 +1784,12 @@ const recordVtbBusinessFailure = (url: string, code: number) => {
   state.cooldownReason = "risk";
 };
 
-const recordVtbTransportFailure = (host: string, error: unknown) => {
+const recordVtbTransportFailure = (protectionKey: string, error: unknown) => {
   if (isVtbCooldownError(error)) {
     return;
   }
 
-  const state = getVtbRequestState(host);
+  const state = getVtbRequestState(protectionKey);
   const status = getHttpErrorStatus(error);
   if (status === 412 || status === 429) {
     const retryAfterMs = getHttpRetryAfterMs(error);
@@ -1801,18 +1821,18 @@ const recordVtbTransportFailure = (host: string, error: unknown) => {
   }
 };
 
-const assertVtbRequestAvailable = (host: string) => {
-  const cooldownUntil = getVtbRequestState(host).cooldownUntil;
+const assertVtbRequestAvailable = (protectionKey: string) => {
+  const cooldownUntil = getVtbRequestState(protectionKey).cooldownUntil;
   if (cooldownUntil <= Date.now()) {
     return;
   }
 
   throw Object.assign(
-    new Error(`VTB upstream ${host} is cooling down until ${new Date(cooldownUntil).toISOString()}`),
+    new Error(`VTB upstream ${protectionKey} is cooling down until ${new Date(cooldownUntil).toISOString()}`),
     {
       name: "VtbCooldownError",
       cooldownUntil,
-      cooldownReason: getVtbRequestState(host).cooldownReason ?? "transient",
+      cooldownReason: getVtbRequestState(protectionKey).cooldownReason ?? "transient",
     },
   );
 };
@@ -1838,6 +1858,21 @@ const getVtbRequestState = (host: string) => {
 const getVtbRequestHost = (url: string) => {
   try {
     return new URL(url).host;
+  } catch {
+    return url;
+  }
+};
+
+const getVtbProtectionKey = (url: string) => {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== "api.bilibili.com") {
+      return parsed.host;
+    }
+    if (parsed.pathname.includes("/search/")) return `${parsed.host}:search`;
+    if (parsed.pathname.includes("/web-dynamic/")) return `${parsed.host}:dynamic`;
+    if (parsed.pathname.includes("/user/cards")) return `${parsed.host}:card`;
+    return `${parsed.host}:${parsed.pathname}`;
   } catch {
     return url;
   }

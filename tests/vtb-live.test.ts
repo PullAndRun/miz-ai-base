@@ -44,8 +44,10 @@ describe("Bilibili live lookup", () => {
 
   test("normalizes search result room_id 0 as no live room", async () => {
     const referers: Array<string | null> = [];
+    const cookies: Array<string | null> = [];
     globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       referers.push(new Headers(init?.headers).get("referer"));
+      cookies.push(new Headers(init?.headers).get("cookie"));
       return new Response(JSON.stringify({
         code: 0,
         data: { result: [{ uname: "示例主播", mid: "123", room_id: 0 }] },
@@ -58,6 +60,7 @@ describe("Bilibili live lookup", () => {
       roomId: undefined,
     });
     expect(referers).toEqual(["https://www.example.test/"]);
+    expect(cookies).toEqual([null]);
   });
 
   test("caches successful user searches to avoid repeated anti-risk requests", async () => {
@@ -247,6 +250,30 @@ describe("Bilibili live lookup", () => {
       isLive: false,
     });
     expect(calls).toBe(4);
+  });
+
+  test("isolates user-search protection from card requests on the same host", async () => {
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      const url = new URL(String(input));
+      if (url.pathname.includes("/search/")) {
+        return new Response("protected", { status: 412 });
+      }
+      return new Response(JSON.stringify({
+        code: 0,
+        data: [{ mid: "9988", fans: 42, name: "卡片主播" }],
+      }));
+    }) as unknown as typeof fetch;
+    const isolatedConfig = {
+      ...config,
+      userApiUrl: "https://api.bilibili.com/x/web-interface/search/type?search_type=bili_user&keyword=",
+      cardApiUrl: "https://api.bilibili.com/x/polymer/pc-electron/v1/user/cards?uids=",
+    };
+
+    await expect(resolveVtbStreamer("触发搜索保护", isolatedConfig)).rejects.toMatchObject({ status: 412 });
+    await expect(getVtbCardInfo("9988", isolatedConfig)).resolves.toMatchObject({
+      name: "卡片主播",
+      fans: 42,
+    });
   });
 
   test("uses alternative live cover fields when the primary cover is absent", async () => {
