@@ -30,6 +30,8 @@ import {
   formatDynamicMessage,
   formatLiveMessage,
   formatOfflineMessage,
+  getVtbGuardSnapshot,
+  getVtbNewGuardNames,
   findVtbNameChanges,
   getVtbRepository,
   getVtbCardInfos,
@@ -534,6 +536,9 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
     });
     task.trigger();
   });
+  // Prime the live state immediately; waiting for the first cron boundary can
+  // otherwise miss short streams and delays legacy guard-baseline capture.
+  task.trigger();
   return {
     stop: async () => {
       detachSubscriptionListener();
@@ -739,6 +744,17 @@ const pollVtbSubscriptions = async (
         const stats: VtbLiveStats = { fans, fanClub, guards };
         const session = await repository.getLiveSession(streamer.mid);
         const activeSession = session?.endedAt ? undefined : session;
+        if (live.isLive && activeSession && !activeSession.startGuardSnapshot?.captured) {
+          try {
+            const startGuardSnapshot = live.roomId
+              ? await getVtbGuardSnapshot(live.roomId, streamer.mid, config.vtb)
+              : { ids: [], names: [], captured: false };
+            await repository.captureLiveSessionStartGuards(streamer.mid, startGuardSnapshot);
+            activeSession.startGuardSnapshot = startGuardSnapshot;
+          } catch (error) {
+            logger.warn("plugin", "vtb legacy live session guard baseline failed; live-end thanks will be omitted", normalizeError(error));
+          }
+        }
         const belongsToEndedSession = session?.endedAt !== undefined &&
           live.liveStartedAt !== undefined &&
           live.liveStartedAt <= session.endedAt;
@@ -782,9 +798,18 @@ const pollVtbSubscriptions = async (
           if (activeSession) {
             await repository.recordLiveDelivery(streamer.mid, deliveredGroupIds);
           } else {
+            let startGuardSnapshot;
+            try {
+              startGuardSnapshot = live.roomId
+                ? await getVtbGuardSnapshot(live.roomId, streamer.mid, config.vtb)
+                : { ids: [], names: [], captured: false };
+            } catch (error) {
+              logger.warn("plugin", "vtb start guard snapshot failed; live-end thanks will be omitted", normalizeError(error));
+              startGuardSnapshot = { ids: [], names: [], captured: false };
+            }
             // Store an empty list as a pending delivery as well, so a failed
             // first send is retried even after the freshness window closes.
-            await repository.startLiveSession(streamer, live, fans, deliveredGroupIds, stats);
+            await repository.startLiveSession(streamer, live, fans, deliveredGroupIds, stats, startGuardSnapshot);
           }
           if (deliveredGroups.length > 0) {
             logger.info("plugin", "vtb live started notification sent", { streamer: live.name, groupIds: deliveredGroups });
@@ -804,8 +829,22 @@ const pollVtbSubscriptions = async (
         } else if (!live.isLive && session) {
           const endedAt = session.endedAt ?? new Date(now);
           const endFans = session.endFans ?? fans;
+          let endGuardSnapshot = session.endGuardSnapshot;
           if (!session.endedAt) {
-            await repository.markLiveSessionEnded(streamer.mid, endFans, endedAt, stats);
+            try {
+              const startGuardSnapshot = session.startGuardSnapshot;
+              const roomId = live.roomId ?? session.roomId;
+              endGuardSnapshot = startGuardSnapshot?.captured && roomId
+                ? await getVtbGuardSnapshot(roomId, streamer.mid, config.vtb, {
+                    knownIds: new Set(startGuardSnapshot.ids),
+                    stopAfterNew: 6,
+                  })
+                : { ids: [], names: [], captured: false };
+            } catch (error) {
+              logger.warn("plugin", "vtb end guard snapshot failed; live-end thanks will be omitted", normalizeError(error));
+              endGuardSnapshot = { ids: [], names: [], captured: false };
+            }
+            await repository.markLiveSessionEnded(streamer.mid, endFans, endedAt, stats, endGuardSnapshot);
           }
           // Only groups that received this session's live-start notification
           // should receive its live-end notification. A group subscribing after
@@ -827,6 +866,7 @@ const pollVtbSubscriptions = async (
                 config.vtb.liveWebUrl,
                 { fanClub: session.startFanClub, guards: session.startGuards },
                 { fanClub: session.endFanClub ?? fanClub, guards: session.endGuards ?? guards },
+                getVtbNewGuardNames(session.startGuardSnapshot, endGuardSnapshot),
               ),
             );
             const deliveredGroups = await sendVtbGroupMessage(
@@ -944,7 +984,10 @@ const selectVtbDynamicPollBatch = <T>(
   const pollsPerCycle = Math.max(1, Math.ceil(dynamicPollIntervalMs / livePollIntervalMs));
   const batchSize = Math.max(1, Math.ceil(subscriptions.length / pollsPerCycle));
   const cursor = pollState.dynamicCursor % subscriptions.length;
-  const batch = subscriptions.slice(cursor, cursor + batchSize);
+  const batch = Array.from(
+    { length: Math.min(batchSize, subscriptions.length) },
+    (_, index) => subscriptions[(cursor + index) % subscriptions.length],
+  );
   pollState.dynamicCursor = (cursor + batch.length) % subscriptions.length;
   return batch;
 };

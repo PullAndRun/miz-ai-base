@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { formatNewsMessages, formatScheduledNewsItems } from "@/news";
-import { formatDynamicMessage, formatLiveMessage, formatOfflineMessage } from "@/vtb";
+import { formatDynamicMessage, formatLiveMessage, formatOfflineMessage, getVtbNewGuardNames } from "@/vtb";
 import { createWallpaperMessage } from "@/wallpaper";
 import divinationPlugin from "../plugins/divination";
 
@@ -78,6 +78,22 @@ describe("user-facing copy", () => {
     expect(noBaseline).not.toContain("本场新关注");
     expect(noBaseline).not.toContain("粉丝团");
     expect(noBaseline).not.toContain("大航海");
+  });
+
+  test("thanks only for one to five guards newly present at the end", () => {
+    const start = { ids: ["1"], names: ["续舰"], captured: true };
+    const end = { ids: ["1", "2", "3"], names: ["续舰", "甲", "乙"], captured: true };
+    expect(getVtbNewGuardNames(start, end)).toEqual(["甲", "乙"]);
+    expect(formatOfflineMessage(
+      "主播", new Date("2030-08-01T20:00:00+08:00"), new Date("2030-08-01T21:00:00+08:00"),
+      undefined, undefined, undefined, "", {}, {}, ["甲", "乙"],
+    )).toContain("感谢本场上舰的观众：\n- 甲\n- 乙");
+    expect(getVtbNewGuardNames(start, {
+      ids: ["1", "2", "3", "4", "5", "6", "7"],
+      names: ["续舰", "甲", "乙", "丙", "丁", "戊", "己"], captured: true,
+    })).toEqual([]);
+    expect(getVtbNewGuardNames(start, { ids: ["1"], names: ["续舰"], captured: true })).toEqual([]);
+    expect(getVtbNewGuardNames(start, { ids: ["2"], names: ["甲"], captured: false })).toEqual([]);
   });
 
   test("dynamic messages omit duplicated title or description text", () => {

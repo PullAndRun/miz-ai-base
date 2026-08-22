@@ -35,6 +35,7 @@ const VTB_USER_SEARCH_MISS_CACHE_MS = 10 * 60_000;
 // Dynamic feeds are the most numerous VTB requests. Keep a deliberately
 // conservative per-host interval and add jitter in the shared request queue.
 const VTB_DYNAMIC_REQUEST_INTERVAL_MS = 2_000;
+const VTB_GUARD_REQUEST_INTERVAL_MS = 1_000;
 const VTB_LIVE_QUERY_CACHE_MS = 60_000;
 const VTB_IMAGE_CACHE_MS = 10 * 60_000;
 const MAX_VTB_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -46,7 +47,19 @@ const MAX_VTB_QUERY_CACHE_ENTRIES = 1_000;
 // separately as transport-level protection signals.
 const VTB_RATE_LIMIT_CODES = new Set([-509]);
 const BILIBILI_DYNAMIC_API_URL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space";
-const BILIBILI_DYNAMIC_FEATURES = "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote";
+const BILIBILI_GUARD_API_URL = "https://api.live.bilibili.com/xlive/app-room/v2/guardTab/topListNew";
+const BILIBILI_DYNAMIC_FEATURES = [
+  "itemOpusStyle",
+  "listOnlyfans",
+  "opusBigCover",
+  "onlyfansVote",
+  "forwardListHidden",
+  "decorationCard",
+  "commentsNewVersion",
+  "onlyfansAssetsV2",
+  "ugcDelete",
+  "onlyfansQaCard",
+].join(",");
 
 // Bilibili normally serializes these values as JSON numbers, but a few
 // gateway variants and compatibility endpoints return numeric strings. Keep
@@ -60,16 +73,24 @@ const numericSchema = z.preprocess(
 );
 const integerSchema = numericSchema.pipe(z.number().int());
 
-const userSchema = z.looseObject({
+const legacyUserSchema = z.looseObject({
   uname: z.string().min(1),
   mid: z.union([z.string(), z.number()]),
   room_id: z.union([z.string(), z.number()]).optional(),
 });
+const nameToUidSchema = z.looseObject({
+  name: z.string().min(1),
+  uid: z.union([z.string(), z.number()]),
+});
 const userResponseSchema = z.looseObject({
   code: integerSchema,
-  data: z.looseObject({ result: z.array(userSchema).optional().default([]) })
-    .optional()
-    .default({ result: [] }),
+  data: z.preprocess(
+    (value) => value ?? { result: [], uid_list: [] },
+    z.looseObject({
+      result: z.array(legacyUserSchema).optional().default([]),
+      uid_list: z.array(nameToUidSchema).optional().default([]),
+    }),
+  ),
 });
 const cardResponseSchema = z.looseObject({
   code: integerSchema,
@@ -122,6 +143,7 @@ export type VtbLiveStats = {
   fanClub?: number;
   guards?: number;
 };
+export type VtbGuardSnapshot = { ids: string[]; names: string[]; captured: boolean };
 export type VtbDynamic = {
   title: string;
   description: string;
@@ -136,12 +158,14 @@ export type LiveSession = {
   startFans?: number;
   startFanClub?: number;
   startGuards?: number;
+  startGuardSnapshot?: VtbGuardSnapshot;
   roomId?: string;
   deliveredGroupIds: string[];
   endedAt?: Date;
   endFans?: number;
   endFanClub?: number;
   endGuards?: number;
+  endGuardSnapshot?: VtbGuardSnapshot;
   endDeliveredGroupIds: string[];
 };
 export type VtbDynamicDeliveryState = {
@@ -201,11 +225,13 @@ export const resolveVtbStreamer = async (name: string, config: VtbConfig): Promi
   }
 
   const url = createUserSearchApiUrl(config.userApiUrl, name);
+  const modernLookup = isNameToUidApiUrl(url);
+  const credential = modernLookup ? await getBilibiliCredentialHeader() : undefined;
   let response = userResponseSchema.parse(
     await fetchJson(
       url,
       config.webUrl,
-      undefined,
+      credential ? { Cookie: credential } : undefined,
       undefined,
       config.proxyUrl,
       VTB_USER_SEARCH_REQUEST_INTERVAL_MS,
@@ -228,10 +254,13 @@ export const resolveVtbStreamer = async (name: string, config: VtbConfig): Promi
   }
   assertVtbApiSuccess(url, "user", response.code);
 
-  const user = response.data.result.find((item) => item.uname === name);
-  const streamer = user
-    ? { name: user.uname, mid: String(user.mid), roomId: normalizeRoomId(user.room_id) }
-    : undefined;
+  const legacyUser = response.data.result.find((item) => item.uname === name);
+  const nameToUidUser = response.data.uid_list.find((item) => item.name === name);
+  const streamer = legacyUser
+    ? { name: legacyUser.uname, mid: String(legacyUser.mid), roomId: normalizeRoomId(legacyUser.room_id) }
+    : nameToUidUser
+      ? { name: nameToUidUser.name, mid: String(nameToUidUser.uid) }
+      : undefined;
   vtbUserSearchCache = writeExpiringCache(
     vtbUserSearchCache,
     cacheKey,
@@ -406,9 +435,11 @@ export const getVtbCardInfo = async (mid: string, config: VtbConfig): Promise<Vt
 export const getVtbCardInfos = async (mids: readonly string[], config: VtbConfig) => {
   const uniqueMids = Array.from(new Set(mids));
   const cards = new Map<string, VtbCardInfo>();
-  for (const batch of chunk(uniqueMids, 50)) {
+  if (uniqueMids.length === 0) return cards;
+  const batchSize = hasCardQueryParameter(config.cardApiUrl, "mid") ? 1 : 50;
+  const cookie = await getBilibiliCredentialHeader();
+  for (const batch of chunk(uniqueMids, batchSize)) {
     const url = createCardApiUrl(config.cardApiUrl, batch);
-    const cookie = await getBilibiliCredentialHeader();
     const response = cardResponseSchema.parse(
       await fetchJson(
         url,
@@ -505,9 +536,10 @@ export const getVtbLiveInfos = async (streamers: readonly VtbStreamer[], config:
   const uniqueStreamers = Array.from(
     new Map(streamers.map((streamer) => [streamer.mid, streamer])).values(),
   );
+  if (uniqueStreamers.length === 0) return results;
+  const cookie = await getBilibiliCredentialHeader();
   for (const batch of chunk(uniqueStreamers, 50)) {
     const url = config.liveApiUrl;
-    const cookie = await getBilibiliCredentialHeader();
     const response = liveResponseSchema.parse(
       await fetchJson(url, config.webUrl, cookie ? { Cookie: cookie } : undefined, {
         method: "POST",
@@ -565,9 +597,7 @@ export const getVtbDynamics = async (
     host_mid: streamer.mid,
     platform: "web",
     features: BILIBILI_DYNAMIC_FEATURES,
-    dm_img_list: createDmImgList(),
-    dm_img_str: createDmImgToken(),
-    dm_cover_img_str: createDmImgToken(),
+    web_location: "333.1387",
   });
   const dynamicUrl = `${BILIBILI_DYNAMIC_API_URL}?${query.toString()}`;
   const response = dynamicResponseSchema.parse(
@@ -724,12 +754,22 @@ const createVtbRepository = (prisma: PrismaClient) => {
           startFans: session.startFans ?? undefined,
           startFanClub: session.startFanClub ?? undefined,
           startGuards: session.startGuards ?? undefined,
+          startGuardSnapshot: {
+            ids: session.startGuardIds,
+            names: session.startGuardNames,
+            captured: session.startGuardSnapshotCaptured,
+          },
           roomId: session.liveRoom?.toString(),
           deliveredGroupIds: session.deliveredGroupIds,
           endedAt: session.endedAt ?? undefined,
           endFans: session.endFans ?? undefined,
           endFanClub: session.endFanClub ?? undefined,
           endGuards: session.endGuards ?? undefined,
+          endGuardSnapshot: {
+            ids: session.endGuardIds,
+            names: session.endGuardNames,
+            captured: session.endGuardSnapshotCaptured,
+          },
           endDeliveredGroupIds: session.endDeliveredGroupIds,
         }
       : undefined;
@@ -741,33 +781,41 @@ const createVtbRepository = (prisma: PrismaClient) => {
     fans?: number,
     deliveredGroupIds: readonly string[] = [],
     stats: VtbLiveStats = {},
+    guardSnapshot?: VtbGuardSnapshot,
   ) => {
     await prisma.vtbLiveSession.upsert({
       where: { streamerMid: toMid(streamer.mid) },
       create: {
         streamerMid: toMid(streamer.mid),
-        streamerName: live.name,
         liveRoom: toOptionalMid(live.roomId),
         startedAt: live.liveStartedAt ?? new Date(),
         startFans: stats.fans ?? fans,
         startFanClub: stats.fanClub,
         startGuards: stats.guards,
+        startGuardIds: guardSnapshot?.ids ?? [],
+        startGuardNames: guardSnapshot?.names ?? [],
+        startGuardSnapshotCaptured: guardSnapshot?.captured ?? false,
         deliveredGroupIds: [...deliveredGroupIds],
         endDeliveredGroupIds: [],
       },
       update: {
-        streamerName: live.name,
         liveRoom: toOptionalMid(live.roomId),
         startedAt: live.liveStartedAt ?? new Date(),
         startFans: stats.fans ?? fans,
         startFanClub: stats.fanClub,
         startGuards: stats.guards,
+        startGuardIds: guardSnapshot?.ids ?? [],
+        startGuardNames: guardSnapshot?.names ?? [],
+        startGuardSnapshotCaptured: guardSnapshot?.captured ?? false,
         deliveredGroupIds: [...deliveredGroupIds],
         endDeliveredGroupIds: [],
         endedAt: null,
         endFans: null,
         endFanClub: null,
         endGuards: null,
+        endGuardIds: [],
+        endGuardNames: [],
+        endGuardSnapshotCaptured: false,
       },
     });
   };
@@ -780,11 +828,23 @@ const createVtbRepository = (prisma: PrismaClient) => {
     });
   };
 
+  const captureLiveSessionStartGuards = async (mid: string, guardSnapshot: VtbGuardSnapshot) => {
+    await prisma.vtbLiveSession.updateMany({
+      where: { streamerMid: toMid(mid), endedAt: null, startGuardSnapshotCaptured: false },
+      data: {
+        startGuardIds: guardSnapshot.ids,
+        startGuardNames: guardSnapshot.names,
+        startGuardSnapshotCaptured: guardSnapshot.captured,
+      },
+    });
+  };
+
   const markLiveSessionEnded = async (
     mid: string,
     fans?: number,
     endedAt = new Date(),
     stats: VtbLiveStats = {},
+    guardSnapshot?: VtbGuardSnapshot,
   ) => {
     await prisma.vtbLiveSession.update({
       where: { streamerMid: toMid(mid) },
@@ -793,6 +853,9 @@ const createVtbRepository = (prisma: PrismaClient) => {
         endFans: stats.fans ?? fans,
         endFanClub: stats.fanClub,
         endGuards: stats.guards,
+        endGuardIds: guardSnapshot?.ids ?? [],
+        endGuardNames: guardSnapshot?.names ?? [],
+        endGuardSnapshotCaptured: guardSnapshot?.captured ?? false,
       },
     });
   };
@@ -1463,7 +1526,8 @@ const createVtbRepository = (prisma: PrismaClient) => {
     listDeliveredFf14PriceAlertListingKeys, recordFf14PriceAlertDeliveries,
     cleanupExpiredFf14PriceAlertDeliveries,
     findStreamerByName, listStreamers, deleteStreamersNotInNames, deleteStreamerByName,
-    upsertStreamer, getLiveSession, startLiveSession, recordLiveDelivery, markLiveSessionEnded,
+    upsertStreamer, getLiveSession, startLiveSession, captureLiveSessionStartGuards,
+    recordLiveDelivery, markLiveSessionEnded,
     recordLiveEndDelivery,
     getDynamicDeliveryState, startDynamicDelivery, recordDynamicDelivery,
     getDeliveredNewsIds, recordNewsDeliveries, ensureReminderStorage, createReminder, claimDueReminders,
@@ -1526,12 +1590,17 @@ export const formatOfflineMessage = (
   liveWebUrl = "",
   startStats: VtbLiveStats = {},
   endStats: VtbLiveStats = {},
+  guardNames: readonly string[] = [],
 ) => {
   const fanChange = positiveCountChange(startFans, endFans);
   const fanClubChange = positiveCountChange(startStats.fanClub, endStats.fanClub);
   const guardChange = positiveCountChange(startStats.guards, endStats.guards);
   const durationMinutes = Math.max(1, Math.floor((endedAt.getTime() - startedAt.getTime()) / 60_000));
+  const guardThanks = guardNames.length === 0
+    ? []
+    : ["感谢本场上舰的观众：", ...guardNames.map((guardName) => `- ${guardName}`), ""];
   return [
+    ...guardThanks,
     `🌙 ${name} 今天收工啦`,
     "",
     `这次和大家一起度过了 ${formatLiveDuration(durationMinutes)}`,
@@ -1543,6 +1612,18 @@ export const formatOfflineMessage = (
     "",
     "辛苦啦，也谢谢大家一路陪到下播。充好电，我们下次见！",
   ].join("\n");
+};
+
+export const getVtbNewGuardNames = (
+  start: VtbGuardSnapshot | undefined,
+  end: VtbGuardSnapshot | undefined,
+) => {
+  if (!start?.captured || !end?.captured) return [];
+  const startIds = new Set(start.ids);
+  const namesById = new Map(end.ids.map((id, index) => [id, end.names[index] || id]));
+  const newIds = end.ids.filter((id) => !startIds.has(id));
+  if (newIds.length === 0 || newIds.length > 5) return [];
+  return newIds.map((id) => namesById.get(id) || id).filter(Boolean);
 };
 
 const positiveCountChange = (start: number | undefined, end: number | undefined) => {
@@ -1954,6 +2035,8 @@ const createUserSearchApiUrl = (apiUrl: string, name: string) => {
     ["keyword", "name", "q", "query"].find((key) => url.searchParams.has(key));
   if (parameter) {
     url.searchParams.set(parameter, name);
+  } else if (isNameToUidApiUrl(apiUrl)) {
+    url.searchParams.set("names", name);
   } else if (url.search) {
     url.searchParams.set("keyword", name);
   } else {
@@ -1965,13 +2048,84 @@ const createUserSearchApiUrl = (apiUrl: string, name: string) => {
   return url.href;
 };
 
+/** Return the complete guard list for a room, including the separately returned top three. */
+export const getVtbGuardSnapshot = async (
+  roomId: string,
+  mid: string,
+  config: VtbConfig,
+  options: { knownIds?: ReadonlySet<string>; stopAfterNew?: number } = {},
+): Promise<VtbGuardSnapshot> => {
+  const ids: string[] = [];
+  const names: string[] = [];
+  const seen = new Set<string>();
+  let total = 0;
+  let newCount = 0;
+  for (let page = 1; page <= 100; page += 1) {
+    const query = new URLSearchParams({
+      roomid: roomId,
+      ruid: mid,
+      page: String(page),
+      page_size: "30",
+      typ: "3",
+    });
+    const url = `${BILIBILI_GUARD_API_URL}?${query.toString()}`;
+    const response = z.looseObject({ code: integerSchema, data: z.unknown().optional() }).parse(
+      await fetchJson(url, config.webUrl, undefined, undefined, config.proxyUrl, VTB_GUARD_REQUEST_INTERVAL_MS),
+    );
+    assertVtbApiSuccess(url, "guard", response.code);
+    if (!isRecord(response.data)) {
+      throw new Error("Bilibili guard API returned no data");
+    }
+    const data = response.data;
+    total = findCount(data.info, ["num", "total", "count"]) ?? total;
+    const entries = [
+      ...(page === 1 && Array.isArray(data.top3) ? data.top3 : []),
+      ...(Array.isArray(data.list) ? data.list : []),
+    ];
+    for (const entry of entries) {
+      if (!isRecord(entry)) continue;
+      const uinfo = isRecord(entry.uinfo) ? entry.uinfo : entry;
+      const id = firstText(uinfo.uid ?? uinfo.mid);
+      const name = firstText(isRecord(uinfo.base) ? uinfo.base.name : uinfo.uname ?? uinfo.name);
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+        names.push(name || id);
+        if (options.knownIds && !options.knownIds.has(id)) {
+          newCount += 1;
+        }
+      }
+    }
+    if (options.stopAfterNew !== undefined && newCount >= options.stopAfterNew) break;
+    if (entries.length === 0 || (total > 0 && ids.length >= total) || entries.length < 30) break;
+  }
+  return { ids, names, captured: total === 0 || ids.length >= total };
+};
+
+const isNameToUidApiUrl = (apiUrl: string) => {
+  try {
+    return /\/name-to-uid\/?$/i.test(new URL(apiUrl).pathname);
+  } catch {
+    return false;
+  }
+};
+
 const createCardApiUrl = (apiUrl: string, mids: readonly string[]) => {
   const url = new URL(apiUrl);
-  if (!url.searchParams.has("uids")) {
-    throw new Error("Bilibili card API URL must include the uids query parameter");
+  const parameter = url.searchParams.has("uids") ? "uids" : url.searchParams.has("mid") ? "mid" : undefined;
+  if (!parameter) {
+    throw new Error("Bilibili card API URL must include the uids or mid query parameter");
   }
-  url.searchParams.set("uids", mids.join(","));
+  url.searchParams.set(parameter, mids.join(","));
   return url.href;
+};
+
+const hasCardQueryParameter = (apiUrl: string, parameter: "mid" | "uids") => {
+  try {
+    return new URL(apiUrl).searchParams.has(parameter);
+  } catch {
+    return false;
+  }
 };
 
 const chunk = <T>(items: readonly T[], size: number) => {
@@ -2078,7 +2232,9 @@ const parseBilibiliDynamicItem = (
 
   const modules = asRecord(value.modules);
   const author = asRecord(modules?.module_author);
-  const dynamic = asRecord(modules?.module_dynamic);
+  const original = asRecord(value.orig);
+  const originalModules = asRecord(original?.modules);
+  const dynamic = asRecord(modules?.module_dynamic) ?? asRecord(originalModules?.module_dynamic);
   const major = asRecord(dynamic?.major);
   // Bilibili represents an automatic "live started" notification as a
   // dynamic item too. It is not a user-authored post and must not be sent as
@@ -2093,11 +2249,14 @@ const parseBilibiliDynamicItem = (
     value.dynamic_id,
     value.id,
     getTextAt(value.basic, "comment_id"),
+    getTextAt(value.basic, "comment_id_str"),
+    getTextAt(value.basic, "rid_str"),
   );
   const rawLink = firstText(
     value.uri,
     value.link,
     value.dynamic_url,
+    getTextAt(value.basic, "jump_url"),
     getTextAt(major?.opus, "jump_url"),
     getTextAt(major?.archive, "jump_url"),
     getTextAt(major?.article, "jump_url"),
@@ -2186,15 +2345,6 @@ const parseBilibiliDate = (value: unknown) => {
     return Number.isFinite(numeric) ? parseDate(numeric > 10_000_000_000 ? numeric / 1_000 : numeric) : undefined;
   }
   return typeof value === "string" ? parseDate(value) : undefined;
-};
-
-const createDmImgToken = () => Buffer.from("no webgl").toString("base64").slice(0, -2);
-
-const createDmImgList = () => {
-  const x = Math.max(Math.round(1_245 + (Math.random() * 2 - 1) * 5), 0);
-  const y = Math.max(Math.round(1_285 + (Math.random() * 2 - 1) * 5), 0);
-  const timestamp = Math.max(Math.round(30 + (Math.random() * 2 - 1) * 5), 0);
-  return JSON.stringify([{ x: 3 * x + 2 * y, y: 4 * x - 5 * y, z: 0, timestamp, type: 0 }]);
 };
 
 const normalizeRoomId = (value: string | number | bigint | null | undefined) => {

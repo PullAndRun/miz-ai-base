@@ -7,6 +7,7 @@ import {
   getVtbImageFile,
   getVtbLiveInfo,
   getVtbLiveInfos,
+  getVtbGuardSnapshot,
   prependVtbAtAllMention,
   resolveVtbStreamer,
   resolveVtbStreamerForQuery,
@@ -90,6 +91,38 @@ describe("Bilibili live lookup", () => {
     expect(new URL(urls[0]).searchParams.get("from")).toBe("miz");
     expect(new URL(urls[0]).searchParams.get("name")).toBe("带 空格");
     await expect(getVtbLiveInfo(streamer!, searchConfig)).resolves.toMatchObject({ isLive: true });
+  });
+
+  test("accepts the documented name-to-uid lookup response", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({
+        code: 0,
+        data: { uid_list: [{ name: "官方查询主播", uid: "987654" }] },
+      }));
+    }) as unknown as typeof fetch;
+
+    const modernConfig = {
+      ...config,
+      userApiUrl: "https://modern-lookup.example.test/x/polymer/web-dynamic/v1/name-to-uid?names=",
+    };
+    await expect(resolveVtbStreamer("官方查询主播", modernConfig)).resolves.toEqual({
+      name: "官方查询主播",
+      mid: "987654",
+    });
+    expect(new URL(urls[0]).searchParams.get("names")).toBe("官方查询主播");
+  });
+
+  test("does not subscribe to an approximate search result", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      code: 0,
+      data: { result: [{ uname: "相似主播", mid: "987" }] },
+    }))) as unknown as typeof fetch;
+    await expect(resolveVtbStreamer("不存在的主播", {
+      ...config,
+      userApiUrl: "https://approximate-search.example.test/users?name=",
+    })).resolves.toBeUndefined();
   });
 
   test("caches successful user searches to avoid repeated anti-risk requests", async () => {
@@ -354,6 +387,55 @@ describe("Bilibili live lookup", () => {
     await expect(getVtbCardInfo("123", cardConfig)).resolves.toMatchObject({
       avatarUrl: "https://i0.hdslb.com/avatar.jpg",
     });
+  });
+
+  test("parses guard top-three and paged list entries", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({
+        code: 0,
+        data: {
+          info: { num: 2 },
+          top3: [{ uinfo: { uid: 1, base: { name: "甲" } } }],
+          list: [{ uinfo: { uid: 2, base: { name: "乙" } } }],
+        },
+      }));
+    }) as unknown as typeof fetch;
+    await expect(getVtbGuardSnapshot("456", "123", config)).resolves.toEqual({
+      ids: ["1", "2"], names: ["甲", "乙"], captured: true,
+    });
+    expect(new URL(urls[0]).searchParams.get("roomid")).toBe("456");
+    expect(new URL(urls[0]).searchParams.get("ruid")).toBe("123");
+  });
+
+  test("accepts the documented single-mid web card response", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({
+        code: 0,
+        data: {
+          card: {
+            mid: "123",
+            name: "官方卡片主播",
+            fans: 6007386,
+            face: "https://i1.hdslb.com/bfs/face/avatar.webp",
+          },
+        },
+      }));
+    }) as unknown as typeof fetch;
+    const cardConfig = {
+      ...config,
+      cardApiUrl: "https://api.bilibili.com/x/web-interface/card?mid=",
+    };
+
+    await expect(getVtbCardInfo("123", cardConfig)).resolves.toEqual({
+      fans: 6007386,
+      name: "官方卡片主播",
+      avatarUrl: "https://i1.hdslb.com/bfs/face/avatar.webp",
+    });
+    expect(new URL(urls[0]).searchParams.get("mid")).toBe("123");
   });
 
   test("downloads notification images once and sends them as base64", async () => {

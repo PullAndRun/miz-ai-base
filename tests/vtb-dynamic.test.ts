@@ -129,4 +129,25 @@ describe("Bilibili dynamic response parsing", () => {
     expect(feed.items).toHaveLength(1);
     expect(feed.items[0].link).toBe("https://t.bilibili.com/200");
   });
+
+  test("uses the documented basic comment id and jump URL fallbacks", () => {
+    const feed = parseBilibiliDynamicFeed([
+      {
+        basic: {
+          comment_id_str: "300",
+          jump_url: "//www.bilibili.com/opus/300",
+        },
+        modules: {
+          module_author: { name: "官方主播", pub_ts: 1_753_000_000 },
+          module_dynamic: { desc: { text: "官方动态" } },
+        },
+      },
+    ], "官方主播", "https://www.bilibili.com");
+
+    expect(feed.items).toHaveLength(1);
+    expect(feed.items[0]).toMatchObject({
+      link: "https://www.bilibili.com/opus/300",
+      description: "官方动态",
+    });
+  });
 });

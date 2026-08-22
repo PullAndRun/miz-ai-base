@@ -26,18 +26,23 @@ model VtbStreamer {
 
 model VtbLiveSession {
   streamerMid    BigInt       @id @map("streamer_mid")
-  streamerName   String       @map("streamer_name")
   liveRoom       BigInt?      @map("live_room")
   startedAt      DateTime     @map("live_started_at")
   startFans      Int?         @map("start_fans")
   startFanClub   Int?         @map("start_fan_club")
   startGuards    Int?         @map("start_guards")
+  startGuardIds  String[]     @default([]) @map("start_guard_ids")
+  startGuardNames String[]    @default([]) @map("start_guard_names")
+  startGuardSnapshotCaptured Boolean @default(false) @map("start_guard_snapshot_captured")
   deliveredGroupIds String[]  @default([]) @map("delivered_group_ids")
   endDeliveredGroupIds String[] @default([]) @map("end_delivered_group_ids")
   endedAt        DateTime?    @map("ended_at")
   endFans        Int?         @map("end_fans")
   endFanClub     Int?         @map("end_fan_club")
   endGuards      Int?         @map("end_guards")
+  endGuardIds    String[]      @default([]) @map("end_guard_ids")
+  endGuardNames  String[]      @default([]) @map("end_guard_names")
+  endGuardSnapshotCaptured Boolean @default(false) @map("end_guard_snapshot_captured")
 
   @@map("vtb_live_sessions")
 }

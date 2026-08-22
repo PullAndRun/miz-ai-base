@@ -104,7 +104,7 @@ dynamicConcurrency = 2
 # 粉丝数不需要随直播状态频繁刷新，默认缓存 30 分钟。
 cardCacheMinutes = 30
 userApiUrl = ""
-cardApiUrl = ""
+cardApiUrl = "https://api.bilibili.com/x/web-interface/card?mid="
 liveApiUrl = ""
 webUrl = "https://www.bilibili.com"
 liveWebUrl = "https://live.bilibili.com"

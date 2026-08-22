@@ -3,6 +3,7 @@ import type { MizPlugin } from "@/plugins";
 import {
   deliverVideoWithFallback,
   isVideoDeliveryError,
+  isVideoDeliveryUnknownError,
   type VideoDeliveryError,
 } from "@/video-delivery";
 import { enqueueVideoJob } from "@/video-jobs";
@@ -15,6 +16,7 @@ import {
 } from "@/video";
 
 const VIDEO_SEND_TIMEOUT_MS = 10 * 60_000;
+const VIDEO_SEND_CLEANUP_GRACE_MS = 10 * 60_000;
 
 const videoPlugin: MizPlugin = {
   name: "video",
@@ -115,18 +117,35 @@ const processVideo = async ({
       config: config.video,
       network: config.network,
     });
+    deliveryAttempted = true;
+    let delayedCleanup = false;
     try {
-      deliveryAttempted = true;
       await deliverVideoWithFallback(
         downloadedVideoPath,
         config.video,
         sendVideo,
         sendForward,
+        { stopOnTimeout: true },
       );
+    } catch (error) {
+      delayedCleanup = isVideoDeliveryUnknownError(error);
+      throw error;
     } finally {
-      await cleanupVideoFile(downloadedVideoPath, logger);
+      if (delayedCleanup) {
+        scheduleVideoCleanup(downloadedVideoPath, logger);
+      } else {
+        await cleanupVideoFile(downloadedVideoPath, logger);
+      }
     }
   } catch (error) {
+    if (isVideoDeliveryUnknownError(error)) {
+      logger.warn("plugin", "video delivery timed out with an unknown result", {
+        mode: error.mode,
+        error: describeError(error.cause),
+      });
+      await reply("视频发送请求超时了，结果暂时无法确认。请先看看聊天里是否已经出现视频，避免重复发送。");
+      return;
+    }
     if (isVideoDeliveryError(error)) {
       logger.warn("plugin", "all video delivery strategies failed", {
         attempts: describeDeliveryAttempts(error),
@@ -160,4 +179,11 @@ const cleanupVideoFile = async (videoPath: string, logger: Logger) => {
   await deleteDownloadedVideo(videoPath).catch((error) => {
     logger.warn("plugin", "video cleanup failed", { videoPath, error });
   });
+};
+
+const scheduleVideoCleanup = (videoPath: string, logger: Logger) => {
+  const timer = setTimeout(() => {
+    void cleanupVideoFile(videoPath, logger);
+  }, VIDEO_SEND_CLEANUP_GRACE_MS);
+  timer.unref?.();
 };
