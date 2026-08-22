@@ -2,7 +2,7 @@
   "name": "miz",
   "version": "0.1.0",
   "private": true,
-  "license": "WTFPL",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "start": "bun run dependencies:update -- normal --display-tool-versions --startup && bun run prisma:generate && bun run scripts/start.ts normal",
