@@ -28,6 +28,39 @@ const groupMessage = {
 };
 
 describe("VTB subscription commands", () => {
+  test("rejects a live-room URL before querying Bilibili", async () => {
+    const config = createConfig([]);
+    config.vtb.userApiUrl = "https://example.test/users?name=";
+    config.vtb.liveApiUrl = "https://example.test/live";
+    config.vtb.webUrl = "https://www.example.test";
+    config.vtb.liveWebUrl = "https://live.example.test";
+    let repositoryLoads = 0;
+    let replyText = "";
+    const plugin = createVtbPlugin({
+      getRepository: async () => {
+        repositoryLoads += 1;
+        return {} as never;
+      },
+    });
+
+    await plugin.handle!({
+      command: {
+        name: "vtb",
+        args: "live https://live.bilibili.com/1978987236",
+        raw: "vtb live https://live.bilibili.com/1978987236",
+      },
+      config,
+      message: groupMessage,
+      reply: async (message: unknown) => {
+        replyText = String(message);
+      },
+    } as never);
+
+    expect(replyText).toContain("昵称");
+    expect(replyText).toContain("不是直播间链接");
+    expect(repositoryLoads).toBe(0);
+  });
+
   test("requires the VTB admin whitelist for Bilibili login", async () => {
     const config = createConfig([]);
     config.vtb.adminWhitelistUserIds = [1];

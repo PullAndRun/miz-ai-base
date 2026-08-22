@@ -18,8 +18,13 @@ import { partitionVtbSubscriptionsByGroup } from "@/vtb-subscriptions";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_DYNAMIC_DESCRIPTION_LENGTH = 1_800;
-const VTB_RISK_COOLDOWN_MS = 30 * 60_000;
-const VTB_TRANSIENT_COOLDOWN_MS = 15 * 60_000;
+// Explicit Bilibili risk-control responses pause requests long enough to skip
+// one normal polling cycle. Retry-After is honored up to a bounded probe delay.
+const VTB_RISK_COOLDOWN_MS = 5 * 60_000;
+const VTB_MAX_RISK_COOLDOWN_MS = 30 * 60_000;
+// Ordinary network and 5xx failures are not risk control. A short circuit
+// breaker avoids a retry storm without taking live polling offline for 15 min.
+const VTB_TRANSIENT_COOLDOWN_MS = 60_000;
 const VTB_TRANSIENT_FAILURE_THRESHOLD = 3;
 const VTB_JSON_REQUEST_INTERVAL_MS = 250;
 // User-name search is the most sensitive endpoint and is only needed when a
@@ -36,7 +41,10 @@ const MAX_VTB_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_VTB_RESPONSE_BYTES = 5 * 1024 * 1024;
 const MAX_VTB_IMAGE_CACHE_ENTRIES = 16;
 const MAX_VTB_QUERY_CACHE_ENTRIES = 1_000;
-const VTB_RISK_CODES = new Set([-352, -412, -509, -799]);
+// Unlike ambiguous validation/rejection codes such as -352 and -799, -509
+// specifically means that requests are too frequent. HTTP 412/429 are handled
+// separately as transport-level protection signals.
+const VTB_RATE_LIMIT_CODES = new Set([-509]);
 const BILIBILI_DYNAMIC_API_URL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space";
 const BILIBILI_DYNAMIC_FEATURES = "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote";
 
@@ -137,6 +145,7 @@ let repositoryPromise: Promise<VtbRepository> | undefined;
 const vtbRequestStates = new Map<string, {
   consecutiveFailures: number;
   cooldownUntil: number;
+  cooldownReason?: "risk" | "transient";
   lastRequestAt: number;
   lastMinimumIntervalMs: number;
   queue: Promise<void>;
@@ -1711,23 +1720,41 @@ const assertVtbApiSuccess = (url: string, apiName: string, code: number) => {
   }
 
   recordVtbBusinessFailure(url, code);
-  throw new Error(`Bilibili ${apiName} API failed: code ${code}`);
+  const error = new Error(`Bilibili ${apiName} API failed: code ${code}`);
+  if (!VTB_RATE_LIMIT_CODES.has(code)) {
+    throw error;
+  }
+
+  const state = getVtbRequestState(getVtbRequestHost(url));
+  throw Object.assign(error, {
+    name: "VtbRateLimitError",
+    code,
+    cooldownUntil: state.cooldownUntil,
+  });
 };
 
 const recordVtbRequestSuccess = (url: string) => {
   const state = getVtbRequestState(getVtbRequestHost(url));
   state.consecutiveFailures = 0;
+  if (state.cooldownUntil <= Date.now()) {
+    state.cooldownReason = undefined;
+  }
 };
 
 const recordVtbBusinessFailure = (url: string, code: number) => {
   const host = getVtbRequestHost(url);
   const state = getVtbRequestState(host);
-  state.consecutiveFailures += 1;
-  if (VTB_RISK_CODES.has(code)) {
-    state.cooldownUntil = Math.max(state.cooldownUntil, Date.now() + VTB_RISK_COOLDOWN_MS);
-  } else if (state.consecutiveFailures >= VTB_TRANSIENT_FAILURE_THRESHOLD) {
-    state.cooldownUntil = Math.max(state.cooldownUntil, Date.now() + VTB_TRANSIENT_COOLDOWN_MS);
+  if (!VTB_RATE_LIMIT_CODES.has(code)) {
+    // A parsed business response proves transport is healthy. Invalid input or
+    // an endpoint-specific rejection must not contribute to a host-wide
+    // transient-failure circuit breaker.
+    state.consecutiveFailures = 0;
+    return;
   }
+
+  state.consecutiveFailures += 1;
+  state.cooldownUntil = Math.max(state.cooldownUntil, Date.now() + VTB_RISK_COOLDOWN_MS);
+  state.cooldownReason = "risk";
 };
 
 const recordVtbTransportFailure = (host: string, error: unknown) => {
@@ -1740,10 +1767,21 @@ const recordVtbTransportFailure = (host: string, error: unknown) => {
   if (status === 412 || status === 429) {
     const retryAfterMs = getHttpRetryAfterMs(error);
     state.consecutiveFailures += 1;
+    const cooldownMs = Math.min(
+      VTB_MAX_RISK_COOLDOWN_MS,
+      Math.max(VTB_RISK_COOLDOWN_MS, retryAfterMs ?? 0),
+    );
     state.cooldownUntil = Math.max(
       state.cooldownUntil,
-      Date.now() + Math.max(VTB_RISK_COOLDOWN_MS, retryAfterMs ?? 0),
+      Date.now() + cooldownMs,
     );
+    state.cooldownReason = "risk";
+    if (error instanceof Error) {
+      Object.assign(error, {
+        cooldownUntil: state.cooldownUntil,
+        cooldownReason: state.cooldownReason,
+      });
+    }
     return;
   }
 
@@ -1751,6 +1789,7 @@ const recordVtbTransportFailure = (host: string, error: unknown) => {
     state.consecutiveFailures += 1;
     if (state.consecutiveFailures >= VTB_TRANSIENT_FAILURE_THRESHOLD) {
       state.cooldownUntil = Math.max(state.cooldownUntil, Date.now() + VTB_TRANSIENT_COOLDOWN_MS);
+      state.cooldownReason = "transient";
     }
   }
 };
@@ -1763,7 +1802,11 @@ const assertVtbRequestAvailable = (host: string) => {
 
   throw Object.assign(
     new Error(`VTB upstream ${host} is cooling down until ${new Date(cooldownUntil).toISOString()}`),
-    { name: "VtbCooldownError", cooldownUntil },
+    {
+      name: "VtbCooldownError",
+      cooldownUntil,
+      cooldownReason: getVtbRequestState(host).cooldownReason ?? "transient",
+    },
   );
 };
 
@@ -1776,6 +1819,7 @@ const getVtbRequestState = (host: string) => {
   const state = {
     consecutiveFailures: 0,
     cooldownUntil: 0,
+    cooldownReason: undefined,
     lastRequestAt: 0,
     lastMinimumIntervalMs: 0,
     queue: Promise.resolve(),

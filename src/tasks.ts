@@ -56,6 +56,7 @@ const vtbPollingIntervalCache = new Map<string, number>();
 type VtbPollState = {
   dynamicCursor: number;
   cardInfos: Map<string, VtbCardInfo & { expiresAt: number }>;
+  livePollInterruptedAt?: number;
 };
 
 type VtbSubscriptionGroup = {
@@ -493,6 +494,7 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
   const pollState: VtbPollState = {
     dynamicCursor: 0,
     cardInfos: new Map(),
+    livePollInterruptedAt: undefined,
   };
   let pollingConfig = config;
   const runTask = () => pollingConfig.vtb.subscriptions.length === 0
@@ -603,9 +605,13 @@ const pollVtbSubscriptions = async (
         config.vtb,
       );
     } catch (error) {
+      pollState.livePollInterruptedAt ??= Date.now();
       logger.error("plugin", "vtb batch live request failed", normalizeError(error));
       return;
     }
+
+    const livePollInterruptedAt = pollState.livePollInterruptedAt;
+    pollState.livePollInterruptedAt = undefined;
 
     const streamerMids = Array.from(new Set(
       uniqueStreamerSubscriptions.map((subscription) => subscription.streamer.mid),
@@ -739,7 +745,12 @@ const pollVtbSubscriptions = async (
         const undeliveredGroupIds = groupIds.filter(
           (groupId) => !activeSession?.deliveredGroupIds.includes(String(groupId)),
         );
-        const isRecentLive = isVtbLiveStartRecent(live.liveStartedAt, config.vtb.cron, now);
+        const isRecentLive = isVtbLiveStartRecent(
+          live.liveStartedAt,
+          config.vtb.cron,
+          now,
+          livePollInterruptedAt,
+        );
         if (
           live.isLive &&
           !belongsToEndedSession &&
@@ -1063,13 +1074,16 @@ const getVtbPollingIntervalMs = (cronExpression: string) => {
  * API responses also omit live_time; while the stream is reported live, that
  * must not suppress its first notification.
  */
-const isVtbLiveStartRecent = (
+export const isVtbLiveStartRecent = (
   liveStartedAt: Date | undefined,
   cronExpression: string,
   nowMs: number,
+  livePollInterruptedAt?: number,
 ) =>
   liveStartedAt === undefined ||
-  nowMs - liveStartedAt.getTime() < getVtbPollingIntervalMs(cronExpression) + 60_000;
+  nowMs - liveStartedAt.getTime() < getVtbPollingIntervalMs(cronExpression) + 60_000 ||
+  (livePollInterruptedAt !== undefined &&
+    liveStartedAt.getTime() >= livePollInterruptedAt - getVtbPollingIntervalMs(cronExpression) - 60_000);
 
 const startNewsTask = (config: MizConfig, gateway: Gateway, logger: Logger): TaskRuntime => {
   if (!config.news.enabled) {

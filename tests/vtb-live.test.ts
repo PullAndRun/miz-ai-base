@@ -155,6 +155,69 @@ describe("Bilibili live lookup", () => {
     expect(calls).toBe(1);
   });
 
+  test("does not treat an ambiguous business rejection as host-wide risk control", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify(calls === 1
+        ? { code: -352, data: [] }
+        : { code: 0, data: [{ uid: "123", live_status: 0 }] }));
+    }) as unknown as typeof fetch;
+    const rejectedConfig = {
+      ...config,
+      liveApiUrl: "https://ambiguous-rejection.example.test/live",
+    };
+
+    await expect(getVtbLiveInfo({ name: "示例主播", mid: "123" }, rejectedConfig)).rejects.toThrow("code -352");
+    await expect(getVtbLiveInfo({ name: "示例主播", mid: "123" }, rejectedConfig)).resolves.toMatchObject({
+      isLive: false,
+    });
+    expect(calls).toBe(2);
+  });
+
+  test("opens a cooldown for the explicit too-frequent business code", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ code: -509, data: [] }));
+    }) as unknown as typeof fetch;
+    const rateLimitedConfig = {
+      ...config,
+      liveApiUrl: "https://business-rate-limit.example.test/live",
+    };
+
+    await expect(getVtbLiveInfo({ name: "示例主播", mid: "123" }, rateLimitedConfig)).rejects.toMatchObject({
+      name: "VtbRateLimitError",
+    });
+    await expect(getVtbLiveInfo({ name: "示例主播", mid: "123" }, rateLimitedConfig)).rejects.toMatchObject({
+      name: "VtbCooldownError",
+      cooldownReason: "risk",
+    });
+    expect(calls).toBe(1);
+  });
+
+  test("does not open a circuit breaker for repeated invalid business responses", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify(calls <= 3
+        ? { code: -400, data: [] }
+        : { code: 0, data: [{ uid: "123", live_status: 0 }] }));
+    }) as unknown as typeof fetch;
+    const invalidConfig = {
+      ...config,
+      liveApiUrl: "https://invalid-business-response.example.test/live",
+    };
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(getVtbLiveInfo({ name: "示例主播", mid: "123" }, invalidConfig)).rejects.toThrow("code -400");
+    }
+    await expect(getVtbLiveInfo({ name: "示例主播", mid: "123" }, invalidConfig)).resolves.toMatchObject({
+      isLive: false,
+    });
+    expect(calls).toBe(4);
+  });
+
   test("uses alternative live cover fields when the primary cover is absent", async () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({
       code: 0,

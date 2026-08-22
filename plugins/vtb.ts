@@ -166,6 +166,14 @@ export const createVtbPlugin = ({
       return;
     }
 
+    const performsStreamerLookup = type === "live" ||
+      (type === "dynamic" && dynamicAction === undefined) ||
+      type === "subscribe";
+    if (performsStreamerLookup && looksLikeUrl(streamerName)) {
+      await reply("这里需要填写主播当前使用的完整 B 站昵称，不是直播间链接。");
+      return;
+    }
+
     const missingLiveApi = type === "live" &&
       (!config.vtb.userApiUrl || !config.vtb.liveApiUrl ||
         !config.vtb.webUrl || !config.vtb.liveWebUrl);
@@ -488,9 +496,31 @@ export const createVtbPlugin = ({
         await reply("查询 B 站动态需要先完成登录，请管理员私聊发送 miz vtb login 扫码登录。\n登录后再试一次 miz vtb dynamic 主播昵称；已开启的动态推送也会在登录后恢复。");
         return;
       }
-      if (error instanceof Error && error.name === "VtbCooldownError") {
-        await reply("B 站接口刚才触发了保护，机器人已暂时放慢请求；过几分钟再查一次就好。");
-        return;
+      if (error instanceof Error) {
+        const protectedError = error as Error & {
+          cooldownReason?: "risk" | "transient";
+          cooldownUntil?: number;
+          retryAfterMs?: number;
+          status?: number;
+        };
+        const isExplicitProtection = error.name === "VtbRateLimitError" ||
+          protectedError.status === 412 ||
+          protectedError.status === 429 ||
+          (error.name === "VtbCooldownError" && protectedError.cooldownReason === "risk");
+        if (isExplicitProtection) {
+          const remainingMs = typeof protectedError.cooldownUntil === "number"
+            ? protectedError.cooldownUntil - Date.now()
+            : protectedError.retryAfterMs;
+          const remainingMinutes = typeof remainingMs === "number"
+            ? Math.max(1, Math.ceil(remainingMs / 60_000))
+            : 5;
+          await reply(`B 站返回了明确的限流或风控信号，机器人会暂停请求约 ${remainingMinutes} 分钟，然后自动恢复。`);
+          return;
+        }
+        if (error.name === "VtbCooldownError") {
+          await reply("B 站接口连续几次没有正常响应，机器人会在下一轮自动重试；这不代表触发了风控。");
+          return;
+        }
       }
       await reply("B 站数据刚才在路上卡了一下，过一会儿再查吧。");
     }
@@ -504,5 +534,8 @@ const parseAtAllAction = (action: string | undefined) => {
   if (action === "disable" || action === "off" || action === "关闭") return "disable" as const;
   return undefined;
 };
+
+const looksLikeUrl = (value: string) =>
+  /^(?:https?:\/\/|www\.)/i.test(value) || /(?:^|\.)bilibili\.com\//i.test(value);
 
 export default vtbPlugin;
