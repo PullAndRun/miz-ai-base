@@ -48,19 +48,31 @@ const VTB_RATE_LIMIT_CODES = new Set([-509]);
 const BILIBILI_DYNAMIC_API_URL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space";
 const BILIBILI_DYNAMIC_FEATURES = "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote";
 
+// Bilibili normally serializes these values as JSON numbers, but a few
+// gateway variants and compatibility endpoints return numeric strings. Keep
+// the transport parser strict for everything else while accepting that
+// harmless representation difference.
+const numericSchema = z.preprocess(
+  (value) => typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))
+    ? Number(value)
+    : value,
+  z.number(),
+);
+const integerSchema = numericSchema.pipe(z.number().int());
+
 const userSchema = z.looseObject({
   uname: z.string().min(1),
   mid: z.union([z.string(), z.number()]),
   room_id: z.union([z.string(), z.number()]).optional(),
 });
 const userResponseSchema = z.looseObject({
-  code: z.number(),
+  code: integerSchema,
   data: z.looseObject({ result: z.array(userSchema).optional().default([]) })
     .optional()
     .default({ result: [] }),
 });
 const cardResponseSchema = z.looseObject({
-  code: z.number(),
+  code: integerSchema,
   data: z.unknown().optional(),
 });
 const cardSchema = z.looseObject({
@@ -75,7 +87,7 @@ const liveInfoSchema = z.looseObject({
   title: z.string().optional(),
   room_id: z.union([z.string(), z.number()]).optional(),
   live_time: z.union([z.string(), z.number()]).optional(),
-  live_status: z.number().int().optional(),
+  live_status: integerSchema.optional(),
   uname: z.string().optional(),
   cover_from_user: z.string().nullish(),
   keyframe: z.string().nullish(),
@@ -83,11 +95,11 @@ const liveInfoSchema = z.looseObject({
   cover: z.string().nullish(),
 });
 const liveResponseSchema = z.looseObject({
-  code: z.number(),
+  code: integerSchema,
   data: z.unknown().optional(),
 });
 const dynamicResponseSchema = z.looseObject({
-  code: z.number(),
+  code: integerSchema,
   data: z.looseObject({
     items: z.array(z.unknown()).optional().default([]),
   }).nullish(),
@@ -188,7 +200,7 @@ export const resolveVtbStreamer = async (name: string, config: VtbConfig): Promi
     return cacheRead.value ?? undefined;
   }
 
-  const url = `${config.userApiUrl}${encodeURIComponent(name)}`;
+  const url = createUserSearchApiUrl(config.userApiUrl, name);
   let response = userResponseSchema.parse(
     await fetchJson(
       url,
@@ -1933,6 +1945,26 @@ const getVtbCardCacheKey = (config: VtbConfig, mid: string) =>
 const getVtbDynamicQueryCacheMs = (config: VtbConfig) =>
   Math.max(5 * 60_000, Math.min(30 * 60_000, (config.dynamicPollMinutes ?? 15) * 60_000));
 
+const createUserSearchApiUrl = (apiUrl: string, name: string) => {
+  const url = new URL(apiUrl);
+  // Existing configuration uses an empty query value (usually `keyword=` or
+  // `name=`). Setting the value through URLSearchParams preserves unrelated
+  // parameters and correctly encodes spaces, fragments and non-ASCII names.
+  const parameter = [...url.searchParams.keys()].find((key) => url.searchParams.get(key) === "") ??
+    ["keyword", "name", "q", "query"].find((key) => url.searchParams.has(key));
+  if (parameter) {
+    url.searchParams.set(parameter, name);
+  } else if (url.search) {
+    url.searchParams.set("keyword", name);
+  } else {
+    // Keep compatibility with path-based proxy endpoints that intentionally
+    // place the search term after the URL rather than in a query parameter.
+    return `${apiUrl.replace(/#.*$/, "")}${encodeURIComponent(name)}`;
+  }
+  url.hash = "";
+  return url.href;
+};
+
 const createCardApiUrl = (apiUrl: string, mids: readonly string[]) => {
   const url = new URL(apiUrl);
   if (!url.searchParams.has("uids")) {
@@ -2018,10 +2050,20 @@ export const parseBilibiliDynamicFeed = (
     .map((item) => parseBilibiliDynamicItem(item, fallbackAuthor, webUrl))
     .filter((item): item is { dynamic: VtbDynamic; avatarUrl?: string } => item !== undefined)
     .sort((left, right) => right.dynamic.publishedAt.getTime() - left.dynamic.publishedAt.getTime());
+  const unique = new Map<string, { dynamic: VtbDynamic; avatarUrl?: string }>();
+  for (const item of parsed) {
+    // The feed can contain the same dynamic twice while Bilibili is updating
+    // its cache. Deduplicate before the delivery layer sees it.
+    const identity = formatDynamicUrl(item.dynamic.link, "https://www.bilibili.com");
+    if (!unique.has(identity)) {
+      unique.set(identity, item);
+    }
+  }
+  const deduplicated = [...unique.values()];
 
   return {
     avatarUrl: parsed.find((item) => item.avatarUrl)?.avatarUrl ?? "",
-    items: parsed.map((item) => item.dynamic),
+    items: deduplicated.map((item) => item.dynamic),
   };
 };
 
@@ -2046,12 +2088,19 @@ const parseBilibiliDynamicItem = (
   if (dynamicType === "DYNAMIC_TYPE_LIVE_RCMD" || major?.live_rcmd != null) {
     return undefined;
   }
-  const id = firstText(value.id_str, value.id);
+  const id = firstText(
+    value.id_str,
+    value.dynamic_id,
+    value.id,
+    getTextAt(value.basic, "comment_id"),
+  );
   const rawLink = firstText(
     value.uri,
     value.link,
+    value.dynamic_url,
     getTextAt(major?.opus, "jump_url"),
     getTextAt(major?.archive, "jump_url"),
+    getTextAt(major?.article, "jump_url"),
   );
   const link = normalizeBilibiliDynamicLink(rawLink, id);
   const publishedAt = parseBilibiliDate(

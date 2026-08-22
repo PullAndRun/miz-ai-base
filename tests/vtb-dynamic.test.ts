@@ -106,4 +106,27 @@ describe("Bilibili dynamic response parsing", () => {
       },
     ], "主播", "https://www.bilibili.com").items).toEqual([]);
   });
+
+  test("deduplicates feed variants and falls back to dynamic_id", () => {
+    const items = [
+      {
+        dynamic_id: "200",
+        modules: {
+          module_author: { name: "主播", pub_ts: 1_753_000_100 },
+          module_dynamic: { desc: { text: "同一条动态" } },
+        },
+      },
+      {
+        id_str: "200",
+        modules: {
+          module_author: { name: "主播", pub_ts: 1_753_000_000 },
+          module_dynamic: { desc: { text: "同一条动态" } },
+        },
+      },
+    ];
+
+    const feed = parseBilibiliDynamicFeed(items, "主播", "https://www.bilibili.com");
+    expect(feed.items).toHaveLength(1);
+    expect(feed.items[0].link).toBe("https://t.bilibili.com/200");
+  });
 });

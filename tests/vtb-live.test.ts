@@ -63,6 +63,35 @@ describe("Bilibili live lookup", () => {
     expect(cookies).toEqual([null]);
   });
 
+  test("preserves search parameters and accepts numeric-string API fields", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      const requestUrl = String(input);
+      urls.push(requestUrl);
+      if (requestUrl.includes("users")) {
+        return new Response(JSON.stringify({
+          code: "0",
+          data: { result: [{ uname: "带 空格", mid: "123", room_id: "456" }] },
+        }));
+      }
+      return new Response(JSON.stringify({
+        code: "0",
+        data: [{ uid: "123", live_status: "1", live_time: "1893456000" }],
+      }));
+    }) as unknown as typeof fetch;
+
+    const searchConfig = {
+      ...config,
+      userApiUrl: "https://search.example.test/users?name=&from=miz#ignored",
+      liveApiUrl: "https://numeric-live.example.test/live",
+    };
+    const streamer = await resolveVtbStreamer("带 空格", searchConfig);
+    expect(streamer).toEqual({ name: "带 空格", mid: "123", roomId: "456" });
+    expect(new URL(urls[0]).searchParams.get("from")).toBe("miz");
+    expect(new URL(urls[0]).searchParams.get("name")).toBe("带 空格");
+    await expect(getVtbLiveInfo(streamer!, searchConfig)).resolves.toMatchObject({ isLive: true });
+  });
+
   test("caches successful user searches to avoid repeated anti-risk requests", async () => {
     let calls = 0;
     const originalRandom = Math.random;

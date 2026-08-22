@@ -868,7 +868,7 @@ const pollVtbSubscriptions = async (
         const isCurrentDynamic = dynamicState?.publishedAt.getTime() === latestDynamic.publishedAt.getTime();
         const isRecent = now - latestDynamic.publishedAt.getTime() <
           config.vtb.dynamicPollMinutes * 60_000 + getVtbPollingIntervalMs(config.vtb.cron);
-        const isLivePromotion = latestDynamic.description.includes(config.vtb.liveWebUrl);
+        const isLivePromotion = isVtbLivePromotion(latestDynamic, config.vtb.liveWebUrl);
 
         if ((isNewDynamic || isCurrentDynamic) && isRecent && !isLivePromotion) {
             const deliveredGroupIds = isCurrentDynamic ? dynamicState.deliveredGroupIds : [];
@@ -1067,6 +1067,15 @@ const getVtbPollingIntervalMs = (cronExpression: string) => {
   return fallback;
 };
 
+export const isVtbLivePromotion = (dynamic: Pick<VtbDynamicFeed["items"][number], "title" | "description" | "link">, liveWebUrl: string) => {
+  const normalizedBase = liveWebUrl.trim().replace(/\/+$/, "").toLowerCase();
+  if (!normalizedBase) {
+    return false;
+  }
+  return [dynamic.title, dynamic.description, dynamic.link]
+    .some((value) => value.toLowerCase().includes(normalizedBase));
+};
+
 /**
  * Cron dispatch and upstream requests have normal timing jitter.  Keep a
  * bounded grace period so a stream opened just after the previous poll is not
@@ -1081,9 +1090,11 @@ export const isVtbLiveStartRecent = (
   livePollInterruptedAt?: number,
 ) =>
   liveStartedAt === undefined ||
-  nowMs - liveStartedAt.getTime() < getVtbPollingIntervalMs(cronExpression) + 60_000 ||
-  (livePollInterruptedAt !== undefined &&
-    liveStartedAt.getTime() >= livePollInterruptedAt - getVtbPollingIntervalMs(cronExpression) - 60_000);
+  (liveStartedAt.getTime() <= nowMs + 5 * 60_000 && (
+    nowMs - liveStartedAt.getTime() < getVtbPollingIntervalMs(cronExpression) + 60_000 ||
+    (livePollInterruptedAt !== undefined &&
+      liveStartedAt.getTime() >= livePollInterruptedAt - getVtbPollingIntervalMs(cronExpression) - 60_000)
+  ));
 
 const startNewsTask = (config: MizConfig, gateway: Gateway, logger: Logger): TaskRuntime => {
   if (!config.news.enabled) {
