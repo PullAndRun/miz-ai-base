@@ -9,6 +9,7 @@ import {
   getVtbLiveInfos,
   prependVtbAtAllMention,
   resolveVtbStreamer,
+  resolveVtbStreamerForQuery,
 } from "@/vtb";
 
 const originalFetch = globalThis.fetch;
@@ -90,6 +91,36 @@ describe("Bilibili live lookup", () => {
     } finally {
       Math.random = originalRandom;
     }
+  });
+
+  test("resolves an untracked interactive query without persisting it", async () => {
+    let upserts = 0;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      code: 0,
+      data: { result: [{ uname: "临时查询主播", mid: "789", room_id: 123 }] },
+    }))) as unknown as typeof fetch;
+    const queryConfig = {
+      ...config,
+      userApiUrl: "https://read-only-query.example.test/users?name=",
+    };
+    const repository = {
+      findStreamerByName: async () => undefined,
+      upsertStreamer: async () => {
+        upserts += 1;
+        throw new Error("interactive queries must not persist streamers");
+      },
+    };
+
+    await expect(resolveVtbStreamerForQuery(
+      "临时查询主播",
+      queryConfig,
+      repository,
+    )).resolves.toEqual({
+      name: "临时查询主播",
+      mid: "789",
+      roomId: "123",
+    });
+    expect(upserts).toBe(0);
   });
 
   test("treats an omitted user without a live room as offline", async () => {

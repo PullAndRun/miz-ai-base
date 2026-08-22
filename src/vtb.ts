@@ -228,6 +228,13 @@ export const resolveTrackedVtbStreamer = async (
   return fetchedStreamer ? repository.upsertStreamer(fetchedStreamer) : undefined;
 };
 
+/** Resolves an interactive query without turning it into a tracked streamer. */
+export const resolveVtbStreamerForQuery = async (
+  name: string,
+  config: VtbConfig,
+  repository: Pick<VtbRepository, "findStreamerByName">,
+) => (await repository.findStreamerByName(name)) ?? resolveVtbStreamer(name, config);
+
 export const syncConfiguredVtbStreamers = async (config: MizConfig) => {
   const names = Array.from(
     new Set(config.vtb.subscriptions.flatMap((subscription) => subscription.streamers)),

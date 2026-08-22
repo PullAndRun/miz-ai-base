@@ -3,15 +3,14 @@ import { isGroupAdministrator, isWhitelistedUser } from "@/group-permissions";
 import { summarizeError } from "@/errors";
 import {
   createVtbNotificationMessage,
-  findVtbNameChanges,
   formatDynamicMessage,
   formatLiveQueryMessage,
   getVtbCardInfo,
-  getVtbCardInfos,
   getVtbRepository,
   getVtbDynamics,
   getVtbImageFile,
   getVtbLiveInfo,
+  resolveVtbStreamerForQuery,
   resolveTrackedVtbStreamer,
   syncVtbSubscriptionNames,
   type VtbCardInfo,
@@ -422,7 +421,7 @@ export const createVtbPlugin = ({
       }
 
       const repository = await getRepository(config);
-      const streamer = await resolveTrackedVtbStreamer(streamerName, config.vtb, repository);
+      const streamer = await resolveVtbStreamerForQuery(streamerName, config.vtb, repository);
       if (!streamer) {
         await reply(`没找到“${streamerName}”。换成主播当前使用的完整 B 站昵称再试试吧。`);
         return;
@@ -441,34 +440,14 @@ export const createVtbPlugin = ({
             return {} as VtbCardInfo;
           }),
         ]);
-        let card = cachedCard;
-        if (live.name !== streamer.name) {
-          try {
-            card = (await getVtbCardInfos([streamer.mid], config.vtb)).get(streamer.mid) ?? cachedCard;
-          } catch (error) {
-            logger.warn("plugin", "vtb live query nickname refresh failed; using available card data", {
-              streamerName,
-              error: summarizeError(error),
-            });
-          }
-        }
-        const renamed = findVtbNameChanges([streamer], new Map([[streamer.mid, card]]));
-        if (renamed.length > 0) {
-          const latestName = renamed[0].name;
-          await updateVtbSubscriptionNames(new Map([[streamer.name, latestName]]));
-          await repository.upsertStreamer({ ...streamer, name: latestName });
-          logger.info("plugin", "vtb subscription name updated after live query detected a change", {
-            renamed,
-          });
-        }
         let imageFile: string | undefined;
         try {
-          imageFile = await getVtbImageFile(live.coverUrl ?? card.avatarUrl, config.vtb);
+          imageFile = await getVtbImageFile(live.coverUrl ?? cachedCard.avatarUrl, config.vtb);
         } catch (error) {
           logger.warn("plugin", "vtb query image unavailable; sending text only", { streamerName, error });
         }
         await reply(createVtbNotificationMessage(
-          formatLiveQueryMessage(live, card.fans, config.vtb.liveWebUrl),
+          formatLiveQueryMessage(live, cachedCard.fans, config.vtb.liveWebUrl),
           imageFile,
         ));
         return;
