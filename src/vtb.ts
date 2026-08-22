@@ -91,6 +91,14 @@ export type VtbLiveInfo = {
   isLive: boolean;
   name: string;
   coverUrl?: string;
+  fans?: number;
+  fanClub?: number;
+  guards?: number;
+};
+export type VtbLiveStats = {
+  fans?: number;
+  fanClub?: number;
+  guards?: number;
 };
 export type VtbDynamic = {
   title: string;
@@ -104,17 +112,21 @@ export type VtbDynamicFeed = { avatarUrl: string; items: VtbDynamic[] };
 export type LiveSession = {
   startedAt: Date;
   startFans?: number;
+  startFanClub?: number;
+  startGuards?: number;
   roomId?: string;
   deliveredGroupIds: string[];
   endedAt?: Date;
   endFans?: number;
+  endFanClub?: number;
+  endGuards?: number;
   endDeliveredGroupIds: string[];
 };
 export type VtbDynamicDeliveryState = {
   publishedAt: Date;
   deliveredGroupIds: string[];
 };
-export type VtbCardInfo = { fans?: number; name?: string; avatarUrl?: string };
+export type VtbCardInfo = VtbLiveStats & { name?: string; avatarUrl?: string };
 export type VtbNameChange = { previousName: string; name: string; mid: string };
 type ReminderClaim = Reminder & { claimedAt: Date; nextRemindAt?: Date };
 type ScheduleEventClaim = ScheduleEvent & { claimedAt: Date };
@@ -379,8 +391,19 @@ export const getVtbCardInfos = async (mids: readonly string[], config: VtbConfig
       }
 
       const fans = Number(parsedCard.data.fans);
+      const fanClub = findCount(rawCard, [
+          "fan_club", "fanClub", "fan_club_count", "fanClubCount", "fan_club_num", "fanClubNum",
+          "fans_club", "fansClub", "fans_club_num", "fansClubNum", "fans_num", "fansNum",
+          "fans_group_count", "fansGroupCount",
+        ]);
+      const guards = findCount(rawCard, [
+          "guards", "guard", "guard_num", "guardNum", "guard_count", "guardCount",
+          "guard_info", "guardInfo",
+        ]);
       cards.set(String(parsedCard.data.mid), {
-        fans: Number.isFinite(fans) ? fans : undefined,
+        ...(Number.isFinite(fans) ? { fans } : {}),
+        ...(fanClub === undefined ? {} : { fanClub }),
+        ...(guards === undefined ? {} : { guards }),
         name: parsedCard.data.name?.trim() || undefined,
         avatarUrl: pickImageUrl(
           parsedCard.data.face,
@@ -655,10 +678,14 @@ const createVtbRepository = (prisma: PrismaClient) => {
       ? {
           startedAt: session.startedAt,
           startFans: session.startFans ?? undefined,
+          startFanClub: session.startFanClub ?? undefined,
+          startGuards: session.startGuards ?? undefined,
           roomId: session.liveRoom?.toString(),
           deliveredGroupIds: session.deliveredGroupIds,
           endedAt: session.endedAt ?? undefined,
           endFans: session.endFans ?? undefined,
+          endFanClub: session.endFanClub ?? undefined,
+          endGuards: session.endGuards ?? undefined,
           endDeliveredGroupIds: session.endDeliveredGroupIds,
         }
       : undefined;
@@ -669,6 +696,7 @@ const createVtbRepository = (prisma: PrismaClient) => {
     live: VtbLiveInfo,
     fans?: number,
     deliveredGroupIds: readonly string[] = [],
+    stats: VtbLiveStats = {},
   ) => {
     await prisma.vtbLiveSession.upsert({
       where: { streamerMid: toMid(streamer.mid) },
@@ -677,7 +705,9 @@ const createVtbRepository = (prisma: PrismaClient) => {
         streamerName: live.name,
         liveRoom: toOptionalMid(live.roomId),
         startedAt: live.liveStartedAt ?? new Date(),
-        startFans: fans,
+        startFans: stats.fans ?? fans,
+        startFanClub: stats.fanClub,
+        startGuards: stats.guards,
         deliveredGroupIds: [...deliveredGroupIds],
         endDeliveredGroupIds: [],
       },
@@ -685,11 +715,15 @@ const createVtbRepository = (prisma: PrismaClient) => {
         streamerName: live.name,
         liveRoom: toOptionalMid(live.roomId),
         startedAt: live.liveStartedAt ?? new Date(),
-        startFans: fans,
+        startFans: stats.fans ?? fans,
+        startFanClub: stats.fanClub,
+        startGuards: stats.guards,
         deliveredGroupIds: [...deliveredGroupIds],
         endDeliveredGroupIds: [],
         endedAt: null,
         endFans: null,
+        endFanClub: null,
+        endGuards: null,
       },
     });
   };
@@ -702,10 +736,20 @@ const createVtbRepository = (prisma: PrismaClient) => {
     });
   };
 
-  const markLiveSessionEnded = async (mid: string, fans?: number, endedAt = new Date()) => {
+  const markLiveSessionEnded = async (
+    mid: string,
+    fans?: number,
+    endedAt = new Date(),
+    stats: VtbLiveStats = {},
+  ) => {
     await prisma.vtbLiveSession.update({
       where: { streamerMid: toMid(mid) },
-      data: { endedAt, endFans: fans },
+      data: {
+        endedAt,
+        endFans: stats.fans ?? fans,
+        endFanClub: stats.fanClub,
+        endGuards: stats.guards,
+      },
     });
   };
 
@@ -1375,7 +1419,8 @@ const createVtbRepository = (prisma: PrismaClient) => {
     listDeliveredFf14PriceAlertListingKeys, recordFf14PriceAlertDeliveries,
     cleanupExpiredFf14PriceAlertDeliveries,
     findStreamerByName, listStreamers, deleteStreamersNotInNames, deleteStreamerByName,
-    upsertStreamer, getLiveSession, startLiveSession, recordLiveDelivery, markLiveSessionEnded, recordLiveEndDelivery,
+    upsertStreamer, getLiveSession, startLiveSession, recordLiveDelivery, markLiveSessionEnded,
+    recordLiveEndDelivery,
     getDynamicDeliveryState, startDynamicDelivery, recordDynamicDelivery,
     getDeliveredNewsIds, recordNewsDeliveries, ensureReminderStorage, createReminder, claimDueReminders,
     releaseReminderClaim, listPendingReminders, findPendingReminder, cancelPendingReminder, editPendingReminder,
@@ -1398,7 +1443,11 @@ const getNextReminderTime = (current: Date, intervalMinutes: number, now: Date) 
 const formatSyncFailure = (error: unknown) =>
   error instanceof Error ? error.message.replace(/\s+/g, " ").trim().slice(0, 200) : "没有返回具体原因";
 
-export const formatLiveMessage = (live: VtbLiveInfo, fans: number | undefined, liveWebUrl: string) => [
+export const formatLiveMessage = (
+  live: VtbLiveInfo,
+  fans: number | undefined,
+  liveWebUrl: string,
+) => [
   `🔴 ${live.name} 的直播间开门啦！`,
   "",
   "今天播的是——",
@@ -1431,19 +1480,32 @@ export const formatOfflineMessage = (
   endFans?: number,
   roomId?: string,
   liveWebUrl = "",
+  startStats: VtbLiveStats = {},
+  endStats: VtbLiveStats = {},
 ) => {
-  const fanChange = startFans === undefined || endFans === undefined ? undefined : endFans - startFans;
+  const fanChange = positiveCountChange(startFans, endFans);
+  const fanClubChange = positiveCountChange(startStats.fanClub, endStats.fanClub);
+  const guardChange = positiveCountChange(startStats.guards, endStats.guards);
   const durationMinutes = Math.max(1, Math.floor((endedAt.getTime() - startedAt.getTime()) / 60_000));
   return [
     `🌙 ${name} 今天收工啦`,
     "",
     `这次和大家一起度过了 ${formatLiveDuration(durationMinutes)}`,
     `⏰ ${dayjs(endedAt).format("MM月DD日 HH:mm")} 结束`,
-    ...(fanChange && fanChange > 0 ? [`✨ 本场新关注 +${fanChange.toLocaleString("zh-CN")}`] : []),
+    ...(fanChange === undefined ? [] : [`✨ 本场新关注 +${fanChange.toLocaleString("zh-CN")}`]),
+    ...(fanClubChange === undefined ? [] : [`💖 本场粉丝团 +${fanClubChange.toLocaleString("zh-CN")}`]),
+    ...(guardChange === undefined ? [] : [`⚓ 本场大航海 +${guardChange.toLocaleString("zh-CN")}`]),
     ...(roomId ? [`🔗 ${formatLiveRoomUrl(roomId, liveWebUrl)}`] : []),
     "",
     "辛苦啦，也谢谢大家一路陪到下播。充好电，我们下次见！",
   ].join("\n");
+};
+
+const positiveCountChange = (start: number | undefined, end: number | undefined) => {
+  if (start === undefined || end === undefined || end <= start) {
+    return undefined;
+  }
+  return end - start;
 };
 
 export const formatDynamicMessage = (dynamic: VtbDynamic, webUrl: string) => {
@@ -1828,6 +1890,39 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const asRecord = (value: unknown) => isRecord(value) ? value : undefined;
 
+/** Reads count fields across the slightly different shapes returned by Bilibili APIs. */
+const findCount = (value: unknown, keys: readonly string[]): number | undefined => {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const candidate = value[key];
+    const count = typeof candidate === "object"
+      ? findCount(candidate, ["count", "num", "number", "total"])
+      : toFiniteCount(candidate);
+    if (count !== undefined) {
+      return count;
+    }
+  }
+
+  for (const child of Object.values(value)) {
+    const count = findCount(child, keys);
+    if (count !== undefined) {
+      return count;
+    }
+  }
+  return undefined;
+};
+
+const toFiniteCount = (value: unknown) => {
+  if (typeof value !== "number" && typeof value !== "string") {
+    return undefined;
+  }
+  const count = Number(value);
+  return Number.isFinite(count) && count >= 0 ? Math.trunc(count) : undefined;
+};
+
 export const parseBilibiliDynamicFeed = (
   items: readonly unknown[],
   fallbackAuthor: string,
@@ -1996,14 +2091,31 @@ const findLiveInfo = (value: unknown, mid: string) => {
   return undefined;
 };
 
-const toVtbLiveInfo = (streamer: VtbStreamer, live: z.infer<typeof liveInfoSchema> | undefined): VtbLiveInfo => ({
-  title: live?.title?.trim() || "还没有直播标题",
-  roomId: live?.room_id === undefined ? normalizeRoomId(streamer.roomId) : normalizeRoomId(live.room_id),
-  liveStartedAt: parseDate(live?.live_time),
-  isLive: live?.live_status === 1,
-  name: live?.uname?.trim() || streamer.name,
-  coverUrl: pickImageUrl(live?.cover_from_user, live?.keyframe, live?.user_cover, live?.cover),
-});
+const toVtbLiveInfo = (streamer: VtbStreamer, live: z.infer<typeof liveInfoSchema> | undefined): VtbLiveInfo => {
+  const fans = findCount(live, [
+    "fans", "fan_count", "fanCount", "follower", "followers", "follower_num", "followerNum",
+  ]);
+  const fanClub = findCount(live, [
+    "fan_club", "fanClub", "fan_club_count", "fanClubCount", "fan_club_num", "fanClubNum",
+    "fans_club", "fansClub", "fans_club_num", "fansClubNum", "fans_num", "fansNum",
+    "fans_group_count", "fansGroupCount",
+  ]);
+  const guards = findCount(live, [
+    "guards", "guard", "guard_num", "guardNum", "guard_count", "guardCount",
+    "guard_info", "guardInfo",
+  ]);
+  return {
+    title: live?.title?.trim() || "还没有直播标题",
+    roomId: live?.room_id === undefined ? normalizeRoomId(streamer.roomId) : normalizeRoomId(live.room_id),
+    liveStartedAt: parseDate(live?.live_time),
+    isLive: live?.live_status === 1,
+    name: live?.uname?.trim() || streamer.name,
+    coverUrl: pickImageUrl(live?.cover_from_user, live?.keyframe, live?.user_cover, live?.cover),
+    ...(fans === undefined ? {} : { fans }),
+    ...(fanClub === undefined ? {} : { fanClub }),
+    ...(guards === undefined ? {} : { guards }),
+  };
+};
 
 const pickImageUrl = (...values: Array<string | null | undefined>) => {
   for (const value of values) {

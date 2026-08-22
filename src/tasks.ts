@@ -42,6 +42,7 @@ import {
   type VtbCardInfo,
   type VtbDynamicFeed,
   type VtbLiveInfo,
+  type VtbLiveStats,
   type VtbStreamer,
 } from "@/vtb";
 
@@ -54,7 +55,7 @@ const vtbPollingIntervalCache = new Map<string, number>();
 
 type VtbPollState = {
   dynamicCursor: number;
-  cardInfos: Map<string, { fans?: number; avatarUrl?: string; expiresAt: number }>;
+  cardInfos: Map<string, VtbCardInfo & { expiresAt: number }>;
 };
 
 type VtbSubscriptionGroup = {
@@ -568,6 +569,8 @@ const pollVtbSubscriptions = async (
       streamer: VtbStreamer;
       live: VtbLiveInfo;
       fans?: number;
+      fanClub?: number;
+      guards?: number;
       avatarUrl?: string;
     }>
   >();
@@ -634,6 +637,8 @@ const pollVtbSubscriptions = async (
         for (const mid of cardRefreshMids) {
           pollState.cardInfos.set(mid, {
             fans: refreshedCards.get(mid)?.fans,
+            fanClub: refreshedCards.get(mid)?.fanClub,
+            guards: refreshedCards.get(mid)?.guards,
             avatarUrl: refreshedCards.get(mid)?.avatarUrl,
             expiresAt: now + cardCacheMs,
           });
@@ -667,6 +672,8 @@ const pollVtbSubscriptions = async (
     const cardInfos = new Map(
       streamerMids.map((mid) => [mid, {
         fans: pollState.cardInfos.get(mid)?.fans,
+        fanClub: pollState.cardInfos.get(mid)?.fanClub,
+        guards: pollState.cardInfos.get(mid)?.guards,
         avatarUrl: pollState.cardInfos.get(mid)?.avatarUrl,
       }]),
     );
@@ -712,10 +719,18 @@ const pollVtbSubscriptions = async (
             if (!live) {
               throw new Error(`Bilibili live API omitted streamer ${streamer.mid}`);
             }
-            return { streamer, live, fans: card?.fans, avatarUrl: card?.avatarUrl };
+            return {
+              streamer,
+              live,
+              fans: card?.fans ?? live.fans,
+              fanClub: card?.fanClub ?? live.fanClub,
+              guards: card?.guards ?? live.guards,
+              avatarUrl: card?.avatarUrl,
+            };
           });
         pushCache.set(streamer.mid, cachedPush);
-        const { live, fans, avatarUrl } = await cachedPush;
+        const { live, fans, fanClub, guards, avatarUrl } = await cachedPush;
+        const stats: VtbLiveStats = { fans, fanClub, guards };
         const session = await repository.getLiveSession(streamer.mid);
         const activeSession = session?.endedAt ? undefined : session;
         const belongsToEndedSession = session?.endedAt !== undefined &&
@@ -758,7 +773,7 @@ const pollVtbSubscriptions = async (
           } else {
             // Store an empty list as a pending delivery as well, so a failed
             // first send is retried even after the freshness window closes.
-            await repository.startLiveSession(streamer, live, fans, deliveredGroupIds);
+            await repository.startLiveSession(streamer, live, fans, deliveredGroupIds, stats);
           }
           if (deliveredGroups.length > 0) {
             logger.info("plugin", "vtb live started notification sent", { streamer: live.name, groupIds: deliveredGroups });
@@ -779,7 +794,7 @@ const pollVtbSubscriptions = async (
           const endedAt = session.endedAt ?? new Date(now);
           const endFans = session.endFans ?? fans;
           if (!session.endedAt) {
-            await repository.markLiveSessionEnded(streamer.mid, endFans, endedAt);
+            await repository.markLiveSessionEnded(streamer.mid, endFans, endedAt, stats);
           }
           // Only groups that received this session's live-start notification
           // should receive its live-end notification. A group subscribing after
@@ -799,6 +814,8 @@ const pollVtbSubscriptions = async (
                 endFans,
                 session.roomId,
                 config.vtb.liveWebUrl,
+                { fanClub: session.startFanClub, guards: session.startGuards },
+                { fanClub: session.endFanClub ?? fanClub, guards: session.endGuards ?? guards },
               ),
             );
             const deliveredGroups = await sendVtbGroupMessage(

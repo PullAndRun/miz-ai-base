@@ -48,6 +48,38 @@ describe("user-facing copy", () => {
     expect(`${offline}\n${dynamic}`).not.toMatch(/下播时间：|本场新增粉丝：|发布时间：|查看原文：|小作文|TA/);
   });
 
+  test("offline notifications show only positive live statistic changes", () => {
+    const increased = formatOfflineMessage(
+      "主播",
+      new Date("2030-08-01T20:00:00+08:00"),
+      new Date("2030-08-01T21:00:00+08:00"),
+      100,
+      110,
+      "123",
+      "https://live.example.test",
+      { fanClub: 20, guards: 4 },
+      { fanClub: 23, guards: 4 },
+    );
+    expect(increased).toContain("本场新关注 +10");
+    expect(increased).toContain("本场粉丝团 +3");
+    expect(increased).not.toContain("大航海");
+
+    const noBaseline = formatOfflineMessage(
+      "主播",
+      new Date("2030-08-01T20:00:00+08:00"),
+      new Date("2030-08-01T21:00:00+08:00"),
+      undefined,
+      110,
+      undefined,
+      "",
+      {},
+      { fanClub: 23, guards: 4 },
+    );
+    expect(noBaseline).not.toContain("本场新关注");
+    expect(noBaseline).not.toContain("粉丝团");
+    expect(noBaseline).not.toContain("大航海");
+  });
+
   test("dynamic messages omit duplicated title or description text", () => {
     const shared = {
       author: "主播",
