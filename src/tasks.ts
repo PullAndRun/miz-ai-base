@@ -830,7 +830,7 @@ const pollVtbSubscriptions = async (
         );
         const latestDynamic = feed.items[0];
         if (!latestDynamic) {
-          logger.warn("plugin", "vtb dynamic poll skipped: feed contains no valid dated item", {
+          logger.debug("plugin", "vtb dynamic poll skipped: feed contains no deliverable item", {
             streamer: streamer.name,
           });
           continue;

@@ -178,7 +178,8 @@ const updateYtDlpBinaries = async (proxyUrl: string, arch: string) => {
   if (!tag) throw new Error("yt-dlp release has no version tag");
   const names = arch === "arm64"
     ? { win: "yt-dlp_arm64.exe", linux: "yt-dlp_linux_aarch64" }
-    : { win: "yt-dlp.exe", linux: "yt-dlp" };
+    : { win: "yt-dlp.exe", linux: "yt-dlp_linux" };
+  const targetNames = { win: "yt-dlp.exe", linux: "yt-dlp" } as const;
   await mkdir(toolsDirectory, { recursive: true });
   const checksumAsset = release.assets?.find((item) => item.name === "SHA2-256SUMS");
   if (!checksumAsset?.browser_download_url) throw new Error("yt-dlp release is missing SHA2-256SUMS");
@@ -192,7 +193,7 @@ const updateYtDlpBinaries = async (proxyUrl: string, arch: string) => {
   for (const [platform, assetName] of Object.entries(names)) {
     const asset = release.assets?.find((item) => item.name === assetName);
     if (!asset?.browser_download_url) throw new Error(`yt-dlp release is missing ${assetName}`);
-    const target = path.join(toolsDirectory, platform === "win" ? "yt-dlp.exe" : "yt-dlp");
+    const target = path.join(toolsDirectory, targetNames[platform as keyof typeof targetNames]);
     const markerPath = `${target}.miz-update.json`;
     const marker = await Bun.file(markerPath).json().catch(() => undefined) as { tag?: string } | undefined;
     const existing = await stat(target).catch(() => undefined);

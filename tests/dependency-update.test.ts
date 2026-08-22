@@ -28,6 +28,8 @@ describe("package dependency updates", () => {
     expect(updateScript).toContain("continuing startup");
     expect(updateScript).toContain("installFfmpegForWindowsAndLinux");
     expect(updateScript).toContain("updateYtDlpBinaries");
+    expect(updateScript).toContain('linux: "yt-dlp_linux"');
+    expect(updateScript).toContain('targetNames = { win: "yt-dlp.exe", linux: "yt-dlp" }');
   });
 
   test("uses the default package registry during startup updates", () => {
