@@ -1957,7 +1957,7 @@ const parseBilibiliDynamicItem = (
   // a VTB dynamic notification. Keep the structural check as a fallback for
   // responses where the top-level type is omitted by an upstream variant.
   const dynamicType = firstText(value.type)?.toUpperCase();
-  if (dynamicType === "DYNAMIC_TYPE_LIVE_RCMD" || (major !== undefined && "live_rcmd" in major)) {
+  if (dynamicType === "DYNAMIC_TYPE_LIVE_RCMD" || major?.live_rcmd != null) {
     return undefined;
   }
   const id = firstText(value.id_str, value.id);

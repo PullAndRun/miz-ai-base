@@ -73,6 +73,28 @@ describe("Bilibili dynamic response parsing", () => {
     expect(feed.items[0].link).toBe("https://t.bilibili.com/100");
   });
 
+  test("keeps ordinary dynamics when unused major fields are null", () => {
+    const feed = parseBilibiliDynamicFeed([
+      {
+        id_str: "100",
+        type: "DYNAMIC_TYPE_DRAW",
+        modules: {
+          module_author: { name: "主播", pub_ts: 1_753_000_000 },
+          module_dynamic: {
+            desc: { text: "普通图文动态" },
+            major: { live_rcmd: null },
+          },
+        },
+      },
+    ], "主播", "https://www.bilibili.com");
+
+    expect(feed.items).toHaveLength(1);
+    expect(feed.items[0]).toMatchObject({
+      title: "普通图文动态",
+      link: "https://t.bilibili.com/100",
+    });
+  });
+
   test("uses the live recommendation card shape when type is omitted", () => {
     expect(parseBilibiliDynamicFeed([
       {
