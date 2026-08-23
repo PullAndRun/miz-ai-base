@@ -1777,7 +1777,6 @@ export const formatLiveMessage = (
   `「${live.title}」`,
   "",
   ...(live.liveStartedAt ? [`⏰ ${dayjs(live.liveStartedAt).format("MM月DD日 HH:mm")} 开播`] : []),
-  ...(fans === undefined ? [] : [`✨ ${fans.toLocaleString("zh-CN")} 位粉丝`]),
   ...(live.roomId ? [`🔗 ${formatLiveRoomUrl(live.roomId, liveWebUrl)}`] : []),
   "",
   "来得正好，一起去看看吧！",
@@ -1789,7 +1788,6 @@ export const formatLiveQueryMessage = (live: VtbLiveInfo, fans: number | undefin
   "",
   `「${live.title}」`,
   ...(live.liveStartedAt ? ["", `⏰ ${dayjs(live.liveStartedAt).format("MM月DD日 HH:mm")} 开播`] : []),
-  ...(fans === undefined ? [] : [`✨ ${fans.toLocaleString("zh-CN")} 位粉丝`]),
   ...(live.roomId ? [`🔗 ${formatLiveRoomUrl(live.roomId, liveWebUrl)}`] : []),
   "",
   live.isLive ? "直播间正热闹，来得及的话就去看看吧！" : "今天还在蓄力，等下次开播再见。",
@@ -1823,7 +1821,6 @@ export const formatOfflineMessage = (
     ...(fanChange === undefined ? [] : [`✨ 本场新关注 +${fanChange.toLocaleString("zh-CN")}`]),
     ...(fanClubChange === undefined ? [] : [`💖 本场粉丝团 +${fanClubChange.toLocaleString("zh-CN")}`]),
     ...(guardChange === undefined ? [] : [`⚓ 本场大航海 +${guardChange.toLocaleString("zh-CN")}`]),
-    ...(roomId ? [`🔗 ${formatLiveRoomUrl(roomId, liveWebUrl)}`] : []),
     "",
     "辛苦啦，也谢谢大家一路陪到下播。充好电，我们下次见！",
   ].join("\n");

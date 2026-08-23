@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { formatNewsMessages, formatScheduledNewsItems } from "@/news";
-import { formatDynamicMessage, formatLiveMessage, formatOfflineMessage, getVtbNewGuardNames } from "@/vtb";
+import { formatDynamicMessage, formatLiveMessage, formatLiveQueryMessage, formatOfflineMessage, getVtbNewGuardNames } from "@/vtb";
 import { createWallpaperMessage } from "@/wallpaper";
 import divinationPlugin from "../plugins/divination";
 
@@ -18,7 +18,17 @@ describe("user-facing copy", () => {
     expect(message).toContain("今天播的是——");
     expect(message).toContain("「今晚一起聊天」");
     expect(message).toContain("来得正好，一起去看看吧！");
+    expect(message).not.toContain("位粉丝");
     expect(message).not.toMatch(/开播时间：|当前粉丝：|亮灯|营业|TA|传送门|舞台进行中/);
+
+    const query = formatLiveQueryMessage({
+      name: "示例主播",
+      title: "今晚一起聊天",
+      isLive: true,
+      roomId: "123",
+      liveStartedAt: new Date("2030-08-01T20:00:00+08:00"),
+    }, 12_345, "https://live.example.test");
+    expect(query).not.toContain("位粉丝");
   });
 
   test("offline and dynamic messages keep a light live atmosphere", () => {
@@ -43,6 +53,7 @@ describe("user-facing copy", () => {
     expect(offline).toContain("🌙 示例主播 今天收工啦");
     expect(offline).toContain("这次和大家一起度过了 1 小时");
     expect(offline).toContain("充好电，我们下次见");
+    expect(offline).not.toContain("🔗");
     expect(dynamic).toContain("📮 示例主播 发来一条新动态");
     expect(dynamic).toContain("「新的安排」");
     expect(`${offline}\n${dynamic}`).not.toMatch(/下播时间：|本场新增粉丝：|发布时间：|查看原文：|小作文|TA/);

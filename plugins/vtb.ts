@@ -431,7 +431,7 @@ export const createVtbPlugin = ({
         const [live, cachedCard] = await Promise.all([
           getVtbLiveInfo(streamer, config.vtb),
           getVtbCardInfo(streamer.mid, config.vtb).catch((error) => {
-            // Fan count and avatar are optional for a live status query. A
+            // Avatar data is optional for a live status query. A
             // transient card API failure should not hide the live result.
             logger.warn("plugin", "vtb live query card lookup failed; continuing without card data", {
               streamerName,
