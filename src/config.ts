@@ -45,6 +45,8 @@ const rawMizConfigSchema = z.object({
   network: z
     .object({
       proxyUrl: nonEmptyStringSchema.optional(),
+      ffmpegReleaseApiUrl: nonEmptyStringSchema.optional(),
+      ytDlpReleaseApiUrl: nonEmptyStringSchema.optional(),
     })
     .optional(),
   ff14: z
@@ -151,6 +153,14 @@ const rawMizConfigSchema = z.object({
       userApiUrl: nonEmptyStringSchema.optional(),
       cardApiUrl: nonEmptyStringSchema.optional(),
       liveApiUrl: nonEmptyStringSchema.optional(),
+      navApiUrl: nonEmptyStringSchema.optional(),
+      wbiSearchApiUrl: nonEmptyStringSchema.optional(),
+      dynamicApiUrl: nonEmptyStringSchema.optional(),
+      guardApiUrl: nonEmptyStringSchema.optional(),
+      fanClubApiUrl: nonEmptyStringSchema.optional(),
+      liveMasterApiUrl: nonEmptyStringSchema.optional(),
+      qrGenerateApiUrl: nonEmptyStringSchema.optional(),
+      qrPollApiUrl: nonEmptyStringSchema.optional(),
       webUrl: nonEmptyStringSchema.optional(),
       liveWebUrl: nonEmptyStringSchema.optional(),
       nameSyncCron: nonEmptyStringSchema.optional(),
@@ -191,13 +201,15 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
   },
   network: {
     proxyUrl: config.network?.proxyUrl ?? "",
+    ffmpegReleaseApiUrl: config.network?.ffmpegReleaseApiUrl ?? "",
+    ytDlpReleaseApiUrl: config.network?.ytDlpReleaseApiUrl ?? "",
   },
   ff14: {
     priceAlertEnabled: config.ff14?.priceAlertEnabled ?? true,
     priceAlertCron: config.ff14?.priceAlertCron ?? "0 * * * *",
     maxListingCount: config.ff14?.maxListingCount ?? 10,
-    itemSearchApiUrl: config.ff14?.itemSearchApiUrl ?? "https://tc-ffxiv-item-search-service.onrender.com/items/search",
-    marketApiUrl: config.ff14?.marketApiUrl ?? "https://universalis.app/api/v2",
+    itemSearchApiUrl: config.ff14?.itemSearchApiUrl ?? "",
+    marketApiUrl: config.ff14?.marketApiUrl ?? "",
     manageWhitelistUserIds: config.ff14?.manageWhitelistUserIds ?? [],
     priceAlerts: (config.ff14?.priceAlerts ?? []).map((alert) => ({
       ...alert,
@@ -274,9 +286,17 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     dynamicPollMinutes: config.vtb?.dynamicPollMinutes ?? 15,
     dynamicConcurrency: config.vtb?.dynamicConcurrency ?? 2,
     cardCacheMinutes: config.vtb?.cardCacheMinutes ?? 30,
-    userApiUrl: config.vtb?.userApiUrl ?? "https://api.bilibili.com/x/web-interface/wbi/search/all/v2?keyword=",
-    cardApiUrl: config.vtb?.cardApiUrl ?? "https://api.bilibili.com/x/space/wbi/acc/info?mid=",
-    liveApiUrl: config.vtb?.liveApiUrl ?? "https://api.live.bilibili.com/room/v1/Room/get_info?room_id=",
+    userApiUrl: config.vtb?.userApiUrl ?? "",
+    cardApiUrl: config.vtb?.cardApiUrl ?? "",
+    liveApiUrl: config.vtb?.liveApiUrl ?? "",
+    navApiUrl: config.vtb?.navApiUrl ?? "",
+    wbiSearchApiUrl: config.vtb?.wbiSearchApiUrl ?? "",
+    dynamicApiUrl: config.vtb?.dynamicApiUrl ?? "",
+    guardApiUrl: config.vtb?.guardApiUrl ?? "",
+    fanClubApiUrl: config.vtb?.fanClubApiUrl ?? "",
+    liveMasterApiUrl: config.vtb?.liveMasterApiUrl ?? "",
+    qrGenerateApiUrl: config.vtb?.qrGenerateApiUrl ?? "",
+    qrPollApiUrl: config.vtb?.qrPollApiUrl ?? "",
     webUrl: config.vtb?.webUrl ?? "",
     liveWebUrl: config.vtb?.liveWebUrl ?? "",
     nameSyncCron: config.vtb?.nameSyncCron ?? "0 0 * * 0",
@@ -372,6 +392,8 @@ export type RecallConfig = {
 
 export type NetworkConfig = {
   proxyUrl: string;
+  ffmpegReleaseApiUrl?: string;
+  ytDlpReleaseApiUrl?: string;
 };
 
 export type VideoConfig = {
@@ -397,6 +419,14 @@ export type VtbConfig = {
   userApiUrl: string;
   cardApiUrl: string;
   liveApiUrl: string;
+  navApiUrl: string;
+  wbiSearchApiUrl: string;
+  dynamicApiUrl: string;
+  guardApiUrl: string;
+  fanClubApiUrl: string;
+  liveMasterApiUrl: string;
+  qrGenerateApiUrl: string;
+  qrPollApiUrl: string;
   webUrl: string;
   liveWebUrl: string;
   nameSyncCron: string;

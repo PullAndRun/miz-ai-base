@@ -34,8 +34,8 @@ marketApiUrl = ""
 [miz.wallpaper]
 enabled = true
 cron = "0 8 * * *"
-apiUrl = "https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN"
-imageBaseUrl = "https://www.bing.com"
+apiUrl = ""
+imageBaseUrl = ""
 
 [miz.news]
 enabled = true
@@ -103,9 +103,9 @@ dynamicPollMinutes = 15
 dynamicConcurrency = 2
 # 粉丝数不需要随直播状态频繁刷新，默认缓存 30 分钟。
 cardCacheMinutes = 30
-userApiUrl = "https://api.bilibili.com/x/web-interface/wbi/search/all/v2?keyword="
-cardApiUrl = "https://api.bilibili.com/x/space/wbi/acc/info?mid="
-liveApiUrl = "https://api.live.bilibili.com/room/v1/Room/get_info?room_id="
+userApiUrl = ""
+cardApiUrl = ""
+liveApiUrl = ""
 webUrl = "https://www.bilibili.com"
 liveWebUrl = "https://live.bilibili.com"
 nameSyncCron = "0 0 * * 0"

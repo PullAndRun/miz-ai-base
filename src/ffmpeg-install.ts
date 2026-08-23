@@ -3,7 +3,6 @@ import path from "node:path";
 import type { NetworkConfig, VideoConfig } from "@/config";
 
 const BTBN_BASE_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest";
-const BTBN_RELEASES_API_URL = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest";
 const MAX_FFMPEG_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const DOWNLOAD_PROGRESS_PERCENT_STEP = 5;
 const DOWNLOAD_PROGRESS_BYTES_STEP = 5 * 1024 * 1024;
@@ -108,7 +107,8 @@ export const ensureFfmpeg = async (
 ): Promise<FfmpegInstallResult> => {
   const platform = options.platform ?? normalizeTargetPlatform(process.platform);
   const arch = options.arch ?? normalizeTargetArch(process.arch);
-  const release = await (options.resolveRelease ?? resolveLatestFfmpegRelease)(network.proxyUrl);
+  const release = await (options.resolveRelease ?? ((proxyUrl) =>
+    resolveLatestFfmpegRelease(proxyUrl, network.ffmpegReleaseApiUrl ?? "")))(network.proxyUrl);
   const asset = getFfmpegAsset(platform, arch, release);
   const expectedChecksum = await (options.resolveChecksum ?? resolveAssetChecksum)(asset, network.proxyUrl);
   const configuredPath = getConfiguredFfmpegPath(config, platform);
@@ -310,8 +310,8 @@ const resolveInstallTarget = (configuredPath: string, executableName: string) =>
 const createFetchOptions = (proxyUrl: string) =>
   proxyUrl ? { proxy: proxyUrl } : {};
 
-const resolveLatestFfmpegRelease = async (proxyUrl: string): Promise<FfmpegRelease> => {
-  const response = await fetch(BTBN_RELEASES_API_URL, {
+const resolveLatestFfmpegRelease = async (proxyUrl: string, releaseApiUrl: string): Promise<FfmpegRelease> => {
+  const response = await fetch(releaseApiUrl, {
     ...createFetchOptions(proxyUrl),
     headers: { Accept: "application/vnd.github+json", "User-Agent": "miz-ffmpeg-downloader" },
   });

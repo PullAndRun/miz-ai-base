@@ -13,6 +13,8 @@ const BILIBILI_RESPONSE_BYTES = 512 * 1024;
 const QR_LOGIN_TIMEOUT_MS = 5 * 60_000;
 const QR_LOGIN_POLL_INTERVAL_MS = 2_000;
 const QR_LOGIN_POLL_JITTER_MS = 500;
+let qrGenerateApiUrl = "";
+let qrPollApiUrl = "";
 
 export type BilibiliCredential = {
   sessdata: string;
@@ -45,6 +47,14 @@ export const configureBilibiliCredentialStore = (databaseUrl: string) => {
   credentialLoadPromise = undefined;
 };
 
+export const configureBilibiliApiUrls = (config: {
+  qrGenerateApiUrl: string;
+  qrPollApiUrl: string;
+}) => {
+  qrGenerateApiUrl = config.qrGenerateApiUrl;
+  qrPollApiUrl = config.qrPollApiUrl;
+};
+
 /** Returns the credential obtained by QR login; configured cookies are not used. */
 export const getBilibiliCredentialHeader = async () => {
   const credential = await getBilibiliCredential();
@@ -53,7 +63,7 @@ export const getBilibiliCredentialHeader = async () => {
 
 export const generateBilibiliQrLogin = async (proxyUrl = "") => {
   const response = await bilibiliFetch(
-    "https://passport.bilibili.com/x/passport-login/web/qrcode/generate?source=main-fe-header",
+    qrGenerateApiUrl,
     proxyUrl,
   );
   const payload = await readResponseJson(response, BILIBILI_RESPONSE_BYTES);
@@ -68,7 +78,7 @@ export const generateBilibiliQrLogin = async (proxyUrl = "") => {
 };
 
 export const pollBilibiliQrLogin = async (qrcodeKey: string, proxyUrl = ""): Promise<BilibiliQrLoginResult> => {
-  const url = new URL("https://passport.bilibili.com/x/passport-login/web/qrcode/poll");
+  const url = new URL(qrPollApiUrl);
   url.search = new URLSearchParams({ qrcode_key: qrcodeKey, source: "main-fe-header" }).toString();
   const response = await bilibiliFetch(url, proxyUrl);
   const payload = await readResponseJson(response, BILIBILI_RESPONSE_BYTES);

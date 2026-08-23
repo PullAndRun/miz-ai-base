@@ -5,7 +5,7 @@ import { createGateway, type Gateway } from "@/gateway";
 import { getGroupIds } from "@/group-ids";
 import { createLogger, type Logger } from "@/logger";
 import { createPluginRuntime } from "@/plugins";
-import { configureBilibiliCredentialStore } from "@/bilibili-credential";
+import { configureBilibiliApiUrls, configureBilibiliCredentialStore } from "@/bilibili-credential";
 import { getDatabaseUrl } from "@/database";
 import { requiresGatewayRestart, requiresRuntimeReload } from "@/runtime-config";
 import { replaceRuntimeWithFallback, type RuntimeReplacement } from "@/runtime-reload";
@@ -51,6 +51,7 @@ const main = async (logger: Logger) => {
   const createdDirectories = await ensureProjectDirectories();
   const loadedConfig = await loadConfig();
   configureBilibiliCredentialStore(getDatabaseUrl(loadedConfig));
+  configureBilibiliApiUrls(loadedConfig.vtb);
   logger.setLevel?.(loadedConfig.naplink.logLevel);
   if (createdDirectories.length > 0) {
     logger.info("miz", "created missing project directories", { directories: createdDirectories });

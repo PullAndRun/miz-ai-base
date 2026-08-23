@@ -49,15 +49,6 @@ const MAX_VTB_QUERY_CACHE_ENTRIES = 1_000;
 // specifically means that requests are too frequent. HTTP 412/429 are handled
 // separately as transport-level protection signals.
 const VTB_RATE_LIMIT_CODES = new Set([-509]);
-const BILIBILI_NAV_API_URL = "https://api.bilibili.com/x/web-interface/nav";
-const BILIBILI_WBI_SEARCH_API_URL = "https://api.bilibili.com/x/web-interface/wbi/search/all/v2";
-const BILIBILI_DYNAMIC_API_URL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space";
-const BILIBILI_GUARD_API_URL = "https://api.live.bilibili.com/xlive/app-room/v2/guardTab/topListNew";
-// Documented fan-club ranking endpoint; data.num is the aggregate member count.
-const BILIBILI_FAN_CLUB_API_URL = "https://api.live.bilibili.com/xlive/general-interface/v1/rank/getFansMembersRank";
-// The documented live master profile exposes follower count, nickname,
-// avatar and room ID without relying on deprecated web-card endpoints.
-const BILIBILI_LIVE_MASTER_INFO_API_URL = "https://api.live.bilibili.com/live_user/v1/Master/info";
 const BILIBILI_DYNAMIC_FEATURES = [
   "itemOpusStyle",
   "listOnlyfans",
@@ -243,7 +234,9 @@ export const resolveVtbStreamer = async (name: string, config: VtbConfig): Promi
   // credential for both search variants; when no credential is configured the
   // request remains anonymous.
   const credential = await getBilibiliCredentialHeader().catch(() => undefined);
-  const signedUrl = isBilibiliWbiSearchUrl(url) ? await signBilibiliUrl(url, config) : url;
+  const signedUrl = isBilibiliWbiSearchUrl(url, config.wbiSearchApiUrl)
+    ? await signBilibiliUrl(url, config)
+    : url;
   let response = userResponseSchema.parse(
     await fetchJson(
       signedUrl,
@@ -474,7 +467,7 @@ const fetchVtbLiveStats = async (
   cacheKey: string,
   previous: VtbCardInfo | undefined,
 ): Promise<VtbCardInfo> => {
-  const url = new URL(BILIBILI_LIVE_MASTER_INFO_API_URL);
+  const url = new URL(config.liveMasterApiUrl || endpointFromBase(config.liveWebUrl, "/live_user/v1/Master/info"));
   url.searchParams.set("uid", mid);
   const credential = await getBilibiliCredentialHeader().catch(() => undefined);
   const result = await fetchJson(
@@ -533,7 +526,7 @@ const fetchVtbLiveStats = async (
 
 /** Fetch the documented aggregate number of members in an anchor's fan club. */
 export const getVtbFanClubCount = async (mid: string, config: VtbConfig) => {
-  const url = new URL(BILIBILI_FAN_CLUB_API_URL);
+  const url = new URL(config.fanClubApiUrl || endpointFromBase(config.liveWebUrl, "/xlive/general-interface/v1/rank/getFansMembersRank"));
   url.searchParams.set("ruid", mid);
   url.searchParams.set("page", "1");
   url.searchParams.set("page_size", "30");
@@ -565,7 +558,7 @@ export const getVtbCaptainCount = async (roomId: string, mid: string, config: Vt
       page_size: "30",
       typ: "3",
     });
-    const url = `${BILIBILI_GUARD_API_URL}?${query.toString()}`;
+    const url = `${config.guardApiUrl || endpointFromBase(config.liveWebUrl, "/xlive/app-room/v2/guardTab/topListNew")}?${query.toString()}`;
     const response = z.looseObject({ code: integerSchema, data: z.unknown().optional() }).parse(
       await fetchJson(url, config.webUrl, undefined, undefined, config.proxyUrl, VTB_GUARD_REQUEST_INTERVAL_MS),
     );
@@ -600,7 +593,7 @@ export const getVtbCardInfos = async (mids: readonly string[], config: VtbConfig
     if (config.cardApiUrl) {
       const url = createCardApiUrl(config.cardApiUrl, batch);
       try {
-        const requestUrl = isBilibiliWbiCardUrl(url) ? await signBilibiliUrl(url, config) : url;
+        const requestUrl = isBilibiliWbiCardUrl(url, config.cardApiUrl) ? await signBilibiliUrl(url, config) : url;
         const response = cardResponseSchema.parse(
           await fetchJson(
             requestUrl,
@@ -804,7 +797,8 @@ export const getVtbDynamics = async (
     throw new Error("Bilibili dynamic API requires a logged-in credential");
   }
 
-  const cacheKey = `${BILIBILI_DYNAMIC_API_URL}\n${config.webUrl}\n${streamer.mid}`;
+  const dynamicApiUrl = config.dynamicApiUrl || endpointFromBase(config.webUrl, "/x/polymer/web-dynamic/v1/feed/space");
+  const cacheKey = `${dynamicApiUrl}\n${config.webUrl}\n${streamer.mid}`;
   const cacheRead = readExpiringCache(vtbDynamicQueryCache, cacheKey, Date.now());
   vtbDynamicQueryCache = cacheRead.cache;
   const cached = cacheRead.value;
@@ -819,7 +813,7 @@ export const getVtbDynamics = async (
     features: BILIBILI_DYNAMIC_FEATURES,
     web_location: "333.1387",
   });
-  const dynamicUrl = `${BILIBILI_DYNAMIC_API_URL}?${query.toString()}`;
+  const dynamicUrl = `${dynamicApiUrl}?${query.toString()}`;
   const response = dynamicResponseSchema.parse(
     await fetchJson(
       dynamicUrl,
@@ -2245,7 +2239,15 @@ const getVtbCardCacheKey = (config: VtbConfig, mid: string) =>
   `${config.cardApiUrl}\n${mid}`;
 
 const getVtbLiveStatsCacheKey = (mid: string, config: VtbConfig) =>
-  `${BILIBILI_LIVE_MASTER_INFO_API_URL}\n${config.liveWebUrl}\n${config.cardApiUrl}\n${config.proxyUrl}\n${mid}`;
+  `${config.liveMasterApiUrl || endpointFromBase(config.liveWebUrl, "/live_user/v1/Master/info")}\n${config.liveWebUrl}\n${config.cardApiUrl}\n${config.proxyUrl}\n${mid}`;
+
+const endpointFromBase = (baseUrl: string, path: string) => {
+  try {
+    return new URL(path, baseUrl).href;
+  } catch {
+    return path;
+  }
+};
 
 const getVtbDynamicQueryCacheMs = (config: VtbConfig) =>
   Math.max(5 * 60_000, Math.min(30 * 60_000, (config.dynamicPollMinutes ?? 15) * 60_000));
@@ -2270,21 +2272,19 @@ const createUserSearchApiUrl = (apiUrl: string, name: string) => {
   return url.href;
 };
 
-const isBilibiliWbiSearchUrl = (url: string) => {
+const isBilibiliWbiSearchUrl = (url: string, configuredUrl: string) => {
   try {
     const parsed = new URL(url);
-    return parsed.hostname === "api.bilibili.com" &&
-      parsed.pathname === new URL(BILIBILI_WBI_SEARCH_API_URL).pathname;
+    return Boolean(configuredUrl) && parsed.pathname === new URL(configuredUrl).pathname;
   } catch {
     return false;
   }
 };
 
-const isBilibiliWbiCardUrl = (url: string) => {
+const isBilibiliWbiCardUrl = (url: string, configuredUrl: string) => {
   try {
     const parsed = new URL(url);
-    return parsed.hostname === "api.bilibili.com" &&
-      parsed.pathname === "/x/space/wbi/acc/info";
+    return Boolean(configuredUrl) && parsed.pathname === new URL(configuredUrl).pathname && parsed.pathname.includes("/wbi/");
   } catch {
     return false;
   }
@@ -2359,7 +2359,7 @@ const getVtbWbiMixinKey = async (config: VtbConfig) => {
     const credential = await getBilibiliCredentialHeader().catch(() => undefined);
     const response = z.looseObject({ code: integerSchema, data: z.unknown().optional() }).parse(
       await fetchJson(
-        BILIBILI_NAV_API_URL,
+        config.navApiUrl || endpointFromBase(config.webUrl, "/x/web-interface/nav"),
         config.webUrl,
         credential ? { Cookie: credential } : undefined,
         undefined,
@@ -2367,7 +2367,7 @@ const getVtbWbiMixinKey = async (config: VtbConfig) => {
       ),
     );
     if (response.code !== 0 && response.code !== -101) {
-      assertVtbApiSuccess(BILIBILI_NAV_API_URL, "nav", response.code);
+      assertVtbApiSuccess(config.navApiUrl || endpointFromBase(config.webUrl, "/x/web-interface/nav"), "nav", response.code);
     }
     const wbiImage = isRecord(response.data) && isRecord(response.data.wbi_img)
       ? response.data.wbi_img
@@ -2415,7 +2415,7 @@ export const getVtbGuardSnapshot = async (
       page_size: "30",
       typ: "3",
     });
-    const url = `${BILIBILI_GUARD_API_URL}?${query.toString()}`;
+    const url = `${config.guardApiUrl || endpointFromBase(config.liveWebUrl, "/xlive/app-room/v2/guardTab/topListNew")}?${query.toString()}`;
     const response = z.looseObject({ code: integerSchema, data: z.unknown().optional() }).parse(
       await fetchJson(url, config.webUrl, undefined, undefined, config.proxyUrl, VTB_GUARD_REQUEST_INTERVAL_MS),
     );

@@ -56,12 +56,16 @@ const fetchJson = async (url: string, proxyUrl: string, signal?: AbortSignal) =>
   return response.json() as Promise<ToolReleasePayload>;
 };
 
-const lookupLatestMediaToolVersions = async (proxyUrl: string, signal?: AbortSignal) => {
+const lookupLatestMediaToolVersions = async (
+  proxyUrl: string,
+  endpoints: { ffmpegReleaseApiUrl?: string; ytDlpReleaseApiUrl?: string },
+  signal?: AbortSignal,
+) => {
   const [ffmpeg, ytDlp] = await Promise.all([
-    fetchJson("https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest", proxyUrl, signal)
+    fetchJson(endpoints.ffmpegReleaseApiUrl ?? "", proxyUrl, signal)
       .then(parseLatestFfmpegRelease)
       .catch((error) => handleOptionalLookupError(error, signal)),
-    fetchJson("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest", proxyUrl, signal)
+    fetchJson(endpoints.ytDlpReleaseApiUrl ?? "", proxyUrl, signal)
       .then((release) => release.tag_name?.trim() || undefined)
       .catch((error) => handleOptionalLookupError(error, signal)),
   ]);
@@ -171,9 +175,9 @@ const downloadYtDlpFile = async (
   }
 };
 
-const updateYtDlpBinaries = async (proxyUrl: string, arch: string) => {
+const updateYtDlpBinaries = async (proxyUrl: string, arch: string, releaseApiUrl: string) => {
   console.log("yt-dlp: checking latest release...");
-  const release = await fetchJson("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest", proxyUrl);
+  const release = await fetchJson(releaseApiUrl, proxyUrl);
   const tag = release.tag_name;
   if (!tag) throw new Error("yt-dlp release has no version tag");
   const names = arch === "arm64"
@@ -252,7 +256,7 @@ const runUpdate = async (signal?: AbortSignal) => {
   if (displayToolVersionsOnly) {
     const [currentVersions, latestVersions] = await Promise.all([
       readMediaToolVersions(config.video, undefined, signal),
-      lookupLatestMediaToolVersions(config.network.proxyUrl, signal),
+      lookupLatestMediaToolVersions(config.network.proxyUrl, config.network, signal),
     ]);
     throwIfAborted(signal);
     console.log(`FFmpeg: ${formatMediaToolVersion(currentVersions.ffmpeg, latestVersions.ffmpeg)}`);
@@ -262,7 +266,7 @@ const runUpdate = async (signal?: AbortSignal) => {
     for (const result of ffmpegResults) {
       console.log(`FFmpeg ${result.platform}: ${result.status} ${result.version ?? "unknown"} (${result.path})`);
     }
-    await updateYtDlpBinaries(config.network.proxyUrl, process.arch);
+    await updateYtDlpBinaries(config.network.proxyUrl, process.arch, config.network.ytDlpReleaseApiUrl ?? "");
   }
 };
 
