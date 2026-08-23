@@ -13,7 +13,7 @@ import { createExpiringCache, readExpiringCache, writeExpiringCache } from "@/ca
 import { getBilibiliCredentialHeader } from "@/bilibili-credential";
 import type { MizConfig, VtbConfig } from "@/config";
 import { createDatabaseClient, getDatabaseUrl } from "@/database";
-import { fetchWithRetry, readResponseBytes, readResponseJson } from "@/http";
+import { fetchWithRiskControlProxy, fetchWithRetry, readResponseBytes, readResponseJson } from "@/http";
 import { partitionVtbSubscriptionsByGroup } from "@/vtb-subscriptions";
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -859,15 +859,18 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
     requestInit,
     VTB_JSON_REQUEST_INTERVAL_MS,
     async () => {
-      const response = await fetchWithRetry(url, {
-        ...requestInit,
-        timeoutMs: FETCH_TIMEOUT_MS,
-        retryCount: 1,
-        retryDelayMs: 2_000,
-        retryJitterMs: 2_000,
-        retryRateLimited: false,
-        ...(config.proxyUrl ? { proxy: config.proxyUrl } : {}),
-      });
+      const response = await fetchWithRiskControlProxy(
+        (proxy) => fetchWithRetry(url, {
+          ...requestInit,
+          timeoutMs: FETCH_TIMEOUT_MS,
+          retryCount: 1,
+          retryDelayMs: 2_000,
+          retryJitterMs: 2_000,
+          retryRateLimited: false,
+          ...(proxy ? { proxy } : {}),
+        }),
+        config.proxyUrl,
+      );
       const contentType = response.headers.get("content-type")?.toLowerCase();
       if (contentType && !contentType.startsWith("image/") && contentType !== "application/octet-stream") {
         await response.body?.cancel().catch(() => undefined);
@@ -1963,18 +1966,36 @@ const fetchJson = async (
     requestInit,
     minimumIntervalMs,
     async () => {
-      const response = await fetchWithRetry(url, {
+      const fetchResponse = (proxy?: string) => fetchWithRetry(url, {
         ...requestInit,
         timeoutMs: FETCH_TIMEOUT_MS,
         retryCount: 1,
         retryDelayMs: 2_000,
         retryJitterMs: 3_000,
         retryRateLimited: false,
-        ...(proxyUrl ? { proxy: proxyUrl } : {}),
+        ...(proxy ? { proxy } : {}),
       });
-      return readResponseJson(response, MAX_VTB_RESPONSE_BYTES);
+      let usedProxy = false;
+      const response = await fetchWithRiskControlProxy((proxy) => {
+        usedProxy = Boolean(proxy);
+        return fetchResponse(proxy);
+      }, proxyUrl);
+      const payload = await readResponseJson(response, MAX_VTB_RESPONSE_BYTES);
+      if (proxyUrl && !usedProxy && isVtbRiskControlPayload(payload)) {
+        const proxyResponse = await fetchResponse(proxyUrl);
+        return readResponseJson(proxyResponse, MAX_VTB_RESPONSE_BYTES);
+      }
+      return payload;
     },
   );
+};
+
+const isVtbRiskControlPayload = (payload: unknown) => {
+  if (!isRecord(payload)) {
+    return false;
+  }
+  const code = payload.code;
+  return (typeof code === "number" ? code : Number(code)) === -509;
 };
 
 const runProtectedVtbRequest = async <T>(

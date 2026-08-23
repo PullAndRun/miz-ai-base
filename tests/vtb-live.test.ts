@@ -271,6 +271,26 @@ describe("Bilibili live lookup", () => {
     expect(calls).toBe(1);
   });
 
+  test("uses the proxy only after direct VTB access is rate-limited", async () => {
+    const proxies: Array<string | undefined> = [];
+    globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      proxies.push((init as RequestInit & { proxy?: string } | undefined)?.proxy);
+      if (!proxies.at(-1)) {
+        return new Response("protected", { status: 412 });
+      }
+      return new Response(JSON.stringify({ code: 0, data: [{ uid: "123", live_status: 0 }] }));
+    }) as unknown as typeof fetch;
+
+    const fallbackConfig = {
+      ...config,
+      liveApiUrl: "https://direct-first.example.test/live",
+      proxyUrl: "http://proxy.example.test:7890",
+    };
+    await expect(getVtbLiveInfo({ name: "绀轰緥涓绘挱", mid: "123" }, fallbackConfig))
+      .resolves.toMatchObject({ isLive: false });
+    expect(proxies).toEqual([undefined, "http://proxy.example.test:7890"]);
+  });
+
   test("does not treat an ambiguous business rejection as host-wide risk control", async () => {
     let calls = 0;
     globalThis.fetch = (async () => {

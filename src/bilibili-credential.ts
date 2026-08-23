@@ -1,5 +1,5 @@
 import { createQrCode } from "@/qrcode";
-import { fetchWithRetry, readResponseJson } from "@/http";
+import { fetchWithRiskControlProxy, fetchWithRetry, readResponseJson } from "@/http";
 import { createDatabaseClient } from "@/database";
 import type { PrismaClient } from "@/generated/prisma/client";
 
@@ -198,14 +198,18 @@ export const serializeBilibiliCredential = (credential: BilibiliCredential) => {
   return Object.entries(values).map(([key, value]) => `${key}=${value}`).join("; ");
 };
 
-const bilibiliFetch = async (url: string | URL, proxyUrl: string, init: RequestInit = {}) => fetchWithRetry(url, {
-  ...init,
-  headers: { ...BILIBILI_HEADERS, ...Object.fromEntries(new Headers(init.headers).entries()) },
-  ...(proxyUrl ? { proxy: proxyUrl } : {}),
-  timeoutMs: BILIBILI_TIMEOUT_MS,
-  retryCount: 1,
-  retryRateLimited: false,
-});
+const bilibiliFetch = (url: string | URL, proxyUrl: string, init: RequestInit = {}) =>
+  fetchWithRiskControlProxy(
+    (proxy) => fetchWithRetry(url, {
+      ...init,
+      headers: { ...BILIBILI_HEADERS, ...Object.fromEntries(new Headers(init.headers).entries()) },
+      ...(proxy ? { proxy } : {}),
+      timeoutMs: BILIBILI_TIMEOUT_MS,
+      retryCount: 1,
+      retryRateLimited: false,
+    }),
+    proxyUrl,
+  );
 
 const resolveQrLoginCredential = async (loginUrl: string, refreshToken: string, proxyUrl: string) => {
   const values = new URL(loginUrl).searchParams;
@@ -273,12 +277,16 @@ const exchangeQrLoginTicket = async (loginUrl: string, proxyUrl: string) => {
   return cookies;
 };
 
-const bilibiliFetchManualRedirect = async (url: string, proxyUrl: string) => fetch(url, {
-  redirect: "manual",
-  headers: BILIBILI_HEADERS,
-  ...(proxyUrl ? { proxy: proxyUrl } : {}),
-  signal: AbortSignal.timeout(BILIBILI_TIMEOUT_MS),
-});
+const bilibiliFetchManualRedirect = (url: string, proxyUrl: string) =>
+  fetchWithRiskControlProxy(
+    (proxy) => fetch(url, {
+      redirect: "manual",
+      headers: BILIBILI_HEADERS,
+      ...(proxy ? { proxy } : {}),
+      signal: AbortSignal.timeout(BILIBILI_TIMEOUT_MS),
+    }),
+    proxyUrl,
+  );
 
 const getSetCookieHeaders = (headers: Headers) => {
   const extendedHeaders = headers as Headers & { getSetCookie?: () => string[] };

@@ -21,6 +21,24 @@ export type RetryRequestInit = RequestInit & {
 };
 
 /**
+ * Uses a direct request by default and only probes the configured proxy after
+ * an upstream explicitly signals risk control.
+ */
+export const fetchWithRiskControlProxy = async <T>(
+  request: (proxy?: string) => Promise<T>,
+  proxyUrl = "",
+): Promise<T> => {
+  try {
+    return await request();
+  } catch (error) {
+    if (!proxyUrl || !isRiskControlHttpError(error)) {
+      throw error;
+    }
+    return request(proxyUrl);
+  }
+};
+
+/**
  * Performs an HTTP request with a fixed retry policy. Only transient failures
  * are retried, and cancellation interrupts both a request and its backoff.
  */
@@ -90,6 +108,14 @@ const isRetryableHttpError = (error: unknown, retryRateLimited: boolean) =>
   error.status === 408 ||
   (retryRateLimited && error.status === 429) ||
   error.status >= 500;
+
+const isRiskControlHttpError = (error: unknown) => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const status = (error as Error & { status?: unknown }).status;
+  return status === 412 || status === 429;
+};
 
 const isHttpRequestError = (error: unknown): error is HttpRequestError =>
   error instanceof Error &&
