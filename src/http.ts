@@ -141,6 +141,13 @@ export const readResponseBytes = async (response: Response, maximumBytes: number
         return Buffer.concat(chunks, size);
       }
 
+      // A custom or malformed stream may report a missing chunk. Treat it as
+      // an invalid response instead of leaking a less useful TypeError from
+      // accessing byteLength below.
+      if (!(value instanceof Uint8Array)) {
+        throw new Error("Response body contained an invalid chunk");
+      }
+
       size += value.byteLength;
       if (size > maximumBytes) {
         await reader.cancel().catch(() => undefined);
@@ -148,6 +155,9 @@ export const readResponseBytes = async (response: Response, maximumBytes: number
       }
       chunks.push(value);
     }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
   } finally {
     reader.releaseLock();
   }

@@ -35,16 +35,22 @@ export type BilibiliQrLoginResult =
 let loadedCredential: BilibiliCredential | undefined;
 let loadedFromDatabase = false;
 let credentialDatabase: PrismaClient | undefined;
+let credentialDatabaseUrl: string | undefined;
 let credentialLoadPromise: Promise<BilibiliCredential | undefined> | undefined;
 let credentialRevision = 0;
 
 export const configureBilibiliCredentialStore = (databaseUrl: string) => {
-  if (credentialDatabase && credentialDatabase !== undefined) return;
+  if (credentialDatabase && credentialDatabaseUrl === databaseUrl) return;
+  const previousDatabase = credentialDatabase;
   credentialDatabase = createDatabaseClient(databaseUrl);
+  credentialDatabaseUrl = databaseUrl;
   credentialRevision += 1;
   loadedFromDatabase = false;
   loadedCredential = undefined;
   credentialLoadPromise = undefined;
+  // Reconfiguration is synchronous by design; disconnect the old client in
+  // the background so a config reload does not leak a pool of connections.
+  void previousDatabase?.$disconnect().catch(() => undefined);
 };
 
 export const configureBilibiliApiUrls = (config: {
@@ -128,7 +134,17 @@ export const getBilibiliCredential = async () => {
   const revision = credentialRevision;
   credentialLoadPromise ??= (async () => {
     const stored = await credentialDatabase!.bilibiliCredential.findUnique({ where: { id: CREDENTIAL_ID } });
-    const credential = stored ? normalizeCredential(JSON.parse(stored.credentialJson)) : undefined;
+    let credential: BilibiliCredential | undefined;
+    if (stored) {
+      try {
+        credential = normalizeCredential(JSON.parse(stored.credentialJson));
+      } catch {
+        // A manually edited or partially written row should not prevent the
+        // bot from starting. Treat it as logged out and let the next login
+        // replace it with a valid credential.
+        credential = undefined;
+      }
+    }
     if (revision === credentialRevision) {
       loadedCredential = credential;
       loadedFromDatabase = true;

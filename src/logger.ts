@@ -1,5 +1,6 @@
 import dayjs from "dayjs";
 import winston from "winston";
+import { mkdirSync } from "node:fs";
 import type { LogLevel } from "@/config";
 
 export type LoggerContext = "miz" | "gateway" | "plugin";
@@ -13,6 +14,10 @@ export type Logger = {
 };
 
 export const createLogger = (level: LogLevel = "info"): Logger => {
+  // Winston's file transport does not create missing parent directories on
+  // every platform. Create it before constructing the transport so a fresh
+  // checkout can start before the rest of the project bootstrap runs.
+  mkdirSync("logs", { recursive: true });
   const logFile = `logs/${dayjs().format("YYYY-MM-DD")}.log`;
   const logger = winston.createLogger({
     level: level === "off" ? "info" : level,
