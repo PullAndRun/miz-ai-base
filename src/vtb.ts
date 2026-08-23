@@ -36,6 +36,9 @@ const VTB_USER_SEARCH_MISS_CACHE_MS = 10 * 60_000;
 // conservative per-host interval and add jitter in the shared request queue.
 const VTB_DYNAMIC_REQUEST_INTERVAL_MS = 2_000;
 const VTB_GUARD_REQUEST_INTERVAL_MS = 1_000;
+const VTB_STATS_REQUEST_INTERVAL_MS = 1_000;
+const VTB_FAN_CLUB_REQUEST_INTERVAL_MS = 1_000;
+const VTB_STATS_CACHE_MS = 60_000;
 const VTB_LIVE_QUERY_CACHE_MS = 60_000;
 const VTB_IMAGE_CACHE_MS = 10 * 60_000;
 const MAX_VTB_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -46,8 +49,15 @@ const MAX_VTB_QUERY_CACHE_ENTRIES = 1_000;
 // specifically means that requests are too frequent. HTTP 412/429 are handled
 // separately as transport-level protection signals.
 const VTB_RATE_LIMIT_CODES = new Set([-509]);
+const BILIBILI_NAV_API_URL = "https://api.bilibili.com/x/web-interface/nav";
+const BILIBILI_WBI_SEARCH_API_URL = "https://api.bilibili.com/x/web-interface/wbi/search/all/v2";
 const BILIBILI_DYNAMIC_API_URL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space";
 const BILIBILI_GUARD_API_URL = "https://api.live.bilibili.com/xlive/app-room/v2/guardTab/topListNew";
+// Documented fan-club ranking endpoint; data.num is the aggregate member count.
+const BILIBILI_FAN_CLUB_API_URL = "https://api.live.bilibili.com/xlive/general-interface/v1/rank/getFansMembersRank";
+// The documented live master profile exposes follower count, nickname,
+// avatar and room ID without relying on deprecated web-card endpoints.
+const BILIBILI_LIVE_MASTER_INFO_API_URL = "https://api.live.bilibili.com/live_user/v1/Master/info";
 const BILIBILI_DYNAMIC_FEATURES = [
   "itemOpusStyle",
   "listOnlyfans",
@@ -78,21 +88,15 @@ const legacyUserSchema = z.looseObject({
   mid: z.union([z.string(), z.number()]),
   room_id: z.union([z.string(), z.number()]).optional(),
 });
-const nameToUidSchema = z.looseObject({
-  name: z.string().min(1),
-  uid: z.union([z.string(), z.number()]),
-});
 const userResponseSchema = z.looseObject({
   code: integerSchema,
-  data: z.preprocess(
-    (value) => value ?? { result: [], uid_list: [] },
-    z.looseObject({
-      result: z.array(legacyUserSchema).optional().default([]),
-      uid_list: z.array(nameToUidSchema).optional().default([]),
-    }),
-  ),
+  data: z.unknown().optional(),
 });
 const cardResponseSchema = z.looseObject({
+  code: integerSchema,
+  data: z.unknown().optional(),
+});
+const liveMasterInfoResponseSchema = z.looseObject({
   code: integerSchema,
   data: z.unknown().optional(),
 });
@@ -126,7 +130,11 @@ const dynamicResponseSchema = z.looseObject({
   }).nullish(),
 });
 
-export type VtbStreamer = { name: string; mid: string; roomId?: string };
+export type VtbStreamer = {
+  name: string;
+  mid: string;
+  roomId?: string;
+};
 export type VtbLiveInfo = {
   title: string;
   roomId?: string;
@@ -172,7 +180,7 @@ export type VtbDynamicDeliveryState = {
   publishedAt: Date;
   deliveredGroupIds: string[];
 };
-export type VtbCardInfo = VtbLiveStats & { name?: string; avatarUrl?: string };
+export type VtbCardInfo = VtbLiveStats & { name?: string; avatarUrl?: string; roomId?: string };
 export type VtbNameChange = { previousName: string; name: string; mid: string };
 type ReminderClaim = Reminder & { claimedAt: Date; nextRemindAt?: Date };
 type ScheduleEventClaim = ScheduleEvent & { claimedAt: Date };
@@ -194,6 +202,10 @@ let vtbCardQueryCache = createExpiringCache<string, VtbCardInfo>(MAX_VTB_QUERY_C
 let vtbDynamicQueryCache = createExpiringCache<string, VtbDynamicFeed>(MAX_VTB_QUERY_CACHE_ENTRIES);
 let vtbUserSearchCache = createExpiringCache<string, VtbStreamer | null>(MAX_VTB_QUERY_CACHE_ENTRIES);
 let vtbImageCache = createExpiringCache<string, string>(MAX_VTB_IMAGE_CACHE_ENTRIES);
+let vtbLiveStatsCache = createExpiringCache<string, VtbCardInfo>(MAX_VTB_QUERY_CACHE_ENTRIES);
+const vtbLiveStatsInFlight = new Map<string, Promise<VtbCardInfo>>();
+let vtbWbiKeys: { mixinKey: string; expiresAt: number } | undefined;
+let vtbWbiKeysPromise: Promise<string> | undefined;
 
 export const getVtbRepository = async (config: MizConfig) => {
   if (!repositoryPromise) {
@@ -225,11 +237,16 @@ export const resolveVtbStreamer = async (name: string, config: VtbConfig): Promi
   }
 
   const url = createUserSearchApiUrl(config.userApiUrl, name);
-  const modernLookup = isNameToUidApiUrl(url);
-  const credential = modernLookup ? await getBilibiliCredentialHeader() : undefined;
+  // Bilibili's legacy search endpoint is technically callable anonymously,
+  // but its web risk-control layer commonly returns HTTP 412 unless the
+  // browser-like login cookies are present. Reuse the saved QR-login
+  // credential for both search variants; when no credential is configured the
+  // request remains anonymous.
+  const credential = await getBilibiliCredentialHeader().catch(() => undefined);
+  const signedUrl = isBilibiliWbiSearchUrl(url) ? await signBilibiliUrl(url, config) : url;
   let response = userResponseSchema.parse(
     await fetchJson(
-      url,
+      signedUrl,
       config.webUrl,
       credential ? { Cookie: credential } : undefined,
       undefined,
@@ -238,11 +255,11 @@ export const resolveVtbStreamer = async (name: string, config: VtbConfig): Promi
     ),
   );
   if (response.code === -101) {
-    const cookie = await getBilibiliCredentialHeader();
+    const cookie = await getBilibiliCredentialHeader().catch(() => undefined);
     if (cookie) {
       response = userResponseSchema.parse(
         await fetchJson(
-          url,
+          signedUrl,
           config.webUrl,
           { Cookie: cookie },
           undefined,
@@ -252,15 +269,9 @@ export const resolveVtbStreamer = async (name: string, config: VtbConfig): Promi
       );
     }
   }
-  assertVtbApiSuccess(url, "user", response.code);
+  assertVtbApiSuccess(signedUrl, "user", response.code);
 
-  const legacyUser = response.data.result.find((item) => item.uname === name);
-  const nameToUidUser = response.data.uid_list.find((item) => item.name === name);
-  const streamer = legacyUser
-    ? { name: legacyUser.uname, mid: String(legacyUser.mid), roomId: normalizeRoomId(legacyUser.room_id) }
-    : nameToUidUser
-      ? { name: nameToUidUser.name, mid: String(nameToUidUser.uid) }
-      : undefined;
+  const streamer = extractVtbSearchUsers(response.data).find((item) => item.name === name);
   vtbUserSearchCache = writeExpiringCache(
     vtbUserSearchCache,
     cacheKey,
@@ -432,60 +443,231 @@ export const getVtbCardInfo = async (mid: string, config: VtbConfig): Promise<Vt
   return (await getVtbCardInfos([mid], config)).get(mid) ?? {};
 };
 
+/** Fetch the documented live master profile, preferring the saved login cookie. */
+export const getVtbLiveStats = async (mid: string, config: VtbConfig): Promise<VtbCardInfo> => {
+  const cacheKey = getVtbLiveStatsCacheKey(mid, config);
+  const cacheRead = readExpiringCache(vtbLiveStatsCache, cacheKey, Date.now());
+  vtbLiveStatsCache = cacheRead.cache;
+  if (cacheRead.value) {
+    return cacheRead.value;
+  }
+
+  const existingRequest = vtbLiveStatsInFlight.get(cacheKey);
+  if (existingRequest) {
+    return existingRequest;
+  }
+
+  const request = fetchVtbLiveStats(mid, config, cacheKey, cacheRead.value ?? undefined);
+  vtbLiveStatsInFlight.set(cacheKey, request);
+  try {
+    return await request;
+  } finally {
+    if (vtbLiveStatsInFlight.get(cacheKey) === request) {
+      vtbLiveStatsInFlight.delete(cacheKey);
+    }
+  }
+};
+
+const fetchVtbLiveStats = async (
+  mid: string,
+  config: VtbConfig,
+  cacheKey: string,
+  previous: VtbCardInfo | undefined,
+): Promise<VtbCardInfo> => {
+  const url = new URL(BILIBILI_LIVE_MASTER_INFO_API_URL);
+  url.searchParams.set("uid", mid);
+  const credential = await getBilibiliCredentialHeader().catch(() => undefined);
+  const result = await fetchJson(
+    url.href,
+    config.liveWebUrl,
+    credential ? { Cookie: credential } : undefined,
+    undefined,
+    config.proxyUrl,
+    VTB_STATS_REQUEST_INTERVAL_MS,
+  );
+  const response = liveMasterInfoResponseSchema.parse(result);
+  assertVtbApiSuccess(url.href, "live master", response.code);
+  const data = isRecord(response.data) ? response.data : undefined;
+  const info = isRecord(data?.info) ? data.info : undefined;
+  const fans = findCount(data, ["follower_num", "follow_num", "fans"]);
+  let fanClub = findCount(data, [
+    "fan_club", "fanClub", "fan_club_count", "fanClubCount", "fan_club_num", "fanClubNum",
+    "fans_club", "fansClub", "fans_club_num", "fansClubNum", "fans_group_count", "fansGroupCount",
+  ]) ?? findCount(info, [
+    "fan_club", "fanClub", "fan_club_count", "fanClubCount", "fan_club_num", "fanClubNum",
+    "fans_club", "fansClub", "fans_club_num", "fansClubNum", "fans_group_count", "fansGroupCount",
+  ]);
+  // Master/info does not normally expose the anchor-wide fan-club total.
+  // The documented ranking endpoint does, so use it as the authoritative
+  // source while keeping the profile request useful when that endpoint is
+  // temporarily unavailable.
+  if (fanClub === undefined) {
+    try {
+      const documentedFanClub = await getVtbFanClubCount(mid, config);
+      if (documentedFanClub !== undefined) {
+        fanClub = documentedFanClub;
+      }
+    } catch {
+      // A partial stats response must not suppress live polling.
+    }
+  }
+  const guards = findCount(data, ["guards", "guard", "guard_num", "guardNum", "guard_count", "guardCount"]);
+  const name = firstText(info?.uname, data?.uname, data?.name);
+  const avatarUrl = pickImageUrl(firstText(info?.face, data?.face));
+  const roomId = normalizeRoomId(firstText(data?.room_id));
+  const stats: VtbCardInfo = {
+    // Some documented responses are deliberately partial. Preserve the last
+    // known fan-club/guard baseline instead of turning a missing field into a
+    // false decrease in the live-end notification.
+    ...previous,
+    ...(fans === undefined ? {} : { fans }),
+    ...(fanClub === undefined ? {} : { fanClub }),
+    ...(guards === undefined ? {} : { guards }),
+    ...(name === undefined ? {} : { name }),
+    ...(avatarUrl === undefined ? {} : { avatarUrl }),
+    ...(roomId === undefined ? {} : { roomId }),
+  };
+  vtbLiveStatsCache = writeExpiringCache(vtbLiveStatsCache, cacheKey, stats, VTB_STATS_CACHE_MS, Date.now());
+  return stats;
+};
+
+/** Fetch the documented aggregate number of members in an anchor's fan club. */
+export const getVtbFanClubCount = async (mid: string, config: VtbConfig) => {
+  const url = new URL(BILIBILI_FAN_CLUB_API_URL);
+  url.searchParams.set("ruid", mid);
+  url.searchParams.set("page", "1");
+  url.searchParams.set("page_size", "30");
+  const response = z.looseObject({ code: integerSchema, data: z.unknown().optional() }).parse(
+    await fetchJson(
+      url.href,
+      config.webUrl,
+      undefined,
+      undefined,
+      config.proxyUrl,
+      VTB_FAN_CLUB_REQUEST_INTERVAL_MS,
+    ),
+  );
+  assertVtbApiSuccess(url.href, "fan club", response.code);
+  const data = isRecord(response.data) ? response.data : undefined;
+  const directCount = toFiniteCount(data?.num) ?? toFiniteCount(data?.total);
+  return directCount ?? findCount(data?.info, ["num", "total", "count"]);
+};
+
+/** Count current captain members from the documented anonymous guard ranking. */
+export const getVtbCaptainCount = async (roomId: string, mid: string, config: VtbConfig) => {
+  const seen = new Set<string>();
+  let captains = 0;
+  for (let page = 1; page <= 100; page += 1) {
+    const query = new URLSearchParams({
+      roomid: roomId,
+      ruid: mid,
+      page: String(page),
+      page_size: "30",
+      typ: "3",
+    });
+    const url = `${BILIBILI_GUARD_API_URL}?${query.toString()}`;
+    const response = z.looseObject({ code: integerSchema, data: z.unknown().optional() }).parse(
+      await fetchJson(url, config.webUrl, undefined, undefined, config.proxyUrl, VTB_GUARD_REQUEST_INTERVAL_MS),
+    );
+    assertVtbApiSuccess(url, "guard", response.code);
+    if (!isRecord(response.data)) throw new Error("Bilibili guard API returned no data");
+    const data = response.data;
+    const total = findCount(data.info, ["num", "total", "count"]);
+    const entries = [
+      ...(page === 1 && Array.isArray(data.top3) ? data.top3 : []),
+      ...(Array.isArray(data.list) ? data.list : []),
+    ];
+    for (const entry of entries) {
+      if (!isRecord(entry)) continue;
+      const id = firstText(entry.uid, entry.mid, isRecord(entry.uinfo) ? entry.uinfo.uid : undefined);
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        if (findCount(entry, ["guard_level", "guardLevel"]) === 3) captains += 1;
+      }
+    }
+    if (entries.length === 0 || (total !== undefined && seen.size >= total) || entries.length < 30) break;
+  }
+  return captains;
+};
+
 export const getVtbCardInfos = async (mids: readonly string[], config: VtbConfig) => {
   const uniqueMids = Array.from(new Set(mids));
   const cards = new Map<string, VtbCardInfo>();
   if (uniqueMids.length === 0) return cards;
+  const credential = await getBilibiliCredentialHeader().catch(() => undefined);
   const batchSize = hasCardQueryParameter(config.cardApiUrl, "mid") ? 1 : 50;
-  const cookie = await getBilibiliCredentialHeader();
   for (const batch of chunk(uniqueMids, batchSize)) {
-    const url = createCardApiUrl(config.cardApiUrl, batch);
-    const response = cardResponseSchema.parse(
-      await fetchJson(
-        url,
-        config.webUrl,
-        cookie ? { Cookie: cookie } : undefined,
-        undefined,
-        config.proxyUrl,
-      ),
-    );
-    if (response.code !== 0) {
-      recordVtbBusinessFailure(url, response.code);
-      throw new Error(
-          response.code === -101
-          ? "Bilibili card API rejected the QR login credential: code -101"
-          : `Bilibili card API failed: code ${response.code}`,
-      );
-    }
-    recordVtbRequestSuccess(url);
+    if (config.cardApiUrl) {
+      const url = createCardApiUrl(config.cardApiUrl, batch);
+      try {
+        const requestUrl = isBilibiliWbiCardUrl(url) ? await signBilibiliUrl(url, config) : url;
+        const response = cardResponseSchema.parse(
+          await fetchJson(
+            requestUrl,
+            config.webUrl,
+            credential ? { Cookie: credential } : undefined,
+            undefined,
+            config.proxyUrl,
+          ),
+        );
+        if (response.code !== 0) {
+          recordVtbBusinessFailure(requestUrl, response.code);
+          throw new Error(
+            response.code === -101
+              ? "Bilibili card API rejected the QR login credential: code -101"
+              : `Bilibili card API failed: code ${response.code}`,
+          );
+        }
+        recordVtbRequestSuccess(requestUrl);
 
-    for (const rawCard of extractCardRecords(response.data)) {
-      const parsedCard = cardSchema.safeParse(rawCard);
-      if (!parsedCard.success) {
-        continue;
+        for (const rawCard of extractCardRecords(response.data)) {
+          const parsedCard = cardSchema.safeParse(rawCard);
+          if (!parsedCard.success) {
+            continue;
+          }
+
+          const fans = Number(parsedCard.data.fans);
+          const fanClub = findCount(rawCard, [
+            "fan_club", "fanClub", "fan_club_count", "fanClubCount", "fan_club_num", "fanClubNum",
+            "fans_club", "fansClub", "fans_club_num", "fansClubNum", "fans_num", "fansNum",
+            "fans_group_count", "fansGroupCount",
+          ]);
+          const guards = findCount(rawCard, [
+            "guards", "guard", "guard_num", "guardNum", "guard_count", "guardCount",
+            "guard_info", "guardInfo",
+          ]);
+          cards.set(String(parsedCard.data.mid), {
+            ...(Number.isFinite(fans) ? { fans } : {}),
+            ...(fanClub === undefined ? {} : { fanClub }),
+            ...(guards === undefined ? {} : { guards }),
+            name: parsedCard.data.name?.trim() || undefined,
+            avatarUrl: pickImageUrl(
+              parsedCard.data.face,
+              parsedCard.data.avatar,
+              parsedCard.data.avatar_url,
+            ),
+          });
+        }
+      } catch {
+        // The documented live endpoints below are independent of this
+        // optional web-card request, so an expired SESSDATA must not suppress
+        // follower and fan-club statistics.
       }
+    }
 
-      const fans = Number(parsedCard.data.fans);
-      const fanClub = findCount(rawCard, [
-          "fan_club", "fanClub", "fan_club_count", "fanClubCount", "fan_club_num", "fanClubNum",
-          "fans_club", "fansClub", "fans_club_num", "fansClubNum", "fans_num", "fansNum",
-          "fans_group_count", "fansGroupCount",
-        ]);
-      const guards = findCount(rawCard, [
-          "guards", "guard", "guard_num", "guardNum", "guard_count", "guardCount",
-          "guard_info", "guardInfo",
-        ]);
-      cards.set(String(parsedCard.data.mid), {
-        ...(Number.isFinite(fans) ? { fans } : {}),
-        ...(fanClub === undefined ? {} : { fanClub }),
-        ...(guards === undefined ? {} : { guards }),
-        name: parsedCard.data.name?.trim() || undefined,
-        avatarUrl: pickImageUrl(
-          parsedCard.data.face,
-          parsedCard.data.avatar,
-          parsedCard.data.avatar_url,
-        ),
-      });
+    const documentedStats = await Promise.all(batch.map(async (mid) => {
+      try {
+        return [mid, await getVtbLiveStats(mid, config)] as const;
+      } catch {
+        return [mid, {}] as const;
+      }
+    }));
+    for (const [mid, stats] of documentedStats) {
+      // Keep the configured card endpoint authoritative when it returned a
+      // field; anonymous live endpoints only fill gaps or provide fallback
+      // values after an expired/missing web-card credential.
+      const previous = cards.get(mid) ?? {};
+      cards.set(mid, { ...stats, ...previous });
     }
     const cacheTimeToLiveMs = (config.cardCacheMinutes ?? 30) * 60_000;
     for (const mid of batch) {
@@ -537,11 +719,49 @@ export const getVtbLiveInfos = async (streamers: readonly VtbStreamer[], config:
     new Map(streamers.map((streamer) => [streamer.mid, streamer])).values(),
   );
   if (uniqueStreamers.length === 0) return results;
-  const cookie = await getBilibiliCredentialHeader();
+  if (isDocumentedLiveRoomInfoUrl(config.liveApiUrl)) {
+    const credential = await getBilibiliCredentialHeader().catch(() => undefined);
+    for (const streamer of uniqueStreamers) {
+      let roomId = normalizeRoomId(streamer.roomId);
+      if (!roomId) {
+        try {
+          roomId = (await getVtbLiveStats(streamer.mid, config)).roomId;
+        } catch {
+          roomId = undefined;
+        }
+      }
+      if (!roomId) {
+        results.set(streamer.mid, toVtbLiveInfo({ ...streamer, roomId: undefined }, undefined));
+        continue;
+      }
+      const url = createLiveRoomInfoUrl(config.liveApiUrl, roomId);
+      const response = z.looseObject({ code: integerSchema, data: z.unknown().optional() }).parse(
+        await fetchJson(
+          url,
+          config.webUrl,
+          credential ? { Cookie: credential } : undefined,
+          undefined,
+          config.proxyUrl,
+        ),
+      );
+      assertVtbApiSuccess(url, "live", response.code);
+      const live = liveInfoSchema.safeParse(response.data);
+      const result = toVtbLiveInfo(streamer, live.success ? live.data : undefined);
+      results.set(streamer.mid, result);
+      vtbLiveQueryCache = writeExpiringCache(
+        vtbLiveQueryCache,
+        getVtbLiveCacheKey(config, streamer.mid),
+        result,
+        VTB_LIVE_QUERY_CACHE_MS,
+        Date.now(),
+      );
+    }
+    return results;
+  }
   for (const batch of chunk(uniqueStreamers, 50)) {
     const url = config.liveApiUrl;
     const response = liveResponseSchema.parse(
-      await fetchJson(url, config.webUrl, cookie ? { Cookie: cookie } : undefined, {
+      await fetchJson(url, config.webUrl, undefined, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ uids: batch.map((streamer) => streamer.mid) }),
@@ -791,7 +1011,7 @@ const createVtbRepository = (prisma: PrismaClient) => {
         startedAt: live.liveStartedAt ?? new Date(),
         startFans: stats.fans ?? fans,
         startFanClub: stats.fanClub,
-        startGuards: stats.guards,
+        startGuards: stats.guards ?? (guardSnapshot?.captured ? guardSnapshot.ids.length : undefined),
         startGuardIds: guardSnapshot?.ids ?? [],
         startGuardNames: guardSnapshot?.names ?? [],
         startGuardSnapshotCaptured: guardSnapshot?.captured ?? false,
@@ -803,7 +1023,7 @@ const createVtbRepository = (prisma: PrismaClient) => {
         startedAt: live.liveStartedAt ?? new Date(),
         startFans: stats.fans ?? fans,
         startFanClub: stats.fanClub,
-        startGuards: stats.guards,
+        startGuards: stats.guards ?? (guardSnapshot?.captured ? guardSnapshot.ids.length : undefined),
         startGuardIds: guardSnapshot?.ids ?? [],
         startGuardNames: guardSnapshot?.names ?? [],
         startGuardSnapshotCaptured: guardSnapshot?.captured ?? false,
@@ -832,6 +1052,7 @@ const createVtbRepository = (prisma: PrismaClient) => {
     await prisma.vtbLiveSession.updateMany({
       where: { streamerMid: toMid(mid), endedAt: null, startGuardSnapshotCaptured: false },
       data: {
+        startGuards: guardSnapshot.captured ? guardSnapshot.ids.length : undefined,
         startGuardIds: guardSnapshot.ids,
         startGuardNames: guardSnapshot.names,
         startGuardSnapshotCaptured: guardSnapshot.captured,
@@ -852,7 +1073,7 @@ const createVtbRepository = (prisma: PrismaClient) => {
         endedAt,
         endFans: stats.fans ?? fans,
         endFanClub: stats.fanClub,
-        endGuards: stats.guards,
+        endGuards: stats.guards ?? (guardSnapshot?.captured ? guardSnapshot.ids.length : undefined),
         endGuardIds: guardSnapshot?.ids ?? [],
         endGuardNames: guardSnapshot?.names ?? [],
         endGuardSnapshotCaptured: guardSnapshot?.captured ?? false,
@@ -2023,6 +2244,9 @@ const getVtbLiveCacheKey = (config: VtbConfig, mid: string) =>
 const getVtbCardCacheKey = (config: VtbConfig, mid: string) =>
   `${config.cardApiUrl}\n${mid}`;
 
+const getVtbLiveStatsCacheKey = (mid: string, config: VtbConfig) =>
+  `${BILIBILI_LIVE_MASTER_INFO_API_URL}\n${config.liveWebUrl}\n${config.cardApiUrl}\n${config.proxyUrl}\n${mid}`;
+
 const getVtbDynamicQueryCacheMs = (config: VtbConfig) =>
   Math.max(5 * 60_000, Math.min(30 * 60_000, (config.dynamicPollMinutes ?? 15) * 60_000));
 
@@ -2035,8 +2259,6 @@ const createUserSearchApiUrl = (apiUrl: string, name: string) => {
     ["keyword", "name", "q", "query"].find((key) => url.searchParams.has(key));
   if (parameter) {
     url.searchParams.set(parameter, name);
-  } else if (isNameToUidApiUrl(apiUrl)) {
-    url.searchParams.set("names", name);
   } else if (url.search) {
     url.searchParams.set("keyword", name);
   } else {
@@ -2046,6 +2268,131 @@ const createUserSearchApiUrl = (apiUrl: string, name: string) => {
   }
   url.hash = "";
   return url.href;
+};
+
+const isBilibiliWbiSearchUrl = (url: string) => {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === "api.bilibili.com" &&
+      parsed.pathname === new URL(BILIBILI_WBI_SEARCH_API_URL).pathname;
+  } catch {
+    return false;
+  }
+};
+
+const isBilibiliWbiCardUrl = (url: string) => {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === "api.bilibili.com" &&
+      parsed.pathname === "/x/space/wbi/acc/info";
+  } catch {
+    return false;
+  }
+};
+
+const extractVtbSearchUsers = (value: unknown): VtbStreamer[] => {
+  const users = new Map<string, VtbStreamer>();
+  const visit = (candidate: unknown) => {
+    if (Array.isArray(candidate)) {
+      candidate.forEach(visit);
+      return;
+    }
+    if (!isRecord(candidate)) return;
+
+    const legacy = legacyUserSchema.safeParse(candidate);
+    if (legacy.success) {
+      users.set(String(legacy.data.mid), {
+        name: legacy.data.uname.trim(),
+        mid: String(legacy.data.mid),
+        roomId: normalizeRoomId(legacy.data.room_id),
+      });
+    }
+    const modern = z.looseObject({
+      name: z.string().min(1).optional(),
+      uname: z.string().min(1).optional(),
+      mid: z.union([z.string(), z.number()]).optional(),
+      uid: z.union([z.string(), z.number()]).optional(),
+      room_id: z.union([z.string(), z.number()]).optional(),
+    }).safeParse(candidate);
+    const modernMid = modern.success ? modern.data.mid ?? modern.data.uid : undefined;
+    if (modern.success && modernMid !== undefined && (modern.data.name || modern.data.uname)) {
+      users.set(String(modernMid), {
+        name: (modern.data.name ?? modern.data.uname!).trim(),
+        mid: String(modernMid),
+        roomId: normalizeRoomId(modern.data.room_id),
+      });
+    }
+    visit(candidate.result);
+    visit(candidate.data);
+    visit(candidate.uid_list);
+  };
+  visit(value);
+  return [...users.values()];
+};
+
+const signBilibiliUrl = async (url: string, config: VtbConfig) => {
+  const parsed = new URL(url);
+  const mixinKey = await getVtbWbiMixinKey(config);
+  const entries = [...parsed.searchParams.entries()]
+    .filter(([key]) => key !== "w_rid" && key !== "wts")
+    .map(([key, value]) => [key, value.replace(/[!'()*]/g, "")] as const);
+  const wts = Math.floor(Date.now() / 1_000).toString();
+  const signingQuery = [...entries, ["wts", wts] as const]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join("&");
+  const wRid = createHash("md5").update(`${signingQuery}${mixinKey}`).digest("hex");
+  const originalQuery = entries
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .concat(`w_rid=${wRid}`, `wts=${wts}`)
+    .join("&");
+  parsed.search = originalQuery;
+  parsed.hash = "";
+  return parsed.href;
+};
+
+const getVtbWbiMixinKey = async (config: VtbConfig) => {
+  if (vtbWbiKeys && vtbWbiKeys.expiresAt > Date.now()) {
+    return vtbWbiKeys.mixinKey;
+  }
+  vtbWbiKeysPromise ??= (async () => {
+    const credential = await getBilibiliCredentialHeader().catch(() => undefined);
+    const response = z.looseObject({ code: integerSchema, data: z.unknown().optional() }).parse(
+      await fetchJson(
+        BILIBILI_NAV_API_URL,
+        config.webUrl,
+        credential ? { Cookie: credential } : undefined,
+        undefined,
+        config.proxyUrl,
+      ),
+    );
+    if (response.code !== 0 && response.code !== -101) {
+      assertVtbApiSuccess(BILIBILI_NAV_API_URL, "nav", response.code);
+    }
+    const wbiImage = isRecord(response.data) && isRecord(response.data.wbi_img)
+      ? response.data.wbi_img
+      : undefined;
+    const imgUrl = firstText(wbiImage?.img_url);
+    const subUrl = firstText(wbiImage?.sub_url);
+    const imgKey = imgUrl?.split("/").pop()?.split(".")[0];
+    const subKey = subUrl?.split("/").pop()?.split(".")[0];
+    if (!imgKey || !subKey) throw new Error("Bilibili nav API returned no WBI keys");
+    const mixinKeyEncTab = [
+      46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
+      27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
+      37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4,
+      22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
+    ];
+    const rawKey = imgKey + subKey;
+    const mixinKey = mixinKeyEncTab.map((index) => rawKey[index]).join("").slice(0, 32);
+    vtbWbiKeys = { mixinKey, expiresAt: Date.now() + 60 * 60_000 };
+    return mixinKey;
+  })();
+  try {
+    return await vtbWbiKeysPromise;
+  } finally {
+    vtbWbiKeysPromise = undefined;
+  }
 };
 
 /** Return the complete guard list for a room, including the separately returned top three. */
@@ -2102,12 +2449,21 @@ export const getVtbGuardSnapshot = async (
   return { ids, names, captured: total === 0 || ids.length >= total };
 };
 
-const isNameToUidApiUrl = (apiUrl: string) => {
+const isDocumentedLiveRoomInfoUrl = (apiUrl: string) => {
   try {
-    return /\/name-to-uid\/?$/i.test(new URL(apiUrl).pathname);
+    const parsed = new URL(apiUrl);
+    return parsed.hostname === "api.live.bilibili.com" &&
+      parsed.pathname === "/room/v1/Room/get_info";
   } catch {
     return false;
   }
+};
+
+const createLiveRoomInfoUrl = (apiUrl: string, roomId: string) => {
+  const url = new URL(apiUrl);
+  url.searchParams.set("room_id", roomId);
+  url.hash = "";
+  return url.href;
 };
 
 const createCardApiUrl = (apiUrl: string, mids: readonly string[]) => {
@@ -2393,6 +2749,9 @@ const toVtbLiveInfo = (streamer: VtbStreamer, live: z.infer<typeof liveInfoSchem
     title: live?.title?.trim() || "还没有直播标题",
     roomId: live?.room_id === undefined ? normalizeRoomId(streamer.roomId) : normalizeRoomId(live.room_id),
     liveStartedAt: parseDate(live?.live_time),
+    // The status endpoint uses 1 for an active live stream. Status 2 is a
+    // non-live room state (for example replay/rotation) and must not trigger
+    // an opening notification.
     isLive: live?.live_status === 1,
     name: live?.uname?.trim() || streamer.name,
     coverUrl: pickImageUrl(live?.cover_from_user, live?.keyframe, live?.user_cover, live?.cover),

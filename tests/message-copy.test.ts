@@ -96,6 +96,21 @@ describe("user-facing copy", () => {
     expect(getVtbNewGuardNames(start, { ids: ["2"], names: ["甲"], captured: false })).toEqual([]);
   });
 
+  test("offline notifications include a positive captain-count change", () => {
+    const message = formatOfflineMessage(
+      "主播",
+      new Date("2030-08-01T20:00:00+08:00"),
+      new Date("2030-08-01T21:00:00+08:00"),
+      undefined,
+      undefined,
+      undefined,
+      "",
+      { guards: 4 },
+      { guards: 7 },
+    );
+    expect(message).toContain("+3");
+  });
+
   test("dynamic messages omit duplicated title or description text", () => {
     const shared = {
       author: "主播",

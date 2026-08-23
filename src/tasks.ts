@@ -37,6 +37,7 @@ import {
   getVtbCardInfos,
   getVtbDynamics,
   getVtbImageFile,
+  getVtbLiveStats,
   getVtbLiveInfos,
   prependVtbAtAllMention,
   resolveTrackedVtbStreamer,
@@ -622,9 +623,9 @@ const pollVtbSubscriptions = async (
       uniqueStreamerSubscriptions.map((subscription) => subscription.streamer.mid),
     ));
     const now = Date.now();
-    // Dynamic feeds and card metadata require the persisted Bilibili login.
-    // Treat a missing or temporarily unreadable credential as a quiet skip so
-    // the scheduled task does not repeatedly print card-authentication errors.
+    // Dynamic feeds still require the persisted Bilibili login. Follower and
+    // fan-club totals come from the documented live APIs; cached values remain
+    // available when an upstream response is partial or temporarily blocked.
     const hasBilibiliCredential = await getBilibiliCredentialHeader()
       .then((header) => Boolean(header))
       .catch(() => false);
@@ -642,15 +643,19 @@ const pollVtbSubscriptions = async (
       return liveNameChangedMids.has(mid) || !cached || cached.expiresAt <= now;
     });
     let refreshedCards = new Map<string, VtbCardInfo>();
-    if (hasBilibiliCredential && config.vtb.cardApiUrl && cardRefreshMids.length > 0) {
+    if (cardRefreshMids.length > 0) {
       try {
         refreshedCards = await getVtbCardInfos(cardRefreshMids, config.vtb);
         for (const mid of cardRefreshMids) {
+          const previous = pollState.cardInfos.get(mid);
+          const refreshed = refreshedCards.get(mid);
+          // Keep the last known value when a refresh is partial, so a
+          // temporary upstream response cannot erase the live-session baseline.
           pollState.cardInfos.set(mid, {
-            fans: refreshedCards.get(mid)?.fans,
-            fanClub: refreshedCards.get(mid)?.fanClub,
-            guards: refreshedCards.get(mid)?.guards,
-            avatarUrl: refreshedCards.get(mid)?.avatarUrl,
+            fans: refreshed?.fans ?? previous?.fans,
+            fanClub: refreshed?.fanClub ?? previous?.fanClub,
+            guards: refreshed?.guards ?? previous?.guards,
+            avatarUrl: refreshed?.avatarUrl ?? previous?.avatarUrl,
             expiresAt: now + cardCacheMs,
           });
         }
@@ -741,7 +746,10 @@ const pollVtbSubscriptions = async (
           });
         pushCache.set(streamer.mid, cachedPush);
         const { live, fans, fanClub, guards, avatarUrl } = await cachedPush;
-        const stats: VtbLiveStats = { fans, fanClub, guards };
+        let currentFans = fans;
+        let currentFanClub = fanClub;
+        let currentGuards = guards;
+        let stats: VtbLiveStats = { fans: currentFans, fanClub: currentFanClub, guards: currentGuards };
         const session = await repository.getLiveSession(streamer.mid);
         const activeSession = session?.endedAt ? undefined : session;
         if (live.isLive && activeSession && !activeSession.startGuardSnapshot?.captured) {
@@ -772,6 +780,17 @@ const pollVtbSubscriptions = async (
           !belongsToEndedSession &&
           (!activeSession ? isRecentLive : undeliveredGroupIds.length > 0)
         ) {
+          if (!activeSession) {
+            try {
+              const freshStats = await getVtbLiveStats(streamer.mid, config.vtb);
+              currentFans = freshStats.fans ?? currentFans;
+              currentFanClub = freshStats.fanClub ?? currentFanClub;
+              currentGuards = freshStats.guards ?? currentGuards;
+              stats = { fans: currentFans, fanClub: currentFanClub, guards: currentGuards };
+            } catch (error) {
+              logger.warn("plugin", "vtb live-start stats refresh failed; using cached values", normalizeError(error));
+            }
+          }
           const imageFile = await resolveVtbNotificationImage(
             live.coverUrl ?? avatarUrl,
             config,
@@ -780,7 +799,7 @@ const pollVtbSubscriptions = async (
             live.name,
           );
           const message = createVtbNotificationMessage(
-            formatLiveMessage(live, fans, config.vtb.liveWebUrl),
+            formatLiveMessage(live, currentFans, config.vtb.liveWebUrl),
             imageFile,
           );
           const deliveredGroups = await sendVtbGroupMessage(
@@ -807,9 +826,13 @@ const pollVtbSubscriptions = async (
               logger.warn("plugin", "vtb start guard snapshot failed; live-end thanks will be omitted", normalizeError(error));
               startGuardSnapshot = { ids: [], names: [], captured: false };
             }
+            if (startGuardSnapshot.captured) {
+              currentGuards = startGuardSnapshot.ids.length;
+              stats = { fans: currentFans, fanClub: currentFanClub, guards: currentGuards };
+            }
             // Store an empty list as a pending delivery as well, so a failed
             // first send is retried even after the freshness window closes.
-            await repository.startLiveSession(streamer, live, fans, deliveredGroupIds, stats, startGuardSnapshot);
+            await repository.startLiveSession(streamer, live, currentFans, deliveredGroupIds, stats, startGuardSnapshot);
           }
           if (deliveredGroups.length > 0) {
             logger.info("plugin", "vtb live started notification sent", { streamer: live.name, groupIds: deliveredGroups });
@@ -828,18 +851,35 @@ const pollVtbSubscriptions = async (
           });
         } else if (!live.isLive && session) {
           const endedAt = session.endedAt ?? new Date(now);
-          const endFans = session.endFans ?? fans;
+          let endFans = session.endFans ?? currentFans;
+          let endFanClub = session.endFanClub ?? currentFanClub;
+          let endGuards = session.endGuards ?? currentGuards;
           let endGuardSnapshot = session.endGuardSnapshot;
           if (!session.endedAt) {
+            try {
+              const freshStats = await getVtbLiveStats(streamer.mid, config.vtb);
+              currentFans = freshStats.fans ?? currentFans;
+              currentFanClub = freshStats.fanClub ?? currentFanClub;
+              currentGuards = freshStats.guards ?? currentGuards;
+              stats = { fans: currentFans, fanClub: currentFanClub, guards: currentGuards };
+              endFans = currentFans;
+              endFanClub = currentFanClub;
+              endGuards = currentGuards;
+            } catch (error) {
+              logger.warn("plugin", "vtb live-end stats refresh failed; using cached values", normalizeError(error));
+            }
             try {
               const startGuardSnapshot = session.startGuardSnapshot;
               const roomId = live.roomId ?? session.roomId;
               endGuardSnapshot = startGuardSnapshot?.captured && roomId
                 ? await getVtbGuardSnapshot(roomId, streamer.mid, config.vtb, {
                     knownIds: new Set(startGuardSnapshot.ids),
-                    stopAfterNew: 6,
                   })
                 : { ids: [], names: [], captured: false };
+              if (endGuardSnapshot.captured) {
+                endGuards = endGuardSnapshot.ids.length;
+                stats = { fans: currentFans, fanClub: currentFanClub, guards: endGuards };
+              }
             } catch (error) {
               logger.warn("plugin", "vtb end guard snapshot failed; live-end thanks will be omitted", normalizeError(error));
               endGuardSnapshot = { ids: [], names: [], captured: false };
@@ -865,7 +905,7 @@ const pollVtbSubscriptions = async (
                 session.roomId,
                 config.vtb.liveWebUrl,
                 { fanClub: session.startFanClub, guards: session.startGuards },
-                { fanClub: session.endFanClub ?? fanClub, guards: session.endGuards ?? guards },
+                { fanClub: endFanClub, guards: endGuards },
                 getVtbNewGuardNames(session.startGuardSnapshot, endGuardSnapshot),
               ),
             );

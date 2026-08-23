@@ -5,6 +5,7 @@ import {
   findVtbNameChanges,
   getVtbCardInfo,
   getVtbImageFile,
+  getVtbLiveStats,
   getVtbLiveInfo,
   getVtbLiveInfos,
   getVtbGuardSnapshot,
@@ -112,6 +113,25 @@ describe("Bilibili live lookup", () => {
       mid: "987654",
     });
     expect(new URL(urls[0]).searchParams.get("names")).toBe("官方查询主播");
+  });
+
+  test("does not attach login cookies to documented anonymous live APIs", async () => {
+    const requests: Array<{ url: string; cookie: string | null }> = [];
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      requests.push({ url: String(input), cookie: new Headers(init?.headers).get("cookie") });
+      if (String(input).includes("live-status.example.test")) {
+        return new Response(JSON.stringify({ code: 0, data: { "123": { uid: 123, live_status: 0 } } }));
+      }
+      if (String(input).includes("live_user/v1/Master/info")) {
+        return new Response(JSON.stringify({ code: 0, data: { follower_num: 10, info: { uname: "示例主播" } } }));
+      }
+      return new Response(JSON.stringify({ code: 0, data: [] }));
+    }) as unknown as typeof fetch;
+    const anonymousConfig = { ...config, liveApiUrl: "https://live-status.example.test/live" };
+    await getVtbLiveInfos([{ name: "示例主播", mid: "123" }], anonymousConfig);
+    await getVtbCardInfo("123", anonymousConfig);
+    expect(requests.filter((request) => request.url.includes("live-status.example.test")).every((request) => request.cookie === null)).toBe(true);
+    expect(requests.filter((request) => request.url.includes("api.live.bilibili.com")).every((request) => request.cookie === null)).toBe(true);
   });
 
   test("does not subscribe to an approximate search result", async () => {
@@ -389,6 +409,21 @@ describe("Bilibili live lookup", () => {
     });
   });
 
+  test("does not treat live status 2 as an active stream", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      code: 0,
+      data: [{ uid: "123", live_status: 2, live_time: 0, online: 0 }],
+    }))) as unknown as typeof fetch;
+
+    await expect(getVtbLiveInfo({ name: "绀轰緥涓绘挱", mid: "123" }, {
+      ...config,
+      liveApiUrl: "https://status-two.example.test/live",
+    })).resolves.toMatchObject({
+      isLive: false,
+      liveStartedAt: undefined,
+    });
+  });
+
   test("parses guard top-three and paged list entries", async () => {
     const urls: string[] = [];
     globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
@@ -436,6 +471,87 @@ describe("Bilibili live lookup", () => {
       avatarUrl: "https://i1.hdslb.com/bfs/face/avatar.webp",
     });
     expect(new URL(urls[0]).searchParams.get("mid")).toBe("123");
+  });
+
+  test("falls back to documented live endpoints for followers and fan-club totals", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes("documented-card.example.test")) {
+        return new Response(JSON.stringify({ code: -101, data: null }));
+      }
+      if (url.includes("live_user/v1/Master/info")) {
+        return new Response(JSON.stringify({
+          code: 0,
+          data: { uid: "99123", follower_num: 1234, room_id: 456, info: { uname: "鏂囨。涓绘挱", face: "//i0.hdslb.com/avatar.jpg" } },
+        }));
+       }
+       if (url.includes("getFansMembersRank")) {
+         return new Response(JSON.stringify({ code: 0, data: { num: 89, list: [] } }));
+       }
+       return new Response(JSON.stringify({ code: 0, data: [] }));
+     }) as unknown as typeof fetch;
+     const documentedConfig = {
+      ...config,
+      cardApiUrl: "https://documented-card.example.test/cards?mid=",
+    };
+
+    await expect(getVtbCardInfo("99123", documentedConfig)).resolves.toMatchObject({
+      fans: 1234,
+      name: "鏂囨。涓绘挱",
+      avatarUrl: "https://i0.hdslb.com/avatar.jpg",
+      roomId: "456",
+      fanClub: 89,
+    });
+    expect(urls.some((url) => url.includes("live_user/v1/Master/info"))).toBe(true);
+    expect(urls.some((url) => url.includes("getFansMembersRank"))).toBe(true);
+  });
+
+  test("parses the documented master profile response", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      code: 0,
+      data: { follower_num: 321, room_id: 654, info: { uname: "主播", face: "//i0.hdslb.com/avatar.jpg" } },
+    }))) as unknown as typeof fetch;
+
+    await expect(getVtbLiveStats("partial-991", {
+      ...config,
+      liveWebUrl: "https://partial-stats.example.test",
+    })).resolves.toEqual({ fans: 321, name: "主播", avatarUrl: "https://i0.hdslb.com/avatar.jpg", roomId: "654" });
+  });
+
+  test("keeps fan-club and guard fields when the master profile includes them", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      code: 0,
+      data: {
+        follower_num: 321,
+        fan_club_count: 23,
+        guard_num: 4,
+      },
+    }))) as unknown as typeof fetch;
+
+    await expect(getVtbLiveStats("master-fields-991", {
+      ...config,
+      liveWebUrl: "https://master-fields.example.test",
+    })).resolves.toMatchObject({ fans: 321, fanClub: 23, guards: 4 });
+  });
+
+  test("deduplicates concurrent live-stats requests and reuses the short cache", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ code: 0, data: { follower_num: 12, room_id: 3 } }));
+    }) as unknown as typeof fetch;
+    const statsConfig = { ...config, liveWebUrl: "https://single-flight-stats.example.test" };
+
+    const [first, second] = await Promise.all([
+      getVtbLiveStats("single-flight-992", statsConfig),
+      getVtbLiveStats("single-flight-992", statsConfig),
+    ]);
+    expect(first).toEqual({ fans: 12, roomId: "3" });
+    expect(second).toEqual(first);
+    await expect(getVtbLiveStats("single-flight-992", statsConfig)).resolves.toEqual(first);
+    expect(calls).toBe(2);
   });
 
   test("downloads notification images once and sends them as base64", async () => {
