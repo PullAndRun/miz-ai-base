@@ -480,8 +480,8 @@ export const loadConfig = async (): Promise<MizConfig> => {
   }
 
   const runtimeMode = getRuntimeMode();
-  const [configSource, ff14Config, vtbConfig, localConfig, dockerConfig] = await Promise.all([
-    configFile.text(),
+  const appConfig = Bun.TOML.parse(await configFile.text());
+  const [ff14Config, vtbConfig, localConfig, dockerConfig] = await Promise.all([
     loadOptionalConfig(FF14_CONFIG_PATH),
     loadOptionalConfig(VTB_CONFIG_PATH),
     loadOptionalConfig(LOCAL_CONFIG_PATH),
@@ -490,7 +490,7 @@ export const loadConfig = async (): Promise<MizConfig> => {
   const normalConfig = mergeConfig(
     mergeConfig(
       mergeConfig(
-        Bun.TOML.parse(configSource),
+        appConfig,
         ff14Config,
       ),
       vtbConfig,
@@ -500,7 +500,7 @@ export const loadConfig = async (): Promise<MizConfig> => {
   const source = runtimeMode === "docker"
     ? mergeConfig(normalConfig, dockerConfig)
     : normalConfig;
-  return appConfigSchema.parse(source).miz;
+  return appConfigSchema.parse(restoreAppApiUrls(source, appConfig)).miz;
 };
 
 export const updateVtbSubscriptionNames = (renames: ReadonlyMap<string, string>) => {
@@ -1156,6 +1156,54 @@ const writeVtbSubscriptionConfig = async (source: string) => {
     await rm(temporaryPath, { force: true }).catch(() => undefined);
     throw error;
   }
+};
+
+// API endpoints are application configuration, not runtime wiring. Keep the
+// values explicitly selected in app.toml even when local or Docker config
+// supplies environment-specific gateway, database, or proxy settings.
+const APP_API_URL_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  network: ["ffmpegReleaseApiUrl", "ytDlpReleaseApiUrl"],
+  ff14: ["itemSearchApiUrl", "marketApiUrl"],
+  wallpaper: ["apiUrl", "imageBaseUrl"],
+  news: ["apiUrl"],
+  vtb: [
+    "userApiUrl",
+    "cardApiUrl",
+    "liveApiUrl",
+    "navApiUrl",
+    "wbiSearchApiUrl",
+    "dynamicApiUrl",
+    "guardApiUrl",
+    "fanClubApiUrl",
+    "liveMasterApiUrl",
+    "qrGenerateApiUrl",
+    "qrPollApiUrl",
+    "webUrl",
+    "liveWebUrl",
+  ],
+};
+
+const restoreAppApiUrls = (source: unknown, appConfig: unknown): Record<string, unknown> => {
+  const merged = asRecord(source);
+  const app = asRecord(appConfig);
+  const mergedMiz = asRecord(merged.miz);
+  const appMiz = asRecord(app.miz);
+
+  for (const [sectionName, fields] of Object.entries(APP_API_URL_FIELDS)) {
+    const appSection = appMiz[sectionName];
+    const mergedSection = mergedMiz[sectionName];
+    if (!isRecord(appSection) || !isRecord(mergedSection)) {
+      continue;
+    }
+    for (const field of fields) {
+      const value = appSection[field];
+      if (typeof value === "string" && value.trim() !== "") {
+        mergedSection[field] = value;
+      }
+    }
+  }
+
+  return merged;
 };
 
 const mergeConfig = (base: unknown, override: unknown): Record<string, unknown> => {
