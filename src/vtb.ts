@@ -41,7 +41,6 @@ const VTB_FAN_CLUB_REQUEST_INTERVAL_MS = 1_000;
 const VTB_STATS_CACHE_MS = 60_000;
 const VTB_LIVE_QUERY_CACHE_MS = 60_000;
 const VTB_IMAGE_CACHE_MS = 10 * 60_000;
-const MAX_VTB_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_VTB_RESPONSE_BYTES = 5 * 1024 * 1024;
 const MAX_VTB_IMAGE_CACHE_ENTRIES = 16;
 const MAX_VTB_QUERY_CACHE_ENTRIES = 1_000;
@@ -150,6 +149,8 @@ export type VtbDynamic = {
   publishedAt: Date;
   link: string;
   author: string;
+  /** Images attached to the dynamic itself, such as a draw post. */
+  imageUrls?: string[];
 };
 export type VtbDynamicFeed = { avatarUrl: string; items: VtbDynamic[] };
 export type LiveSession = {
@@ -879,7 +880,10 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
         await response.body?.cancel().catch(() => undefined);
         throw new Error(`VTB image response has unsupported content type: ${contentType}`);
       }
-      const bytes = await readResponseBytes(response, MAX_VTB_IMAGE_BYTES);
+      // Dynamic images can be full-resolution originals. The shared reader
+      // still validates the stream and rejects malformed chunks, but VTB does
+      // not impose an artificial per-image size cap here.
+      const bytes = await readResponseBytes(response, Number.MAX_SAFE_INTEGER);
       if (bytes.length === 0) {
         throw new Error("VTB image response is empty");
       }
@@ -1905,9 +1909,11 @@ const selectDynamicDisplayText = (title: string, description: string) => {
 
 const normalizeDynamicComparisonText = (value: string) => value.replace(/\s+/g, " ").trim();
 
-export const createVtbNotificationMessage = (text: string, imageFile?: string) => [
+export const createVtbNotificationMessage = (text: string, imageFile?: string | readonly string[]) => [
   { type: "text", data: { text } },
-  ...(imageFile ? [{ type: "image", data: { file: imageFile } }] : []),
+  ...(Array.isArray(imageFile)
+    ? imageFile.filter(Boolean).map((file) => ({ type: "image", data: { file } }))
+    : imageFile ? [{ type: "image", data: { file: imageFile } }] : []),
 ];
 
 export const prependVtbAtAllMention = (message: unknown) => Array.isArray(message)
@@ -2658,7 +2664,7 @@ const parseBilibiliDynamicItem = (
   }
 
   const description = truncateDynamicText(cleanDynamicText([
-    getTextAt(dynamic?.desc, "text"),
+    getDynamicDescriptionText(dynamic?.desc),
     getTextAt(major?.archive, "desc"),
     getTextAt(major?.article, "desc"),
     getTextAt(major?.article, "summary"),
@@ -2666,7 +2672,7 @@ const parseBilibiliDynamicItem = (
     getTextAt(major?.common, "desc"),
     getTextAt(major?.live, "desc_first"),
     getTextAt(major?.live, "desc_second"),
-  ].filter(Boolean).join("\n")));
+  ].filter(Boolean).join(" ")));
   const formattedLink = formatDynamicUrl(link, webUrl);
   const authorName = firstText(author?.name) || fallbackAuthor;
   const title = firstText(
@@ -2676,8 +2682,9 @@ const parseBilibiliDynamicItem = (
     getTextAt(major?.common, "title"),
     getTextAt(major?.live, "title"),
     getTextAt(major?.opus, "summary", "text"),
-    getTextAt(dynamic?.desc, "text"),
+    getDynamicDescriptionText(dynamic?.desc),
   ) || "B站动态";
+  const imageUrls = extractDynamicImageUrls(major?.draw, major?.opus);
 
   return {
     dynamic: {
@@ -2687,6 +2694,7 @@ const parseBilibiliDynamicItem = (
       publishedAt,
       link,
       author: authorName,
+      ...(imageUrls.length > 0 ? { imageUrls } : {}),
     },
     avatarUrl: cleanImageUrl(firstText(author?.face)),
   };
@@ -2713,6 +2721,37 @@ const getTextAt = (value: unknown, ...path: string[]) => {
     current = current[key];
   }
   return firstText(current);
+};
+
+const getDynamicDescriptionText = (value: unknown) => {
+  const text = getTextAt(value, "text");
+  if (text) {
+    return text;
+  }
+  if (!isRecord(value) || !Array.isArray(value.rich_text_nodes)) {
+    return undefined;
+  }
+  return value.rich_text_nodes
+    .map((node) => isRecord(node) ? firstText(node.text) : undefined)
+    .filter((node): node is string => node !== undefined)
+    .join("");
+};
+
+const extractDynamicImageUrls = (...values: unknown[]) => {
+  const urls: string[] = [];
+  for (const value of values) {
+    if (!isRecord(value)) {
+      continue;
+    }
+    const items = Array.isArray(value.items) ? value.items : Array.isArray(value.pics) ? value.pics : [];
+    for (const item of items) {
+      const url = cleanImageUrl(isRecord(item) ? firstText(item.src, item.url, item.image_url) : undefined);
+      if (url && !urls.includes(url)) {
+        urls.push(url);
+      }
+    }
+  }
+  return urls;
 };
 
 const normalizeBilibiliDynamicLink = (value: string | undefined, id: string | undefined) => {
@@ -2832,12 +2871,17 @@ const parseDate = (value: string | number | undefined) => {
 
 const cleanDynamicText = (value: string) =>
   value
-    .replace(/<[^>]*>/g, " ")
+    .replace(/\r\n?/g, "\n")
+    .replace(/<br\s*\/?\s*>/gi, "\n")
+    .replace(/<\/(?:p|div|li|h[1-6])\s*>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
-    .replace(/\s+/g, " ")
+    .replace(/[ \t\f\v]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 
 const truncateDynamicText = (value: string) =>

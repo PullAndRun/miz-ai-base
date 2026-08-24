@@ -963,16 +963,25 @@ const pollVtbSubscriptions = async (
             if (undeliveredDynamicGroupIds.length === 0) {
               continue;
             }
-            const imageFile = await resolveVtbNotificationImage(
-              feed.avatarUrl,
+            const dynamicImageFiles = await resolveVtbNotificationImages(
+              latestDynamic.imageUrls ?? [],
               config,
               logger,
               "dynamic",
               streamer.name,
             );
+            const imageFiles = dynamicImageFiles.length > 0
+              ? dynamicImageFiles
+              : [await resolveVtbNotificationImage(
+                  feed.avatarUrl,
+                  config,
+                  logger,
+                  "dynamic",
+                  streamer.name,
+                )].filter((file): file is string => file !== undefined);
             const message = createVtbNotificationMessage(
               formatDynamicMessage(latestDynamic, config.vtb.webUrl),
-              imageFile,
+              imageFiles,
             );
             const deliveredGroups = await sendVtbGroupMessage(
               undeliveredDynamicGroupIds,
@@ -1120,6 +1129,24 @@ const resolveVtbNotificationImage = async (
     });
     return undefined;
   }
+};
+
+const resolveVtbNotificationImages = async (
+  imageUrls: readonly string[],
+  config: MizConfig,
+  logger: Logger,
+  kind: "live start" | "dynamic",
+  streamer: string,
+) => {
+  const uniqueUrls = [...new Set(imageUrls)];
+  const files = await Promise.all(uniqueUrls.map((imageUrl) => resolveVtbNotificationImage(
+    imageUrl,
+    config,
+    logger,
+    kind,
+    streamer,
+  )));
+  return files.filter((file): file is string => file !== undefined);
 };
 
 const getVtbPollingIntervalMs = (cronExpression: string) => {

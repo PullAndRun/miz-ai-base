@@ -49,6 +49,32 @@ describe("Bilibili dynamic response parsing", () => {
       { id_str: "100", modules: { module_dynamic: {} } },
     ], "备用主播", "https://www.bilibili.com").items).toEqual([]);
   });
+
+  test("keeps authored line breaks and extracts draw images", () => {
+    const feed = parseBilibiliDynamicFeed([
+      {
+        id_str: "draw-100",
+        modules: {
+          module_author: { name: "主播", pub_ts: 1_753_000_000 },
+          module_dynamic: {
+            desc: { text: "第一行\n\n第二行" },
+            major: { draw: { items: [
+              { src: "//i0.hdslb.com/first.jpg" },
+              { src: "https://i0.hdslb.com/second.jpg" },
+            ] } },
+          },
+        },
+      },
+    ], "主播", "https://www.bilibili.com");
+
+    expect(feed.items[0]).toMatchObject({
+      description: "第一行\n\n第二行",
+      imageUrls: [
+        "https://i0.hdslb.com/first.jpg",
+        "https://i0.hdslb.com/second.jpg",
+      ],
+    });
+  });
   test("drops automatic live-start recommendation dynamics", () => {
     const feed = parseBilibiliDynamicFeed([
       {

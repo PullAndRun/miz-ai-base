@@ -496,15 +496,26 @@ export const createVtbPlugin = ({
         await reply("这位主播最近还没有可以展示的新动态。");
         return;
       }
-      let imageFile: string | undefined;
-      try {
-        imageFile = await getVtbImageFile(feed.avatarUrl, config.vtb);
-      } catch (error) {
-        logger.warn("plugin", "vtb query image unavailable; sending text only", { streamerName, error });
+      const dynamicImageFiles = await Promise.all((latestDynamic.imageUrls ?? []).map(async (imageUrl) => {
+        try {
+          return await getVtbImageFile(imageUrl, config.vtb);
+        } catch (error) {
+          logger.warn("plugin", "vtb dynamic image unavailable", { streamerName, imageUrl, error });
+          return undefined;
+        }
+      }));
+      let imageFiles = dynamicImageFiles.filter((file): file is string => file !== undefined);
+      if (imageFiles.length === 0) {
+        try {
+          const avatarFile = await getVtbImageFile(feed.avatarUrl, config.vtb);
+          imageFiles = avatarFile ? [avatarFile] : [];
+        } catch (error) {
+          logger.warn("plugin", "vtb query image unavailable; sending text only", { streamerName, error });
+        }
       }
       await reply(createVtbNotificationMessage(
         formatDynamicMessage(latestDynamic, config.vtb.webUrl),
-        imageFile,
+        imageFiles,
       ));
     } catch (error) {
       logger.error("plugin", "vtb command failed", error);

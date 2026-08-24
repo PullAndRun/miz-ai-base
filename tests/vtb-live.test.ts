@@ -592,5 +592,21 @@ describe("Bilibili live lookup", () => {
     const mentioned = prependVtbAtAllMention(message) as Array<{ type: string; data: Record<string, unknown> }>;
     expect(mentioned[0]).toEqual({ type: "at", data: { qq: "all" } });
     expect(mentioned.some((segment) => segment.type === "image" && segment.data.file === first)).toBeTrue();
+
+    const withMultipleImages = createVtbNotificationMessage("动态文案", [first!, "base64://BAUG"]);
+    expect(withMultipleImages).toEqual([
+      { type: "text", data: { text: "动态文案" } },
+      { type: "image", data: { file: first } },
+      { type: "image", data: { file: "base64://BAUG" } },
+    ]);
+  });
+
+  test("accepts a notification image larger than the old 5MB limit", async () => {
+    const bytes = new Uint8Array(5 * 1024 * 1024 + 1);
+    bytes[0] = 1;
+    globalThis.fetch = (async () => new Response(bytes, { headers: { "content-type": "image/jpeg" } })) as unknown as typeof fetch;
+
+    const file = await getVtbImageFile("https://notification-image.example.test/large.jpg", config);
+    expect(file?.startsWith("base64://")).toBeTrue();
   });
 });
