@@ -95,10 +95,13 @@ describe("user-facing copy", () => {
     const start = { ids: ["1"], names: ["续舰"], captured: true };
     const end = { ids: ["1", "2", "3"], names: ["续舰", "甲", "乙"], captured: true };
     expect(getVtbNewGuardNames(start, end)).toEqual(["甲", "乙"]);
-    expect(formatOfflineMessage(
+    const offline = formatOfflineMessage(
       "主播", new Date("2030-08-01T20:00:00+08:00"), new Date("2030-08-01T21:00:00+08:00"),
       undefined, undefined, undefined, "", {}, {}, ["甲", "乙"],
-    )).toContain("感谢本场上舰的观众：\n- 甲\n- 乙");
+    );
+    expect(offline).toContain("感谢本场上舰的观众：\n- 甲\n- 乙");
+    expect(offline.indexOf("感谢本场上舰的观众：")).toBeGreaterThan(offline.indexOf("⏰ 08月01日 21:00 结束"));
+    expect(offline.indexOf("感谢本场上舰的观众：")).toBeLessThan(offline.indexOf("辛苦啦，也谢谢大家一路陪到下播。"));
     expect(getVtbNewGuardNames(start, {
       ids: ["1", "2", "3", "4", "5", "6", "7"],
       names: ["续舰", "甲", "乙", "丙", "丁", "戊", "己"], captured: true,

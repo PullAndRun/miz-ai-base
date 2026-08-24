@@ -1830,7 +1830,6 @@ export const formatOfflineMessage = (
     ? []
     : ["感谢本场上舰的观众：", ...guardNames.map((guardName) => `- ${guardName}`), ""];
   return [
-    ...guardThanks,
     `🌙 ${name} 今天收工啦`,
     "",
     `这次和大家一起度过了 ${formatLiveDuration(durationMinutes)}`,
@@ -1839,6 +1838,7 @@ export const formatOfflineMessage = (
     ...(fanClubChange === undefined ? [] : [`💖 本场粉丝团 +${fanClubChange.toLocaleString("zh-CN")}`]),
     ...(guardChange === undefined ? [] : [`⚓ 本场大航海 +${guardChange.toLocaleString("zh-CN")}`]),
     "",
+    ...guardThanks,
     "辛苦啦，也谢谢大家一路陪到下播。充好电，我们下次见！",
   ].join("\n");
 };
