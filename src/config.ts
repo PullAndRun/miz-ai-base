@@ -171,10 +171,12 @@ const rawMizConfigSchema = z.object({
         .array(
           z.object({
             groupId: targetIdSchema,
-            streamers: z.array(nonEmptyStringSchema).min(1),
+            streamers: z.array(nonEmptyStringSchema).default([]),
             atAllStreamers: z.array(nonEmptyStringSchema).optional(),
             dynamicStreamers: z.array(nonEmptyStringSchema).optional(),
             dynamicAtAllStreamers: z.array(nonEmptyStringSchema).optional(),
+          }).refine((subscription) => subscription.streamers.length > 0 || (subscription.dynamicStreamers?.length ?? 0) > 0, {
+            message: "VTB subscription must include a live or dynamic streamer",
           }),
         )
         .optional(),
@@ -313,10 +315,10 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
         : { atAllStreamers: subscription.atAllStreamers.filter((name) => subscription.streamers.includes(name)) }),
       ...(subscription.dynamicStreamers === undefined
         ? {}
-        : { dynamicStreamers: subscription.dynamicStreamers.filter((name) => subscription.streamers.includes(name)) }),
+        : { dynamicStreamers: subscription.dynamicStreamers }),
       ...(subscription.dynamicAtAllStreamers === undefined
         ? {}
-        : { dynamicAtAllStreamers: subscription.dynamicAtAllStreamers.filter((name) => subscription.streamers.includes(name)) }),
+        : { dynamicAtAllStreamers: subscription.dynamicAtAllStreamers.filter((name) => subscription.dynamicStreamers?.includes(name) === true) }),
     })),
   },
 }));
@@ -507,41 +509,66 @@ export const updateVtbSubscriptionNames = (renames: ReadonlyMap<string, string>)
   return queueVtbSubscriptionUpdate(() => writeVtbSubscriptionNames(renames));
 };
 
-export const addVtbSubscription = (groupId: string | number, streamerName: string) =>
+export type VtbSubscriptionType = "live" | "dynamic";
+
+export const addVtbSubscription = (
+  groupId: string | number,
+  streamerName: string,
+  type?: VtbSubscriptionType,
+) =>
   queueVtbSubscriptionUpdate(async () => {
     const source = await readVtbSubscriptionConfig();
     const subscription = findVtbSubscriptionBlock(source, groupId);
+    const effectiveType = type ?? "live";
+    const key = effectiveType === "live" ? "streamers" : "dynamicStreamers";
     if (!subscription) {
       const separator = getSubscriptionBlockSeparator(source);
+      const field = effectiveType === "live" ? "streamers" : "dynamicStreamers";
       await writeVtbSubscriptionConfig(
-        `${source}${separator}[[miz.vtb.subscriptions]]\ngroupId = ${JSON.stringify(groupId)}\nstreamers = ${JSON.stringify([streamerName])}\n`,
+        `${source}${separator}[[miz.vtb.subscriptions]]\ngroupId = ${JSON.stringify(groupId)}\n${field} = ${JSON.stringify([streamerName])}\n`,
       );
-      return { changed: true, streamers: [streamerName] };
+      return { changed: true, streamers: effectiveType === "live" ? [streamerName] : [], dynamicStreamers: effectiveType === "dynamic" ? [streamerName] : [] };
     }
 
-    if (subscription.streamers.includes(streamerName)) {
-      return { changed: false, streamers: subscription.streamers };
+    const current = subscription[key] ?? [];
+    if (current.includes(streamerName)) {
+      return { changed: false, streamers: subscription.streamers, dynamicStreamers: subscription.dynamicStreamers ?? [] };
     }
 
-    const streamers = [...subscription.streamers, streamerName];
-    await writeVtbSubscriptionConfig(replaceSubscriptionBlock(source, subscription, streamers));
-    return { changed: true, streamers };
+    const streamers = effectiveType === "live" ? [...subscription.streamers, streamerName] : subscription.streamers;
+    const dynamicStreamers = effectiveType === "dynamic" ? [...current, streamerName] : subscription.dynamicStreamers;
+    await writeVtbSubscriptionConfig(replaceSubscriptionBlock(source, subscription, streamers, dynamicStreamers));
+    return { changed: true, streamers, dynamicStreamers: dynamicStreamers ?? [] };
   });
 
-export const removeVtbSubscription = (groupId: string | number, streamerName: string) =>
+export const removeVtbSubscription = (
+  groupId: string | number,
+  streamerName: string,
+  type?: VtbSubscriptionType,
+) =>
   queueVtbSubscriptionUpdate(async () => {
     const source = await readVtbSubscriptionConfig();
     const subscription = findVtbSubscriptionBlock(source, groupId);
-    if (!subscription || !subscription.streamers.includes(streamerName)) {
-      return { changed: false, streamers: subscription?.streamers ?? [] };
+    const effectiveType = type ?? "live";
+    const key = effectiveType === "live" ? "streamers" : "dynamicStreamers";
+    const subscribed = subscription && (type === undefined
+      ? subscription.streamers.includes(streamerName) || subscription.dynamicStreamers?.includes(streamerName) === true
+      : (subscription[key] ?? []).includes(streamerName));
+    if (!subscription || !subscribed) {
+      return { changed: false, streamers: subscription?.streamers ?? [], dynamicStreamers: subscription?.dynamicStreamers ?? [] };
     }
 
-    const streamers = subscription.streamers.filter((name) => name !== streamerName);
-    const updated = streamers.length > 0
-      ? replaceSubscriptionBlock(source, subscription, streamers)
+    const streamers = effectiveType === "live"
+      ? subscription.streamers.filter((name) => name !== streamerName)
+      : subscription.streamers;
+    const dynamicStreamers = type === undefined || effectiveType === "dynamic"
+      ? (subscription.dynamicStreamers ?? []).filter((name) => name !== streamerName)
+      : subscription.dynamicStreamers;
+    const updated = streamers.length > 0 || (dynamicStreamers?.length ?? 0) > 0
+      ? replaceSubscriptionBlock(source, subscription, streamers, dynamicStreamers)
       : `${source.slice(0, subscription.start)}${source.slice(subscription.end)}`;
     await writeVtbSubscriptionConfig(updated);
-    return { changed: true, streamers };
+    return { changed: true, streamers, dynamicStreamers: dynamicStreamers ?? [] };
   });
 
 export const setVtbAtAllStreamer = (
@@ -636,7 +663,7 @@ export const setVtbDynamicAtAllStreamerInSource = (
   enabled: boolean,
 ) => {
   const subscription = findVtbSubscriptionBlock(source, groupId);
-  if (!subscription || !subscription.streamers.includes(streamerName)) {
+  if (!subscription || !(subscription.dynamicStreamers ?? subscription.streamers).includes(streamerName)) {
     return {
       changed: false,
       subscribed: false,
@@ -865,9 +892,10 @@ const findVtbSubscriptionBlock = (source: string, groupId: string | number): Vtb
     const parsedGroupId = parseTomlAssignment(text, "groupId");
     if (String(parsedGroupId) === String(groupId)) {
       const streamers = parseTomlAssignment(text, "streamers");
-      if (!Array.isArray(streamers) || !streamers.every((name) => typeof name === "string")) {
+      if (streamers !== undefined && (!Array.isArray(streamers) || !streamers.every((name) => typeof name === "string"))) {
         throw new Error(`Invalid streamers for VTB subscription group ${groupId}`);
       }
+      const normalizedStreamers = (streamers ?? []) as string[];
       const rawAtAllStreamers = parseTomlAssignment(text, "atAllStreamers");
       if (
         rawAtAllStreamers !== undefined &&
@@ -888,7 +916,7 @@ const findVtbSubscriptionBlock = (source: string, groupId: string | number): Vtb
         throw new Error(`Invalid dynamicAtAllStreamers for VTB subscription group ${groupId}`);
       }
       const dynamicAtAllStreamers = rawDynamicAtAllStreamers as string[] | undefined;
-      return { start, end, text, streamers, atAllStreamers, dynamicStreamers, dynamicAtAllStreamers };
+      return { start, end, text, streamers: normalizedStreamers, atAllStreamers, dynamicStreamers, dynamicAtAllStreamers };
     }
     start = nextStart;
   }
@@ -1061,18 +1089,18 @@ const replaceSubscriptionBlock = (
   source: string,
   subscription: VtbSubscriptionBlock,
   streamers: readonly string[],
+  dynamicStreamers: readonly string[] | undefined = subscription.dynamicStreamers,
 ) => {
-  let updatedBlock = replaceTomlArrayAssignment(subscription.text, "streamers", streamers);
+  let updatedBlock = replaceOrInsertTomlArrayAssignment(subscription.text, "streamers", streamers, "groupId");
   if (subscription.atAllStreamers) {
     const atAllStreamers = subscription.atAllStreamers.filter((name) => streamers.includes(name));
     updatedBlock = replaceTomlArrayAssignment(updatedBlock, "atAllStreamers", atAllStreamers);
   }
-  if (subscription.dynamicStreamers) {
-    const dynamicStreamers = subscription.dynamicStreamers.filter((name) => streamers.includes(name));
-    updatedBlock = replaceTomlArrayAssignment(updatedBlock, "dynamicStreamers", dynamicStreamers);
+  if (dynamicStreamers !== undefined) {
+    updatedBlock = replaceOrInsertTomlArrayAssignment(updatedBlock, "dynamicStreamers", dynamicStreamers, "streamers");
   }
   if (subscription.dynamicAtAllStreamers) {
-    const dynamicAtAllStreamers = subscription.dynamicAtAllStreamers.filter((name) => streamers.includes(name));
+    const dynamicAtAllStreamers = subscription.dynamicAtAllStreamers.filter((name) => dynamicStreamers?.includes(name) ?? false);
     updatedBlock = replaceTomlArrayAssignment(updatedBlock, "dynamicAtAllStreamers", dynamicAtAllStreamers);
   }
   return `${source.slice(0, subscription.start)}${updatedBlock}${source.slice(subscription.end)}`;

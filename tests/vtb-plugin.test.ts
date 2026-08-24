@@ -28,6 +28,26 @@ const groupMessage = {
 };
 
 describe("VTB subscription commands", () => {
+  test.each([
+    "subscribe 主播甲",
+    "unsubscribe 主播甲",
+    "dynamic enable 主播甲",
+    "dynamicatall enable 主播甲",
+    "atall enable 主播甲",
+  ])("rejects removed compatibility command: %s", async (args) => {
+    let replyText = "";
+    const plugin = createVtbPlugin();
+    await plugin.handle!({
+      command: { name: "vtb", args, raw: `vtb ${args}` },
+      config: createConfig([]),
+      message: adminMessage,
+      reply: async (message: unknown) => {
+        replyText = String(message);
+      },
+    } as never);
+    expect(replyText).toContain("没用对");
+  });
+
   test("rejects a live-room URL before querying Bilibili", async () => {
     const config = createConfig([]);
     config.vtb.userApiUrl = "https://example.test/users?name=";
@@ -199,7 +219,7 @@ describe("VTB subscription commands", () => {
     });
 
     await plugin.handle!({
-      command: { name: "vtb", args: "atall enable 主播甲", raw: "vtb atall enable 主播甲" },
+      command: { name: "vtb", args: "atall live enable 主播甲", raw: "vtb atall live enable 主播甲" },
       config,
       message: adminMessage,
       logger: { info: () => undefined },
@@ -212,20 +232,21 @@ describe("VTB subscription commands", () => {
     expect(replyText).toContain("已开启 主播甲");
   });
 
-  test("dynamic command toggles delivery for a subscribed streamer", async () => {
+  test("dynamic subscription can be added for a subscribed streamer", async () => {
     const config = createConfig([{ groupId: 100, streamers: ["主播甲"] }]);
     const calls: unknown[][] = [];
     let replyText = "";
     const plugin = createVtbPlugin({
-      setDynamicStreamer: async (...args) => {
+      addSubscription: async (...args) => {
         calls.push(args);
         return { changed: true, subscribed: true, dynamicStreamers: ["主播甲"] };
       },
       loadCurrentConfig: async () => config,
+      getRepository: async () => ({ findStreamerByName: async () => ({ name: "主播甲", mid: "1" }) } as never),
     });
 
     await plugin.handle!({
-      command: { name: "vtb", args: "dynamic enable 主播甲", raw: "vtb dynamic enable 主播甲" },
+      command: { name: "vtb", args: "subscribe dynamic 主播甲", raw: "vtb subscribe dynamic 主播甲" },
       config,
       message: adminMessage,
       logger: { info: () => undefined },
@@ -234,24 +255,25 @@ describe("VTB subscription commands", () => {
       },
     } as never);
 
-    expect(calls).toEqual([[100, "主播甲", true]]);
-    expect(replyText).toContain("动态推送已开启");
+    expect(calls).toEqual([[100, "主播甲", "dynamic"]]);
+    expect(replyText).toContain("动态推送");
   });
 
-  test("dynamic command accepts a VTB whitelist user but rejects ordinary members", async () => {
+  test("dynamic subscription accepts a VTB whitelist user but rejects ordinary members", async () => {
     const config = createConfig([{ groupId: 100, streamers: ["主播甲"] }]);
     config.vtb.adminWhitelistUserIds = [99];
     let calls = 0;
     const plugin = createVtbPlugin({
-      setDynamicStreamer: async () => {
+      addSubscription: async () => {
         calls += 1;
         return { changed: true, subscribed: true, dynamicStreamers: [] };
       },
       loadCurrentConfig: async () => config,
+      getRepository: async () => ({ findStreamerByName: async () => ({ name: "主播甲", mid: "1" }) } as never),
     });
 
     await plugin.handle!({
-      command: { name: "vtb", args: "dynamic disable 主播甲", raw: "vtb dynamic disable 主播甲" },
+      command: { name: "vtb", args: "subscribe dynamic 主播甲", raw: "vtb subscribe dynamic 主播甲" },
       config,
       message: { groupId: 100, userId: 99, raw: {} },
       logger: { info: () => undefined },
@@ -260,7 +282,7 @@ describe("VTB subscription commands", () => {
     expect(calls).toBe(1);
 
     await plugin.handle!({
-      command: { name: "vtb", args: "dynamic enable 主播甲", raw: "vtb dynamic enable 主播甲" },
+      command: { name: "vtb", args: "subscribe dynamic 主播甲", raw: "vtb subscribe dynamic 主播甲" },
       config,
       message: { groupId: 100, userId: 98, raw: {} },
       logger: { info: () => undefined },
@@ -269,7 +291,7 @@ describe("VTB subscription commands", () => {
     expect(calls).toBe(1);
   });
 
-  test("dynamicatall command toggles dynamic @all independently", async () => {
+  test("typed atall command toggles dynamic @all independently", async () => {
     const config = createConfig([{ groupId: 100, streamers: ["主播甲"] }]);
     const calls: unknown[][] = [];
     const plugin = createVtbPlugin({
@@ -281,7 +303,7 @@ describe("VTB subscription commands", () => {
     });
 
     await plugin.handle!({
-      command: { name: "vtb", args: "dynamicatall enable 主播甲", raw: "vtb dynamicatall enable 主播甲" },
+      command: { name: "vtb", args: "atall dynamic enable 主播甲", raw: "vtb atall dynamic enable 主播甲" },
       config,
       message: adminMessage,
       logger: { info: () => undefined },
@@ -305,7 +327,7 @@ describe("VTB subscription commands", () => {
     });
 
     await plugin.handle!({
-      command: { name: "vtb", args: "subscribe 新主播", raw: "vtb subscribe 新主播" },
+      command: { name: "vtb", args: "subscribe live 新主播", raw: "vtb subscribe live 新主播" },
       config: staleConfig,
       message: adminMessage,
       logger: { info: () => undefined },
@@ -326,7 +348,7 @@ describe("VTB subscription commands", () => {
 
     await plugin.handle!(
       {
-        command: { name: "vtb", args: "subscribe 新主播", raw: "vtb subscribe 新主播" },
+        command: { name: "vtb", args: "subscribe live 新主播", raw: "vtb subscribe live 新主播" },
         config,
         message: adminMessage,
         logger: { error: () => undefined },

@@ -4,6 +4,7 @@
  */
 export type VtbSubscription = Readonly<{
   groupId: string | number;
+  /** Live subscriptions (legacy field name retained for config compatibility). */
   streamers: readonly string[];
   atAllStreamers?: readonly string[];
   dynamicStreamers?: readonly string[];
@@ -19,6 +20,7 @@ export type UpdatedVtbSubscription = {
 };
 
 export type SubscriptionChange = "subscribe" | "unsubscribe";
+export type VtbSubscriptionType = "live" | "dynamic";
 
 const sameGroup = (left: string | number, right: string | number) => String(left) === String(right);
 
@@ -32,19 +34,27 @@ export const changeVtbSubscriptions = (
   groupId: string | number,
   streamerName: string,
   action: SubscriptionChange,
+  type?: VtbSubscriptionType,
 ): UpdatedVtbSubscription[] => {
   const current = findVtbSubscription(subscriptions, groupId);
+  const effectiveType = type ?? "live";
+  const key = effectiveType === "live" ? "streamers" : "dynamicStreamers";
 
   if (action === "subscribe") {
-    if (current?.streamers.includes(streamerName)) {
+    if (current?.[key]?.includes(streamerName)) {
       return subscriptions.map(copySubscription);
     }
 
     return current
       ? subscriptions.map((subscription) => sameGroup(subscription.groupId, groupId)
-        ? copySubscriptionWithStreamers(subscription, [...subscription.streamers, streamerName])
+        ? copySubscriptionWithStreamers(subscription, effectiveType === "live"
+          ? [...subscription.streamers, streamerName]
+          : [...subscription.streamers],
+          effectiveType === "dynamic" ? [...(subscription.dynamicStreamers ?? []), streamerName] : undefined)
         : copySubscription(subscription))
-      : [...subscriptions.map(copySubscription), { groupId, streamers: [streamerName] }];
+      : [...subscriptions.map(copySubscription), effectiveType === "live"
+        ? { groupId, streamers: [streamerName] }
+        : { groupId, streamers: [], dynamicStreamers: [streamerName] }];
   }
 
   return subscriptions.flatMap((subscription) => {
@@ -53,7 +63,15 @@ export const changeVtbSubscriptions = (
     }
 
     const streamers = subscription.streamers.filter((name) => name !== streamerName);
-    return streamers.length > 0 ? [copySubscriptionWithStreamers(subscription, streamers)] : [];
+    const dynamicStreamers = (subscription.dynamicStreamers ?? []).filter((name) => name !== streamerName);
+    const next = effectiveType === "live"
+      ? copySubscriptionWithStreamers(subscription, streamers)
+      : copySubscriptionWithStreamers(subscription, [...subscription.streamers], dynamicStreamers);
+    if (type === undefined) {
+      const legacyNext = copySubscriptionWithStreamers(subscription, streamers, dynamicStreamers);
+      return legacyNext.streamers.length > 0 || (legacyNext.dynamicStreamers?.length ?? 0) > 0 ? [legacyNext] : [];
+    }
+    return next.streamers.length > 0 || (next.dynamicStreamers?.length ?? 0) > 0 ? [next] : [];
   });
 };
 
@@ -90,16 +108,17 @@ const copySubscription = (subscription: VtbSubscription): UpdatedVtbSubscription
 const copySubscriptionWithStreamers = (
   subscription: VtbSubscription,
   streamers: string[],
+  dynamicStreamers = subscription.dynamicStreamers === undefined ? undefined : [...subscription.dynamicStreamers],
 ): UpdatedVtbSubscription => ({
   ...(subscription.atAllStreamers === undefined
     ? {}
     : { atAllStreamers: subscription.atAllStreamers.filter((name) => streamers.includes(name)) }),
-  ...(subscription.dynamicStreamers === undefined
+  ...(dynamicStreamers === undefined
     ? {}
-    : { dynamicStreamers: subscription.dynamicStreamers.filter((name) => streamers.includes(name)) }),
+    : { dynamicStreamers: [...dynamicStreamers] }),
   ...(subscription.dynamicAtAllStreamers === undefined
     ? {}
-    : { dynamicAtAllStreamers: subscription.dynamicAtAllStreamers.filter((name) => streamers.includes(name)) }),
+    : { dynamicAtAllStreamers: subscription.dynamicAtAllStreamers.filter((name) => dynamicStreamers?.includes(name) ?? false) }),
   groupId: subscription.groupId,
   streamers,
 });

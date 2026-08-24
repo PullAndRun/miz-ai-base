@@ -13,3 +13,6 @@
 # dynamicStreamers：需要轮询并推送动态的主播，必须同时存在于 streamers。
 # atAllStreamers：主播开播时 @全体成员，必须同时存在于 streamers。
 # dynamicAtAllStreamers：主播发布动态时 @全体成员，必须同时存在于 dynamicStreamers。
+# Subscription commands: subscribe/unsubscribe live|dynamic <streamer>.
+# Live and dynamic @all settings can be changed independently.
+# A subscription block may contain only streamers (live) or only dynamicStreamers (dynamic).

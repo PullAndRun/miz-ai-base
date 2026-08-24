@@ -298,7 +298,10 @@ export const resolveVtbStreamerForQuery = async (
 
 export const syncConfiguredVtbStreamers = async (config: MizConfig) => {
   const names = Array.from(
-    new Set(config.vtb.subscriptions.flatMap((subscription) => subscription.streamers)),
+    new Set(config.vtb.subscriptions.flatMap((subscription) => [
+      ...subscription.streamers,
+      ...(subscription.dynamicStreamers ?? []),
+    ])),
   );
   const added: string[] = [];
   const skipped: string[] = [];

@@ -246,8 +246,7 @@ napcatMediaDirectory = "/app/media"
 | `miz vtb live <主播昵称>` | 查询主播当前直播状态。 |
 | `miz vtb dynamic <主播昵称>` | 查询主播最新动态。 |
 | `miz vtb list/subscribe/unsubscribe ...` | 查看或维护本群订阅；`list` 按主播分组列出已开启的直播、动态推送及 `@全体成员` 设置，关闭项不显示；需要群管理员或 VTB 管理员白名单权限。 |
-| `miz vtb atall enable/disable <主播昵称>` | 开启或关闭该主播开播通知的 `@全体成员`；需要先订阅该主播，并需要群管理员或 VTB 管理员白名单权限。 |
-| `miz vtb dynamicatall enable/disable <主播昵称>` | 开启或关闭该主播动态通知的 `@全体成员`；需要先订阅该主播，并需要群管理员或 VTB 管理员白名单权限。 |
+| `miz vtb atall live/dynamic enable/disable <主播昵称>` | 分别开启或关闭直播、动态通知的 `@全体成员`；需要先订阅对应类型，并需要群管理员或 VTB 管理员白名单权限。 |
 | `miz vtb sync` | 同步主播昵称、MID 和直播间资料；仅 VTB 管理员白名单可用。 |
 | `miz ff14 <分区> <道具名>` | 查询国服市场；分区简写为猫、猪、狗、鸟。 |
 | `miz ff14 list` | 用一条合并转发展示当前群的全部商品推送及启用状态；转发内每 10 个商品归为一个节点。 |

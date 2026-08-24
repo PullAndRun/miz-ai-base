@@ -64,6 +64,7 @@ type VtbPollState = {
 
 type VtbSubscriptionGroup = {
   groupId: string | number;
+  live: boolean;
   atAll: boolean;
   dynamic: boolean;
   dynamicAtAll: boolean;
@@ -557,12 +558,14 @@ const pollVtbSubscriptions = async (
 ) => {
   const streamerGroups = new Map<string, Map<string, VtbSubscriptionGroup>>();
   for (const subscription of config.vtb.subscriptions) {
-    for (const streamer of subscription.streamers) {
+    const streamers = new Set([...subscription.streamers, ...(subscription.dynamicStreamers ?? [])]);
+    for (const streamer of streamers) {
       const groups = streamerGroups.get(streamer) ?? new Map<string, VtbSubscriptionGroup>();
       const groupKey = String(subscription.groupId);
       const existing = groups.get(groupKey);
       groups.set(groupKey, {
         groupId: existing?.groupId ?? subscription.groupId,
+        live: existing?.live === true || subscription.streamers.includes(streamer),
         atAll: existing?.atAll === true || subscription.atAllStreamers?.includes(streamer) === true,
         dynamic: existing?.dynamic === true || subscription.dynamicStreamers?.includes(streamer) === true,
         dynamicAtAll: existing?.dynamicAtAll === true || subscription.dynamicAtAllStreamers?.includes(streamer) === true,
@@ -720,9 +723,10 @@ const pollVtbSubscriptions = async (
 
     for (const { streamerName, groups, streamer } of uniqueStreamerSubscriptions) {
       try {
-        const groupIds = [...groups.values()].map((group) => group.groupId);
+        const liveGroupEntries = [...groups.entries()].filter(([, group]) => group.live);
+        const groupIds = liveGroupEntries.map(([, group]) => group.groupId);
         const atAllGroupIds = new Set(
-          [...groups.entries()]
+          liveGroupEntries
             .filter(([, group]) => group.atAll)
             .map(([groupId]) => groupId),
         );
@@ -776,6 +780,7 @@ const pollVtbSubscriptions = async (
           livePollInterruptedAt,
         );
         if (
+          groupIds.length > 0 &&
           live.isLive &&
           !belongsToEndedSession &&
           (!activeSession ? isRecentLive : undeliveredGroupIds.length > 0)
@@ -844,12 +849,12 @@ const pollVtbSubscriptions = async (
               deliveredGroups,
             });
           }
-        } else if (live.isLive && !activeSession && !belongsToEndedSession) {
+        } else if (groupIds.length > 0 && live.isLive && !activeSession && !belongsToEndedSession) {
           logger.info("plugin", "vtb live start notification skipped: live is older than the freshness window", {
             streamer: live.name,
             liveStartedAt: live.liveStartedAt,
           });
-        } else if (!live.isLive && session) {
+        } else if (groupIds.length > 0 && !live.isLive && session) {
           const endedAt = session.endedAt ?? new Date(now);
           let endFans = session.endFans ?? currentFans;
           let endFanClub = session.endFanClub ?? currentFanClub;
@@ -1050,6 +1055,7 @@ const mergeVtbSubscriptionsByMid = (
       const previous = existing.groups.get(groupId);
       existing.groups.set(groupId, {
         groupId: previous?.groupId ?? group.groupId,
+        live: previous?.live === true || group.live,
         atAll: previous?.atAll === true || group.atAll,
         dynamic: previous?.dynamic === true || group.dynamic,
         dynamicAtAll: previous?.dynamicAtAll === true || group.dynamicAtAll,

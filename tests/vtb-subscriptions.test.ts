@@ -32,4 +32,15 @@ describe("VTB subscription updates", () => {
       },
     ]);
   });
+
+  test("can subscribe and cancel dynamic delivery independently", () => {
+    const withDynamic = changeVtbSubscriptions([
+      { groupId: 1, streamers: ["主播"] },
+    ], 1, "主播", "subscribe", "dynamic");
+    expect(withDynamic).toEqual([
+      { groupId: 1, streamers: ["主播"], dynamicStreamers: ["主播"] },
+    ]);
+    expect(changeVtbSubscriptions(withDynamic, 1, "主播", "unsubscribe", "dynamic"))
+      .toEqual([{ groupId: 1, streamers: ["主播"], dynamicStreamers: [] }]);
+  });
 });
