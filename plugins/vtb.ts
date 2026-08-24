@@ -634,15 +634,9 @@ const formatVtbSubscriptionList = (
     ...(subscription.dynamicAtAllStreamers?.includes(name) ? ["   · 动态 @全体成员"] : []),
     ...(index < names.length - 1 ? [""] : []),
   ]);
-  const statusLines = names.map((name, index) =>
-    `${index + 1}. ${name}：直播推送${subscription.streamers.includes(name) ? "开启" : "关闭"}，动态推送${subscription.dynamicStreamers?.includes(name) ? "开启" : "关闭"}`,
-  );
   return [
     `📺 本群已订阅 ${names.length} 位主播：`,
     ...legacyLines,
-    "",
-    "订阅状态：",
-    ...statusLines,
   ].join("\n");
 };
 

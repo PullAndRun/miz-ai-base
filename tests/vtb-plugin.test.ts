@@ -205,6 +205,7 @@ describe("VTB subscription commands", () => {
     expect(replyText).not.toContain("动态推送：否");
     expect(replyText).not.toContain("动态 @全体成员：否");
     expect(replyText).not.toContain("开播 @全体成员：否");
+    expect(replyText).not.toContain("订阅状态：");
   });
 
   test("atall command updates a subscribed streamer", async () => {
