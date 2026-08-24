@@ -75,6 +75,30 @@ describe("Bilibili dynamic response parsing", () => {
       ],
     });
   });
+  test("removes Bilibili emoji nodes and keeps Unicode emoji", () => {
+    const feed = parseBilibiliDynamicFeed([
+      {
+        id_str: "emoji-100",
+        modules: {
+          module_author: { name: "主播", pub_ts: 1_753_000_000 },
+          module_dynamic: {
+            desc: {
+              text: "晚上好 [萌妹_你别惹我] 😀",
+              rich_text_nodes: [
+                { type: "RICH_TEXT_NODE_TYPE_TEXT", text: "晚上好 " },
+                { type: "RICH_TEXT_NODE_TYPE_EMOJI", text: "[萌妹_你别惹我]", emoji: { text: "[萌妹_你别惹我]" } },
+                { type: "RICH_TEXT_NODE_TYPE_TEXT", text: "😀" },
+              ],
+            },
+          },
+        },
+      },
+    ], "主播", "https://www.bilibili.com");
+
+    expect(feed.items[0].description).toBe("晚上好 😀");
+    expect(feed.items[0].description).not.toContain("[萌妹_你别惹我]");
+  });
+
   test("drops automatic live-start recommendation dynamics", () => {
     const feed = parseBilibiliDynamicFeed([
       {

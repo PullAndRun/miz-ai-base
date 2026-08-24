@@ -157,6 +157,37 @@ describe("user-facing copy", () => {
     expect(partiallyOverlapping).toContain("直播预告与新的安排");
   });
 
+  test("VTB messages omit Bilibili emote placeholders but keep Unicode emoji", () => {
+    const live = formatLiveMessage({
+      name: "主播",
+      title: "今晚见 [萌妹_你别惹我] 😀",
+      isLive: true,
+      roomId: "123",
+    }, undefined, "https://live.example.test");
+    const dynamic = formatDynamicMessage({
+      author: "主播",
+      title: "新动态 [萌妹_你别惹我] 😀",
+      description: "正文 [萌妹_你别惹我] 😀",
+      containsDynamicUrl: false,
+      publishedAt: new Date("2030-08-01T19:00:00+08:00"),
+      link: "https://t.bilibili.com/123",
+    }, "https://www.example.test");
+
+    expect(`${live}\n${dynamic}`).not.toContain("[萌妹_你别惹我]");
+    expect(`${live}\n${dynamic}`).toContain("😀");
+
+    const inlineEmote = formatDynamicMessage({
+      author: "主播",
+      title: "ABC[表情包]DEF",
+      description: "ABC[表情包]DEF",
+      containsDynamicUrl: false,
+      publishedAt: new Date("2030-08-01T19:00:00+08:00"),
+      link: "https://t.bilibili.com/124",
+    }, "https://www.example.test");
+    expect(inlineEmote).toContain("ABC DEF");
+    expect(inlineEmote).not.toContain("ABCDEF");
+  });
+
   test("general content stays natural without forcing live terminology", () => {
     const news = formatNewsMessages([{ id: "1", title: "市场更新", detail: "详情内容" }]).join("\n");
     const scheduledNews = formatScheduledNewsItems([

@@ -1795,7 +1795,7 @@ export const formatLiveMessage = (
   `🔴 ${live.name} 的直播间开门啦！`,
   "",
   "今天播的是——",
-  `「${live.title}」`,
+  `「${cleanBilibiliEmoteText(live.title) || "还没有直播标题"}」`,
   "",
   ...(live.liveStartedAt ? [`⏰ ${dayjs(live.liveStartedAt).format("MM月DD日 HH:mm")} 开播`] : []),
   ...(live.roomId ? [`🔗 ${formatLiveRoomUrl(live.roomId, liveWebUrl)}`] : []),
@@ -1807,7 +1807,7 @@ export const formatLiveQueryMessage = (live: VtbLiveInfo, fans: number | undefin
   `📺 ${live.name} 的直播小窗`,
   live.isLive ? "🔴 现在正在直播" : "🌙 现在还没开播",
   "",
-  `「${live.title}」`,
+  `「${cleanBilibiliEmoteText(live.title) || "还没有直播标题"}」`,
   ...(live.liveStartedAt ? ["", `⏰ ${dayjs(live.liveStartedAt).format("MM月DD日 HH:mm")} 开播`] : []),
   ...(live.roomId ? [`🔗 ${formatLiveRoomUrl(live.roomId, liveWebUrl)}`] : []),
   "",
@@ -1872,7 +1872,10 @@ export const formatDynamicMessage = (dynamic: VtbDynamic, webUrl: string) => {
     dynamic.containsDynamicUrl ||
     dynamic.description.includes(dynamic.link) ||
     dynamic.description.includes(dynamicUrl);
-  const display = selectDynamicDisplayText(dynamic.title, dynamic.description);
+  const display = selectDynamicDisplayText(
+    cleanBilibiliEmoteText(dynamic.title),
+    cleanBilibiliEmoteText(dynamic.description),
+  );
   const content = display.title
     ? [`「${display.title}」`, ...(display.description ? ["", ...display.description.split("\n")] : [])]
     : display.description
@@ -2675,7 +2678,7 @@ const parseBilibiliDynamicItem = (
   ].filter(Boolean).join(" ")));
   const formattedLink = formatDynamicUrl(link, webUrl);
   const authorName = firstText(author?.name) || fallbackAuthor;
-  const title = firstText(
+  const title = cleanBilibiliEmoteText(firstText(
     getTextAt(major?.archive, "title"),
     getTextAt(major?.article, "title"),
     getTextAt(major?.opus, "title"),
@@ -2683,7 +2686,7 @@ const parseBilibiliDynamicItem = (
     getTextAt(major?.live, "title"),
     getTextAt(major?.opus, "summary", "text"),
     getDynamicDescriptionText(dynamic?.desc),
-  ) || "B站动态";
+  ) || "B站动态") || "B站动态";
   const imageUrls = extractDynamicImageUrls(major?.draw, major?.opus);
 
   return {
@@ -2725,16 +2728,30 @@ const getTextAt = (value: unknown, ...path: string[]) => {
 
 const getDynamicDescriptionText = (value: unknown) => {
   const text = getTextAt(value, "text");
-  if (text) {
-    return text;
-  }
   if (!isRecord(value) || !Array.isArray(value.rich_text_nodes)) {
-    return undefined;
+    return text ? cleanBilibiliEmoteText(text) : undefined;
   }
-  return value.rich_text_nodes
-    .map((node) => isRecord(node) ? firstText(node.text) : undefined)
+  const richText = value.rich_text_nodes
+    .map((node) => {
+      if (!isRecord(node)) {
+        return undefined;
+      }
+      if (isBilibiliEmojiNode(node)) {
+        // Keep a separator so removing an inline emote does not join the
+        // words on either side together.
+        return " ";
+      }
+      return typeof node.text === "string" ? node.text : firstText(node.text);
+    })
     .filter((node): node is string => node !== undefined)
     .join("");
+  return cleanBilibiliEmoteText(richText || text || "");
+};
+
+const isBilibiliEmojiNode = (value: Record<string, unknown>) => {
+  const type = firstText(value.type, value.node_type, value.nodeType)?.toUpperCase();
+  return type?.includes("EMOJI") === true || [value.emoji, value.emoji_info, value.emojiInfo]
+    .some((emoji) => isRecord(emoji));
 };
 
 const extractDynamicImageUrls = (...values: unknown[]) => {
@@ -2817,7 +2834,7 @@ const toVtbLiveInfo = (streamer: VtbStreamer, live: z.infer<typeof liveInfoSchem
     "guard_info", "guardInfo",
   ]);
   return {
-    title: live?.title?.trim() || "还没有直播标题",
+    title: cleanBilibiliEmoteText(live?.title?.trim() || "") || "还没有直播标题",
     roomId: live?.room_id === undefined ? normalizeRoomId(streamer.roomId) : normalizeRoomId(live.room_id),
     liveStartedAt: parseDate(live?.live_time),
     // The status endpoint uses 1 for an active live stream. Status 2 is a
@@ -2879,9 +2896,20 @@ const cleanDynamicText = (value: string) =>
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
+    .replace(/\[[^\r\n\]]{1,64}\]/g, "")
     .replace(/[ \t\f\v]+/g, " ")
     .replace(/ *\n */g, "\n")
     .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+// Bilibili serializes its built-in emotes as bracketed names such as
+// `[萌妹_你别惹我]`. These placeholders are not useful in notifications;
+// Unicode emoji are intentionally left untouched.
+const cleanBilibiliEmoteText = (value: string) =>
+  value
+    .replace(/\[[^\r\n\]]{1,64}\]/g, " ")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/ *\n */g, "\n")
     .trim();
 
 const truncateDynamicText = (value: string) =>
