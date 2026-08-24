@@ -314,4 +314,28 @@ describe("VTB subscription commands", () => {
 
     expect(changes).toEqual([{ groupId: 100, subscriptions: latestConfig.vtb.subscriptions }]);
   });
+
+  test("explains why a subscription failed and how to fix the config", async () => {
+    const config = createConfig([]);
+    let replyText = "";
+    const plugin = createVtbPlugin({
+      addSubscription: async () => {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      },
+    });
+
+    await plugin.handle!(
+      {
+        command: { name: "vtb", args: "subscribe 新主播", raw: "vtb subscribe 新主播" },
+        config,
+        message: adminMessage,
+        logger: { error: () => undefined },
+        reply: async (message: unknown) => {
+          replyText = String(message);
+        },
+      } as never,
+    );
+
+    expect(replyText).toBe("订阅没成功（主播“新主播”）：VTB 订阅名单没能读写。请检查 config/vtb.toml，再试一次。");
+  });
 });

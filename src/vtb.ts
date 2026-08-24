@@ -1766,8 +1766,19 @@ const getNextReminderTime = (current: Date, intervalMinutes: number, now: Date) 
   return new Date(current.getTime() + Math.max(1, elapsedIntervals) * intervalMs);
 };
 
-const formatSyncFailure = (error: unknown) =>
-  error instanceof Error ? error.message.replace(/\s+/g, " ").trim().slice(0, 200) : "没有返回具体原因";
+const formatSyncFailure = (error: unknown) => {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  if (error instanceof Error && (error.name === "VtbRateLimitError" || error.name === "VtbCooldownError")) {
+    return "B 站这会儿不让查，请等一会儿再试";
+  }
+  if (/database|prisma|postgres|connection refused|econnrefused/.test(message)) {
+    return "数据库没连上，请检查数据库状态再试";
+  }
+  if (/fetch failed|network|timeout|timed out|socket|dns|bilibili .*api|api failed|http \d/.test(message)) {
+    return "B 站接口这会儿没回消息，请检查网络或代理配置再试";
+  }
+  return "这次同步没处理好，请稍后再试";
+};
 
 export const formatLiveMessage = (
   live: VtbLiveInfo,

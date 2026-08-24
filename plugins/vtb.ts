@@ -92,7 +92,7 @@ export const createVtbPlugin = ({
       ((type === "dynamicatall" || type === "dynamic-atall") && dynamicAtAllAction === undefined)
     ) {
       await reply([
-        "📺 B 站主播功能这样用：",
+        "这条命令没用对。请按下面的格式发送：",
         "直播状态：miz vtb live 主播昵称",
         "最新动态：miz vtb dynamic 主播昵称",
         "订阅列表：miz vtb list",
@@ -110,15 +110,15 @@ export const createVtbPlugin = ({
 
     if (type === "login") {
       if (message.groupId !== undefined) {
-        await reply("B 站扫码登录只允许在私聊中发起，避免二维码泄露。");
+        await reply("登录没成功：扫码登录只能在私聊进行。请私聊发送 miz vtb login。");
         return;
       }
       if (!isWhitelistedUser(message.userId, config.vtb.adminWhitelistUserIds)) {
-        await reply("B 站登录只对 VTB 管理员白名单开放。");
+        await reply("登录没成功：这个账号不在 VTB 管理员白名单中。请让 VTB 管理员来登录。");
         return;
       }
       if (vtbLoginInProgress) {
-        await reply("已经有一个 B 站扫码登录在进行中了，请先完成或等待二维码过期。");
+        await reply("登录没成功：已经有一个扫码登录在进行中。等它完成或过期后，再发送 miz vtb login。");
         return;
       }
 
@@ -133,7 +133,7 @@ export const createVtbPlugin = ({
         await reply("B 站登录成功，完整凭据已保存，后续 VTB 请求会自动使用。\n如需重新登录，再次发送 miz vtb login 即可。");
       } catch (error) {
         logger.warn("plugin", "vtb bilibili QR login failed", { error: summarizeError(error) });
-        await reply("B 站扫码登录没有完成，请稍后重新发送 miz vtb login 再试。");
+        await reply(formatVtbCommandFailure("login", "", error));
       } finally {
         vtbLoginInProgress = false;
       }
@@ -142,18 +142,18 @@ export const createVtbPlugin = ({
 
     if (type === "logout") {
       if (message.groupId !== undefined) {
-        await reply("B 站登录凭据只允许在私聊中清除。");
+        await reply("退出登录没成功：只能在私聊清除 B 站登录凭据。请私聊发送 miz vtb logout。");
         return;
       }
       if (!isWhitelistedUser(message.userId, config.vtb.adminWhitelistUserIds)) {
-        await reply("B 站登录只对 VTB 管理员白名单开放。");
+        await reply("退出登录没成功：这个账号不在 VTB 管理员白名单中。请让 VTB 管理员来操作。");
         return;
       }
       try {
         await clearBilibiliCredential();
       } catch (error) {
         logger.warn("plugin", "vtb bilibili credential logout failed", { error: summarizeError(error) });
-        await reply("B 站登录凭据暂时没能清除，请稍后再试；当前凭据仍会继续使用。");
+        await reply(formatVtbCommandFailure("logout", "", error));
         return;
       }
       await reply("B 站已退出扫码登录；后续 VTB 和视频下载将不再携带登录凭据。");
@@ -161,7 +161,7 @@ export const createVtbPlugin = ({
     }
 
     if (!config.vtb.enabled) {
-      await reply("主播追踪频道还没开启，喊管理员来接通一下吧。");
+      await reply("操作没成功：VTB 还没有开通。请管理员打开配置里的 miz.vtb.enabled，再试一次。");
       return;
     }
 
@@ -169,7 +169,7 @@ export const createVtbPlugin = ({
       (type === "dynamic" && dynamicAction === undefined) ||
       type === "subscribe";
     if (performsStreamerLookup && looksLikeUrl(streamerName)) {
-      await reply("这里需要填写主播当前使用的完整 B 站昵称，不是直播间链接。");
+      await reply("没查成：这里要填主播当前使用的完整 B 站昵称，不是直播间链接。换成昵称再试。");
       return;
     }
 
@@ -181,7 +181,7 @@ export const createVtbPlugin = ({
     const missingSyncApi = type === "sync" &&
       (!config.vtb.userApiUrl || !config.vtb.cardApiUrl || !config.vtb.liveApiUrl || !config.vtb.webUrl);
     if (missingLiveApi || missingDynamicApi || missingSyncApi) {
-      await reply("主播追踪需要的接口还没接完整，请联系管理员完成配置。");
+      await reply("没查成：VTB 接口还没配齐。请管理员补好配置，再试一次。");
       return;
     }
 
@@ -191,14 +191,14 @@ export const createVtbPlugin = ({
         (type === "dynamicatall" || type === "dynamic-atall") && dynamicAtAllAction !== undefined;
       if (type === "list" || type === "subscribe" || type === "unsubscribe" || type === "atall" || isDynamicMutation || isDynamicAtAllMutation) {
         if (message.groupId === undefined) {
-          await reply("主播关注名单跟着群聊走，回到目标群里管理吧。私聊仍然可以查询直播和动态。");
+          await reply("没改成：订阅名单只能在群里管理。请到目标群发送命令。");
           return;
         }
         if (!isGroupAdministrator(message.raw) && !isWhitelistedUser(
           message.userId,
           config.vtb.adminWhitelistUserIds,
         )) {
-          await reply("查询直播和动态可以直接用；调整本群关注名单需要群管理员或 VTB 管理员白名单权限。");
+          await reply("没改成：你没有修改本群 VTB 订阅的权限。请让群管理员或 VTB 管理员来操作。");
           return;
         }
 
@@ -236,7 +236,7 @@ export const createVtbPlugin = ({
           const enabled = atAllAction === "enable";
           const result = await setAtAllStreamer(message.groupId, streamerName, enabled);
           if (!result.subscribed) {
-            await reply(`关注名单里没有 ${streamerName}，请先用 miz vtb subscribe ${streamerName} 添加订阅。`);
+            await reply(`设置没成功：${streamerName} 还没订阅。请先发送 miz vtb subscribe ${streamerName}。`);
             return;
           }
           if (!result.changed) {
@@ -260,7 +260,7 @@ export const createVtbPlugin = ({
           const enabled = dynamicAction === "enable";
           const result = await setDynamicStreamer(message.groupId, streamerName, enabled);
           if (!result.subscribed) {
-            await reply(`关注名单里没有 ${streamerName}，请先用 miz vtb subscribe ${streamerName} 添加订阅。`);
+            await reply(`设置没成功：${streamerName} 还没订阅。请先发送 miz vtb subscribe ${streamerName}。`);
             return;
           }
           if (!result.changed) {
@@ -285,7 +285,7 @@ export const createVtbPlugin = ({
           const enabled = dynamicAtAllAction === "enable";
           const result = await setDynamicAtAllStreamer(message.groupId, streamerName, enabled);
           if (!result.subscribed) {
-            await reply(`未在关注名单里找到 ${streamerName}，请先用 miz vtb subscribe ${streamerName} 添加订阅。`);
+            await reply(`设置没成功：${streamerName} 还没订阅。请先发送 miz vtb subscribe ${streamerName}。`);
             return;
           }
           if (!result.changed) {
@@ -310,7 +310,9 @@ export const createVtbPlugin = ({
           ? await addSubscription(message.groupId, streamerName)
           : await removeSubscription(message.groupId, streamerName);
         if (!result.changed) {
-          await reply(type === "subscribe" ? `${streamerName} 已经在关注名单里啦。` : `关注名单里没有 ${streamerName}。`);
+          await reply(type === "subscribe"
+            ? `没订上：${streamerName} 已经在关注名单里了，不用重复订阅。`
+            : `没取消成：关注名单里没有 ${streamerName}。检查一下昵称再试。`);
           return;
         }
 
@@ -381,12 +383,16 @@ export const createVtbPlugin = ({
 
       if (type === "sync") {
         if (!isWhitelistedUser(message.userId, config.vtb.adminWhitelistUserIds)) {
-          await reply("资料同步通道只对 VTB 管理员白名单成员开放。");
+          await reply("同步没成功：这个账号不在 VTB 管理员白名单中。请让 VTB 管理员执行 miz vtb sync。");
           return;
         }
 
         const fullConfig = await loadCurrentConfig();
         const { databaseSync, renamed, roomUpdated, failed } = await syncVtbSubscriptionNames(fullConfig);
+        const syncFailures = [
+          ...databaseSync.failed,
+          ...failed,
+        ];
         if (renamed.length > 0) {
           await updateVtbSubscriptionNames(new Map(renamed.map((item) => [item.previousName, item.name])));
           // The config watcher reloads the persisted change. Do not mutate the
@@ -408,11 +414,18 @@ export const createVtbPlugin = ({
                 ].join("\n")
               : "主播昵称都和 B 站资料对上啦。",
             ...(roomUpdated.length > 0 ? [`🏠 对上了 ${roomUpdated.length} 个直播间 ID。`] : []),
-            ...(failed.length > 0
+            ...(databaseSync.skipped.length > 0
               ? [
-                  `⚠️ ${failed.length} 位主播暂时没同步上：`,
-                  ...failed.slice(0, 10).map((item) => `- ${item.name}：${item.reason}`),
-                  ...(failed.length > 10 ? ["其余结果可以到日志里查看。"] : []),
+                  `有 ${databaseSync.skipped.length} 位主播没找到：${databaseSync.skipped.slice(0, 10).join("、")}`,
+                  "请确认关注名单里填的是主播当前的完整 B 站昵称。",
+                ]
+              : []),
+            ...(syncFailures.length > 0
+              ? [
+                  `有 ${syncFailures.length} 位主播没同步上，原因是：`,
+                  ...syncFailures.slice(0, 10).map((item) => `- ${item.name}：${item.reason}`),
+                  ...(syncFailures.length > 10 ? ["其余失败原因请查看日志。"] : []),
+                  "请检查 B 站接口和网络，再发送 miz vtb sync。",
                 ]
               : []),
           ].join("\n"),
@@ -423,7 +436,7 @@ export const createVtbPlugin = ({
       const repository = await getRepository(config);
       const streamer = await resolveVtbStreamerForQuery(streamerName, config.vtb, repository);
       if (!streamer) {
-        await reply(`没找到“${streamerName}”。换成主播当前使用的完整 B 站昵称再试试吧。`);
+        await reply(`没查到“${streamerName}”：请换成主播当前完整的 B 站昵称再试。`);
         return;
       }
 
@@ -470,9 +483,9 @@ export const createVtbPlugin = ({
         imageFile,
       ));
     } catch (error) {
-      logger.error("plugin", "vtb query failed", error);
+      logger.error("plugin", "vtb command failed", error);
       if (type === "dynamic" && error instanceof Error && error.message.includes("logged-in credential")) {
-        await reply("查询 B 站动态需要先完成登录，请管理员私聊发送 miz vtb login 扫码登录。\n登录后再试一次 miz vtb dynamic 主播昵称；已开启的动态推送也会在登录后恢复。");
+        await reply(formatVtbCommandFailure("dynamic", streamerName, error));
         return;
       }
       if (error instanceof Error) {
@@ -493,15 +506,15 @@ export const createVtbPlugin = ({
           const remainingMinutes = typeof remainingMs === "number"
             ? Math.max(1, Math.ceil(remainingMs / 60_000))
             : 5;
-          await reply(`B 站返回了明确的限流或风控信号，机器人会暂停请求约 ${remainingMinutes} 分钟，然后自动恢复。`);
+          await reply(`${formatVtbFailure(type, streamerName, dynamicAction !== undefined)}：B 站这会儿限流了。等约 ${remainingMinutes} 分钟再试。`);
           return;
         }
         if (error.name === "VtbCooldownError") {
-          await reply("B 站接口连续几次没有正常响应，机器人会在下一轮自动重试；这不代表触发了风控。");
+          await reply(`${formatVtbFailure(type, streamerName, dynamicAction !== undefined)}：B 站接口这会儿没回消息。稍后再试。`);
           return;
         }
       }
-      await reply("B 站数据刚才在路上卡了一下，过一会儿再查吧。");
+      await reply(formatVtbCommandFailure(type, streamerName, error, dynamicAction !== undefined));
     }
   },
 });
@@ -516,5 +529,64 @@ const parseAtAllAction = (action: string | undefined) => {
 
 const looksLikeUrl = (value: string) =>
   /^(?:https?:\/\/|www\.)/i.test(value) || /(?:^|\.)bilibili\.com\//i.test(value);
+
+const formatVtbOperation = (type: string, dynamicMutation = false) => {
+  if (type === "login") return "登录";
+  if (type === "logout") return "退出登录";
+  if (type === "subscribe") return "订阅";
+  if (type === "unsubscribe") return "取消订阅";
+  if (type === "atall") return "设置开播 @全体成员";
+  if (type === "dynamicatall" || type === "dynamic-atall") {
+    return "设置动态 @全体成员";
+  }
+  if (type === "dynamic") {
+    return dynamicMutation
+      ? "设置动态推送"
+      : "查询动态";
+  }
+  if (type === "live") return "查询直播";
+  if (type === "sync") return "资料同步";
+  if (type === "list") return "读取订阅列表";
+  return "执行 VTB 操作";
+};
+
+const formatVtbFailure = (type: string, streamerName: string, dynamicMutation = false) => {
+  const operation = formatVtbOperation(type, dynamicMutation);
+  return `${operation}没成功${streamerName ? `（主播“${streamerName}”）` : ""}`;
+};
+
+const formatVtbCommandFailure = (
+  type: string,
+  streamerName: string,
+  error: unknown,
+  dynamicMutation = false,
+) => {
+  const failure = formatVtbFailure(type, streamerName, dynamicMutation);
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+
+  if (message.includes("logged-in credential")) {
+    return `${failure}：还没登录 B 站。请让管理员私聊发送 miz vtb login，登录后再试。`;
+  }
+  if (message.includes("qr code expired") || message.includes("qr login timed out") || message.includes("timed out while waiting")) {
+    return `${failure}：二维码过期了，或者等超时了。请重新发送 miz vtb login，扫新的二维码。`;
+  }
+  if (error instanceof Error && (error.name === "VtbRateLimitError" || error.name === "VtbCooldownError")) {
+    return `${failure}：B 站暂时不让查。等一会儿再试。`;
+  }
+  if (type === "subscribe" || type === "unsubscribe" || type === "atall" ||
+    type === "dynamicatall" || type === "dynamic-atall" || type === "list" || dynamicMutation) {
+    return `${failure}：VTB 订阅名单没能读写。请检查 config/vtb.toml，再试一次。`;
+  }
+  if (/eacces|eperm|permission denied|read-only|vtb\.toml|config file/.test(message)) {
+    return `${failure}：VTB 配置文件读写失败。请检查 config/vtb.toml 是否存在、可写，再试一次。`;
+  }
+  if (/database|prisma|postgres|connection refused|econnrefused/.test(message)) {
+    return `${failure}：数据库没连上。请检查数据库状态，再试一次。`;
+  }
+  if (/fetch failed|network|timeout|timed out|socket|dns|bilibili .*api|api failed|http \d/.test(message)) {
+    return `${failure}：B 站接口这会儿没回消息。请检查网络或代理配置，再试一次。`;
+  }
+  return `${failure}：系统这次没处理好。请稍后再试。`;
+};
 
 export default vtbPlugin;
