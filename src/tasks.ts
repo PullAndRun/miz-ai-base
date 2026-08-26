@@ -58,6 +58,7 @@ const vtbPollingIntervalCache = new Map<string, number>();
 
 type VtbPollState = {
   dynamicCursor: number;
+  dynamicRetryMids: Set<string>;
   cardInfos: Map<string, VtbCardInfo & { expiresAt: number }>;
   livePollInterruptedAt?: number;
 };
@@ -497,6 +498,7 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
 
   const pollState: VtbPollState = {
     dynamicCursor: 0,
+    dynamicRetryMids: new Set(),
     cardInfos: new Map(),
     livePollInterruptedAt: undefined,
   };
@@ -585,6 +587,7 @@ const pollVtbSubscriptions = async (
       avatarUrl?: string;
     }>
   >();
+  const recoveredDynamicMids = new Set<string>();
 
   try {
     const resolvedSubscriptions: VtbResolvedSubscription[] = [];
@@ -707,13 +710,24 @@ const pollVtbSubscriptions = async (
       pollState,
       getVtbPollingIntervalMs(config.vtb.cron),
       config.vtb.dynamicPollMinutes * 60_000,
+      pollState.dynamicRetryMids,
     );
     const dynamicTasks = startWithConcurrency(dynamicSubscriptions, config.vtb.dynamicConcurrency, async (subscription) => {
       try {
-        return await getVtbDynamics(subscription.streamer, config.vtb);
-      } catch {
-        // Dynamic feeds are optional. Network failures, including HTTP 503,
-        // must not interrupt live polling or create noisy periodic warnings.
+        const feed = await getVtbDynamics(subscription.streamer, config.vtb);
+        if (pollState.dynamicRetryMids.has(subscription.streamer.mid)) {
+          recoveredDynamicMids.add(subscription.streamer.mid);
+        }
+        return feed;
+      } catch (error) {
+        // Keep failed streamers at the front of the next poll batch. Otherwise
+        // the rotation can move past a transient outage and the freshness
+        // window can expire before this feed is queried again.
+        pollState.dynamicRetryMids.add(subscription.streamer.mid);
+        logger.warn("plugin", "vtb dynamic request failed; will retry", {
+          streamer: subscription.streamer.name,
+          error: normalizeError(error),
+        });
         return undefined;
       }
     });
@@ -954,12 +968,14 @@ const pollVtbSubscriptions = async (
         const isRecent = now - latestDynamic.publishedAt.getTime() <
           config.vtb.dynamicPollMinutes * 60_000 + getVtbPollingIntervalMs(config.vtb.cron);
         const isLivePromotion = isVtbLivePromotion(latestDynamic, config.vtb.liveWebUrl);
+        const recoveredAfterDynamicRetry = recoveredDynamicMids.has(streamer.mid);
+        const deliveredGroupIds = isCurrentDynamic ? dynamicState.deliveredGroupIds : [];
+        const undeliveredDynamicGroupIds = deliveredGroupIds.includes(ALL_GROUPS_DELIVERED_MARKER)
+          ? []
+          : dynamicGroupIds.filter((groupId) => !deliveredGroupIds.includes(String(groupId)));
+        const hasPendingDynamicDelivery = isCurrentDynamic && undeliveredDynamicGroupIds.length > 0;
 
-        if ((isNewDynamic || isCurrentDynamic) && isRecent && !isLivePromotion) {
-            const deliveredGroupIds = isCurrentDynamic ? dynamicState.deliveredGroupIds : [];
-            const undeliveredDynamicGroupIds = deliveredGroupIds.includes(ALL_GROUPS_DELIVERED_MARKER)
-              ? []
-              : dynamicGroupIds.filter((groupId) => !deliveredGroupIds.includes(String(groupId)));
+        if (((isNewDynamic && (isRecent || recoveredAfterDynamicRetry)) || hasPendingDynamicDelivery) && !isLivePromotion) {
             if (undeliveredDynamicGroupIds.length === 0) {
               continue;
             }
@@ -1020,15 +1036,19 @@ const pollVtbSubscriptions = async (
       }
     }
   } finally {
+    for (const mid of recoveredDynamicMids) {
+      pollState.dynamicRetryMids.delete(mid);
+    }
     pushCache.clear();
   }
 };
 
-const selectVtbDynamicPollBatch = <T>(
-  subscriptions: readonly T[],
+export const selectVtbDynamicPollBatch = (
+  subscriptions: readonly VtbResolvedSubscription[],
   pollState: VtbPollState,
   livePollIntervalMs: number,
   dynamicPollIntervalMs: number,
+  retryMids: ReadonlySet<string> = new Set(),
 ) => {
   if (subscriptions.length === 0) {
     pollState.dynamicCursor = 0;
@@ -1037,11 +1057,18 @@ const selectVtbDynamicPollBatch = <T>(
 
   const pollsPerCycle = Math.max(1, Math.ceil(dynamicPollIntervalMs / livePollIntervalMs));
   const batchSize = Math.max(1, Math.ceil(subscriptions.length / pollsPerCycle));
-  const cursor = pollState.dynamicCursor % subscriptions.length;
-  const batch = Array.from(
-    { length: Math.min(batchSize, subscriptions.length) },
-    (_, index) => subscriptions[(cursor + index) % subscriptions.length],
+  const retryBatch = subscriptions.filter((subscription) =>
+    retryMids.has(subscription.streamer.mid),
   );
+  const prioritized = retryBatch.slice(0, batchSize);
+  const prioritizedSet = new Set(prioritized);
+  const remaining = subscriptions.filter((subscription) => !prioritizedSet.has(subscription));
+  const remainingBatchSize = Math.max(0, batchSize - prioritized.length);
+  const cursor = pollState.dynamicCursor % subscriptions.length;
+  const batch = [...prioritized, ...Array.from(
+    { length: Math.min(remainingBatchSize, remaining.length) },
+    (_, index) => remaining[(cursor + index) % remaining.length],
+  )];
   pollState.dynamicCursor = (cursor + batch.length) % subscriptions.length;
   return batch;
 };

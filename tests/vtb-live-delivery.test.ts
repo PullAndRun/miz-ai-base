@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { getUndeliveredVtbLiveEndGroupIds, isVtbLivePromotion, isVtbLiveStartRecent } from "@/tasks";
+import {
+  getUndeliveredVtbLiveEndGroupIds,
+  isVtbLivePromotion,
+  isVtbLiveStartRecent,
+  selectVtbDynamicPollBatch,
+} from "@/tasks";
 
 describe("VTB live-end delivery", () => {
   test("does not send a past live-end notification to a newly subscribed group", () => {
@@ -74,5 +79,22 @@ describe("VTB dynamic filtering", () => {
       description: "没有直播链接",
       link: "https://t.bilibili.com/2",
     }, "https://live.bilibili.com")).toBeFalse();
+  });
+
+  test("prioritizes streamers whose dynamic request failed", () => {
+    const subscriptions = ["1", "2", "3", "4"].map((mid) => ({
+      streamerName: mid,
+      groups: new Map(),
+      streamer: { mid, name: mid },
+    }));
+    const pollState = { dynamicCursor: 0, dynamicRetryMids: new Set<string>(), cardInfos: new Map() };
+
+    expect(selectVtbDynamicPollBatch(
+      subscriptions,
+      pollState,
+      3 * 60_000,
+      15 * 60_000,
+      new Set(["3"]),
+    ).map((subscription) => subscription.streamer.mid)).toEqual(["3"]);
   });
 });
