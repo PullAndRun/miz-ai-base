@@ -75,6 +75,33 @@ describe("Bilibili dynamic response parsing", () => {
       ],
     });
   });
+
+  test("extracts video thumbnails so video dynamics replace the avatar image", () => {
+    const feed = parseBilibiliDynamicFeed([
+      {
+        id_str: "video-100",
+        type: "DYNAMIC_TYPE_AV",
+        modules: {
+          module_author: { name: "主播", face: "//i0.hdslb.com/avatar.jpg", pub_ts: 1_753_000_000 },
+          module_dynamic: {
+            major: {
+              archive: {
+                cover: "//i0.hdslb.com/bfs/archive/video-cover.jpg",
+                title: "新视频",
+                jump_url: "//www.bilibili.com/video/BV1test",
+              },
+            },
+          },
+        },
+      },
+    ], "主播", "https://www.bilibili.com");
+
+    expect(feed.items[0]).toMatchObject({
+      isVideo: true,
+      imageUrls: ["https://i0.hdslb.com/bfs/archive/video-cover.jpg"],
+    });
+  });
+
   test("removes Bilibili emoji nodes and keeps Unicode emoji", () => {
     const feed = parseBilibiliDynamicFeed([
       {

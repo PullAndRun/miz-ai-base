@@ -59,6 +59,63 @@ describe("user-facing copy", () => {
     expect(`${offline}\n${dynamic}`).not.toMatch(/下播时间：|本场新增粉丝：|发布时间：|查看原文：|小作文|TA/);
   });
 
+  test("video dynamics use specialized copy while keeping the ordinary layout", () => {
+    const message = formatDynamicMessage({
+      author: "示例主播",
+      title: "新视频",
+      description: "视频简介",
+      containsDynamicUrl: false,
+      publishedAt: new Date("2030-08-01T19:00:00+08:00"),
+      link: "https://www.bilibili.com/video/BV1test",
+      isVideo: true,
+    }, "https://www.example.test");
+
+    expect(message).toContain("🎬 示例主播 发布了一条新视频");
+    expect(message).toContain("「新视频」");
+    expect(message).toContain("视频简介");
+    expect(message).toContain("⏰ 08月01日 11:00 发布");
+    expect(message).toContain("🔗 完整动态 · https://www.bilibili.com/video/BV1test");
+    expect(message).not.toContain("发来一条新动态");
+  });
+
+  test("documented dynamic types use specialized headings", () => {
+    const expectedHeadings: Record<string, string> = {
+      DYNAMIC_TYPE_FORWARD: "🔁 示例主播 转发了一条动态",
+      DYNAMIC_TYPE_PGC: "📺 示例主播 更新了一集番剧",
+      DYNAMIC_TYPE_COURSES: "📚 示例主播 发布了一条课程动态",
+      DYNAMIC_TYPE_WORD: "📝 示例主播 发来一条文字动态",
+      DYNAMIC_TYPE_DRAW: "🖼️ 示例主播 分享了一组图片",
+      DYNAMIC_TYPE_ARTICLE: "📖 示例主播 发布了一篇专栏",
+      DYNAMIC_TYPE_MUSIC: "🎵 示例主播 发布了一首音乐",
+      DYNAMIC_TYPE_COMMON_SQUARE: "📌 示例主播 分享了一条动态",
+      DYNAMIC_TYPE_COMMON_VERTICAL: "📌 示例主播 分享了一条动态",
+      DYNAMIC_TYPE_LIVE: "🔴 示例主播 分享了直播间",
+      DYNAMIC_TYPE_MEDIALIST: "📚 示例主播 分享了一个收藏夹",
+      DYNAMIC_TYPE_COURSES_SEASON: "📚 示例主播 更新了一套课程",
+      DYNAMIC_TYPE_COURSES_BATCH: "📚 示例主播 更新了一批课程",
+      DYNAMIC_TYPE_AD: "📣 示例主播 分享了一则推广",
+      DYNAMIC_TYPE_APPLET: "🧩 示例主播 分享了一个小程序",
+      DYNAMIC_TYPE_SUBSCRIPTION: "🔔 示例主播 发布了一条预约",
+      DYNAMIC_TYPE_BANNER: "📰 示例主播 发布了一条公告",
+      DYNAMIC_TYPE_UGC_SEASON: "🎞️ 示例主播 更新了一个视频合集",
+      DYNAMIC_TYPE_SUBSCRIPTION_NEW: "🔔 示例主播 发布了一条预约",
+      DYNAMIC_TYPE_UPOWER_COMMON: "⚡ 示例主播 分享了一条充电动态",
+    };
+
+    for (const [type, heading] of Object.entries(expectedHeadings)) {
+      const message = formatDynamicMessage({
+        author: "示例主播",
+        title: "标题",
+        description: "正文",
+        containsDynamicUrl: false,
+        publishedAt: new Date("2030-08-01T19:00:00Z"),
+        link: "https://t.bilibili.com/123",
+        type,
+      }, "https://www.example.test");
+      expect(message).toContain(heading);
+    }
+  });
+
   test("offline notifications show only positive live statistic changes", () => {
     const increased = formatOfflineMessage(
       "主播",

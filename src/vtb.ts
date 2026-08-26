@@ -149,6 +149,8 @@ export type VtbDynamic = {
   publishedAt: Date;
   link: string;
   author: string;
+  type?: string;
+  isVideo?: boolean;
   /** Images attached to the dynamic itself, such as a draw post. */
   imageUrls?: string[];
 };
@@ -1883,7 +1885,7 @@ export const formatDynamicMessage = (dynamic: VtbDynamic, webUrl: string) => {
       : ["只留下了标题，点进原文看看吧。"];
 
   return [
-    `📮 ${dynamic.author} 发来一条新动态`,
+    formatDynamicHeading(dynamic),
     "",
     ...content,
     "",
@@ -2011,6 +2013,56 @@ const fetchJson = async (
       return payload;
     },
   );
+};
+
+const formatDynamicHeading = (dynamic: VtbDynamic) => {
+  if (dynamic.isVideo || dynamic.type === "DYNAMIC_TYPE_AV") {
+    return `🎬 ${dynamic.author} 发布了一条新视频`;
+  }
+
+  const presentation = dynamicTypePresentations[dynamic.type ?? ""];
+  return presentation
+    ? `${presentation.icon} ${dynamic.author} ${presentation.text}`
+    : `📮 ${dynamic.author} 发来一条新动态`;
+};
+
+const dynamicTypePresentations: Record<string, { icon: string; text: string }> = {
+  DYNAMIC_TYPE_NONE: { icon: "📮", text: "发来一条新动态" },
+  DYNAMIC_TYPE_FORWARD: { icon: "🔁", text: "转发了一条动态" },
+  DYNAMIC_TYPE_PGC: { icon: "📺", text: "更新了一集番剧" },
+  DYNAMIC_TYPE_COURSES: { icon: "📚", text: "发布了一条课程动态" },
+  DYNAMIC_TYPE_WORD: { icon: "📝", text: "发来一条文字动态" },
+  DYNAMIC_TYPE_DRAW: { icon: "🖼️", text: "分享了一组图片" },
+  DYNAMIC_TYPE_ARTICLE: { icon: "📖", text: "发布了一篇专栏" },
+  DYNAMIC_TYPE_MUSIC: { icon: "🎵", text: "发布了一首音乐" },
+  DYNAMIC_TYPE_COMMON_SQUARE: { icon: "📌", text: "分享了一条动态" },
+  DYNAMIC_TYPE_COMMON_VERTICAL: { icon: "📌", text: "分享了一条动态" },
+  DYNAMIC_TYPE_LIVE: { icon: "🔴", text: "分享了直播间" },
+  DYNAMIC_TYPE_MEDIALIST: { icon: "📚", text: "分享了一个收藏夹" },
+  DYNAMIC_TYPE_COURSES_SEASON: { icon: "📚", text: "更新了一套课程" },
+  DYNAMIC_TYPE_COURSES_BATCH: { icon: "📚", text: "更新了一批课程" },
+  DYNAMIC_TYPE_AD: { icon: "📣", text: "分享了一则推广" },
+  DYNAMIC_TYPE_APPLET: { icon: "🧩", text: "分享了一个小程序" },
+  DYNAMIC_TYPE_SUBSCRIPTION: { icon: "🔔", text: "发布了一条预约" },
+  DYNAMIC_TYPE_BANNER: { icon: "📰", text: "发布了一条公告" },
+  DYNAMIC_TYPE_UGC_SEASON: { icon: "🎞️", text: "更新了一个视频合集" },
+  DYNAMIC_TYPE_SUBSCRIPTION_NEW: { icon: "🔔", text: "发布了一条预约" },
+  DYNAMIC_TYPE_UPOWER_COMMON: { icon: "⚡", text: "分享了一条充电动态" },
+};
+
+const inferDynamicTypeFromMajor = (majorType: string | undefined) => {
+  if (!majorType) {
+    return undefined;
+  }
+  if (majorType === "MAJOR_TYPE_OPUS") {
+    return "DYNAMIC_TYPE_WORD";
+  }
+  if (majorType === "MAJOR_TYPE_ARCHIVE") {
+    return "DYNAMIC_TYPE_AV";
+  }
+  const suffix = majorType.replace(/^MAJOR_TYPE_/, "");
+  const inferred = `DYNAMIC_TYPE_${suffix}`;
+  return dynamicTypePresentations[inferred] ? inferred : undefined;
 };
 
 const isVtbRiskControlPayload = (payload: unknown) => {
@@ -2638,6 +2690,9 @@ const parseBilibiliDynamicItem = (
   // a VTB dynamic notification. Keep the structural check as a fallback for
   // responses where the top-level type is omitted by an upstream variant.
   const dynamicType = firstText(value.type)?.toUpperCase();
+  const majorType = firstText(major?.type)?.toUpperCase();
+  const resolvedDynamicType = dynamicType ?? inferDynamicTypeFromMajor(majorType) ??
+    (major?.archive != null ? "DYNAMIC_TYPE_AV" : undefined);
   if (dynamicType === "DYNAMIC_TYPE_LIVE_RCMD" || major?.live_rcmd != null) {
     return undefined;
   }
@@ -2656,7 +2711,16 @@ const parseBilibiliDynamicItem = (
     getTextAt(value.basic, "jump_url"),
     getTextAt(major?.opus, "jump_url"),
     getTextAt(major?.archive, "jump_url"),
+    getTextAt(major?.pgc, "jump_url"),
+    getTextAt(major?.courses, "jump_url"),
     getTextAt(major?.article, "jump_url"),
+    getTextAt(major?.music, "jump_url"),
+    getTextAt(major?.common, "jump_url"),
+    getTextAt(major?.live, "jump_url"),
+    getTextAt(major?.medialist, "jump_url"),
+    getTextAt(major?.ugc_season, "jump_url"),
+    getTextAt(major?.subscription, "jump_url"),
+    getTextAt(major?.subscription_new, "jump_url"),
   );
   const link = normalizeBilibiliDynamicLink(rawLink, id);
   const publishedAt = parseBilibiliDate(
@@ -2669,25 +2733,64 @@ const parseBilibiliDynamicItem = (
   const description = truncateDynamicText(cleanDynamicText([
     getDynamicDescriptionText(dynamic?.desc),
     getTextAt(major?.archive, "desc"),
+    getTextAt(major?.pgc, "desc"),
+    getTextAt(major?.courses, "desc"),
     getTextAt(major?.article, "desc"),
     getTextAt(major?.article, "summary"),
+    getTextAt(major?.music, "desc"),
+    getTextAt(major?.music, "description"),
     getTextAt(major?.opus, "summary", "text"),
     getTextAt(major?.common, "desc"),
+    getTextAt(major?.common, "desc1"),
+    getTextAt(major?.common, "desc2"),
     getTextAt(major?.live, "desc_first"),
     getTextAt(major?.live, "desc_second"),
+    getTextAt(major?.medialist, "desc"),
+    getTextAt(major?.medialist, "intro"),
+    getTextAt(major?.ugc_season, "desc"),
+    getTextAt(major?.subscription, "desc"),
+    getTextAt(major?.subscription_new, "desc"),
   ].filter(Boolean).join(" ")));
   const formattedLink = formatDynamicUrl(link, webUrl);
   const authorName = firstText(author?.name) || fallbackAuthor;
   const title = cleanBilibiliEmoteText(firstText(
     getTextAt(major?.archive, "title"),
+    getTextAt(major?.pgc, "title"),
+    getTextAt(major?.courses, "title"),
     getTextAt(major?.article, "title"),
+    getTextAt(major?.music, "title"),
     getTextAt(major?.opus, "title"),
     getTextAt(major?.common, "title"),
     getTextAt(major?.live, "title"),
+    getTextAt(major?.medialist, "title"),
+    getTextAt(major?.ugc_season, "title"),
+    getTextAt(major?.subscription, "title"),
+    getTextAt(major?.subscription_new, "title"),
     getTextAt(major?.opus, "summary", "text"),
     getDynamicDescriptionText(dynamic?.desc),
   ) || "B站动态") || "B站动态";
-  const imageUrls = extractDynamicImageUrls(major?.draw, major?.opus);
+  const imageUrls = extractDynamicImageUrls(
+    major?.archive,
+    major?.pgc,
+    major?.courses,
+    major?.draw,
+    major?.article,
+    major?.music,
+    major?.common,
+    major?.live,
+    major?.medialist,
+    major?.ugc_season,
+    major?.subscription,
+    major?.subscription_new,
+    major?.opus,
+  );
+  const isVideoDynamic = resolvedDynamicType === "DYNAMIC_TYPE_AV";
+  const videoThumbnailUrl = isVideoDynamic ? extractDynamicVideoThumbnailUrl(major?.archive) : undefined;
+  if (videoThumbnailUrl && !imageUrls.includes(videoThumbnailUrl)) {
+    // Video dynamics have a single preview image. Put it first so it takes
+    // the same priority as attached dynamic images over the author's avatar.
+    imageUrls.unshift(videoThumbnailUrl);
+  }
 
   return {
     dynamic: {
@@ -2697,6 +2800,8 @@ const parseBilibiliDynamicItem = (
       publishedAt,
       link,
       author: authorName,
+      ...(resolvedDynamicType ? { type: resolvedDynamicType } : {}),
+      ...(isVideoDynamic ? { isVideo: true } : {}),
       ...(imageUrls.length > 0 ? { imageUrls } : {}),
     },
     avatarUrl: cleanImageUrl(firstText(author?.face)),
@@ -2760,15 +2865,46 @@ const extractDynamicImageUrls = (...values: unknown[]) => {
     if (!isRecord(value)) {
       continue;
     }
-    const items = Array.isArray(value.items) ? value.items : Array.isArray(value.pics) ? value.pics : [];
+    const directUrl = cleanImageUrl(firstText(
+      value.cover,
+      value.pic,
+      value.thumbnail,
+      value.cover_url,
+      value.pic_url,
+    ));
+    if (directUrl && !urls.includes(directUrl)) {
+      urls.push(directUrl);
+    }
+    const items = Array.isArray(value.items)
+      ? value.items
+      : Array.isArray(value.pics)
+        ? value.pics
+        : Array.isArray(value.covers)
+          ? value.covers
+          : [];
     for (const item of items) {
-      const url = cleanImageUrl(isRecord(item) ? firstText(item.src, item.url, item.image_url) : undefined);
+      const url = cleanImageUrl(isRecord(item)
+        ? firstText(item.src, item.url, item.image_url)
+        : firstText(item));
       if (url && !urls.includes(url)) {
         urls.push(url);
       }
     }
   }
   return urls;
+};
+
+const extractDynamicVideoThumbnailUrl = (value: unknown) => {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return cleanImageUrl(firstText(
+    value.cover,
+    value.pic,
+    value.thumbnail,
+    value.cover_url,
+    value.pic_url,
+  ));
 };
 
 const normalizeBilibiliDynamicLink = (value: string | undefined, id: string | undefined) => {
