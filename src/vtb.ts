@@ -1832,7 +1832,7 @@ export const formatOfflineMessage = (
   const durationMinutes = Math.max(1, Math.floor((endedAt.getTime() - startedAt.getTime()) / 60_000));
   const guardThanks = guardNames.length === 0
     ? []
-    : ["感谢本场加入大航海的观众：", ...guardNames.map((guardName) => `- ${guardName}`), ""];
+    : ["特别感谢新加入大航海的观众：", ...guardNames.map((guardName) => `- ${guardName}`), ""];
   return [
     `🌙 ${name} 今天收工啦`,
     "",
