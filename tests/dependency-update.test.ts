@@ -42,6 +42,18 @@ describe("package dependency updates", () => {
     ]);
   });
 
+  test("can update an explicit package list without touching Prisma", () => {
+    expect(createBunUpdateArgs(["dayjs", "zod"])).toEqual([
+      "bun",
+      "update",
+      "--latest",
+      "--ignore-scripts",
+      "--no-progress",
+      "dayjs",
+      "zod",
+    ]);
+  });
+
   test("reports changed runtime and development dependency versions", () => {
     expect(findDependencyVersionChanges(
       {

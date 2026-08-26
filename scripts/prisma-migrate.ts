@@ -5,7 +5,7 @@ export const runPrismaMigrations = async () => {
   const config = await loadConfig();
   const databaseUrl = getDatabaseUrl(config);
 
-  const migrationProcess = Bun.spawn(["bunx", "--no-install", "prisma", "migrate", "deploy"], {
+  const migrationProcess = Bun.spawn([process.execPath, "node_modules/prisma/build/index.js", "migrate", "deploy"], {
     env: {
       ...Bun.env,
       DATABASE_URL: databaseUrl,

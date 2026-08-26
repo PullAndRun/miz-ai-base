@@ -5,6 +5,15 @@ const DEPENDENCY_SECTIONS = [
   "peerDependencies",
 ] as const;
 
+// Prisma is part of the database/runtime contract. Updating it automatically
+// can select a prerelease major before the generated client and migrations
+// have been reviewed together.
+const MANUALLY_MANAGED_DEPENDENCIES = new Set([
+  "prisma",
+  "@prisma/client",
+  "@prisma/adapter-pg",
+]);
+
 type DependencySection = typeof DEPENDENCY_SECTIONS[number];
 
 type PackageManifest = Partial<Record<DependencySection, Record<string, string>>>;
@@ -33,7 +42,7 @@ export const updatePackageDependencies = async (
   const packageJsonPath = options.packageJsonPath ?? "package.json";
   const before = await readPackageManifest(packageJsonPath);
   throwIfAborted(options.signal);
-  await (options.runUpdate ?? (() => runBunUpdate(options.proxyUrl, options.signal)))();
+  await (options.runUpdate ?? (() => runBunUpdate(options.proxyUrl, options.signal, packageJsonPath)))();
   throwIfAborted(options.signal);
   const after = await readPackageManifest(packageJsonPath);
   return { changes: findDependencyVersionChanges(before, after) };
@@ -63,9 +72,15 @@ const readPackageManifest = async (path: string): Promise<PackageManifest> => {
   return file.json() as Promise<PackageManifest>;
 };
 
-const runBunUpdate = async (proxyUrl = "", signal?: AbortSignal) => {
+const runBunUpdate = async (proxyUrl = "", signal?: AbortSignal, packageJsonPath = "package.json") => {
   throwIfAborted(signal);
-  const child = Bun.spawn(createBunUpdateArgs(), {
+  const manifest = await readPackageManifest(packageJsonPath);
+  const packageNames = DEPENDENCY_SECTIONS.flatMap((section) => Object.keys(manifest[section] ?? {}))
+    .filter((name) => !MANUALLY_MANAGED_DEPENDENCIES.has(name));
+  if (packageNames.length === 0) {
+    return;
+  }
+  const child = Bun.spawn(createBunUpdateArgs(packageNames), {
     cwd: process.cwd(),
     env: {
       ...process.env,
@@ -100,12 +115,13 @@ const runBunUpdate = async (proxyUrl = "", signal?: AbortSignal) => {
   }
 };
 
-export const createBunUpdateArgs = () => [
+export const createBunUpdateArgs = (packageNames: readonly string[] = []) => [
   "bun",
   "update",
   "--latest",
   "--ignore-scripts",
   "--no-progress",
+  ...packageNames,
 ];
 
 const formatProcessOutput = (output: string) =>
