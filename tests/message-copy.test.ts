@@ -74,8 +74,46 @@ describe("user-facing copy", () => {
     expect(message).toContain("「新视频」");
     expect(message).toContain("视频简介");
     expect(message).toContain("⏰ 08月01日 11:00 发布");
-    expect(message).toContain("🔗 完整动态 · https://www.bilibili.com/video/BV1test");
+    expect(message).toContain("🔗 完整视频 · https://www.bilibili.com/video/BV1test");
     expect(message).not.toContain("发来一条新动态");
+  });
+
+  test("dynamic links use type-specific labels", () => {
+    const expectedLabels: Record<string, string> = {
+      DYNAMIC_TYPE_FORWARD: "完整转发动态",
+      DYNAMIC_TYPE_PGC: "完整番剧",
+      DYNAMIC_TYPE_COURSES: "完整课程动态",
+      DYNAMIC_TYPE_WORD: "完整文字动态",
+      DYNAMIC_TYPE_DRAW: "完整图片",
+      DYNAMIC_TYPE_ARTICLE: "完整专栏",
+      DYNAMIC_TYPE_MUSIC: "完整音乐",
+      DYNAMIC_TYPE_COMMON_SQUARE: "完整动态",
+      DYNAMIC_TYPE_COMMON_VERTICAL: "完整动态",
+      DYNAMIC_TYPE_LIVE: "完整直播间",
+      DYNAMIC_TYPE_MEDIALIST: "完整收藏夹",
+      DYNAMIC_TYPE_COURSES_SEASON: "完整课程",
+      DYNAMIC_TYPE_COURSES_BATCH: "完整课程",
+      DYNAMIC_TYPE_AD: "完整推广",
+      DYNAMIC_TYPE_APPLET: "完整小程序",
+      DYNAMIC_TYPE_SUBSCRIPTION: "完整预约",
+      DYNAMIC_TYPE_BANNER: "完整公告",
+      DYNAMIC_TYPE_UGC_SEASON: "完整视频合集",
+      DYNAMIC_TYPE_SUBSCRIPTION_NEW: "完整预约",
+      DYNAMIC_TYPE_UPOWER_COMMON: "完整充电动态",
+    };
+
+    for (const [type, label] of Object.entries(expectedLabels)) {
+      const message = formatDynamicMessage({
+        author: "示例主播",
+        title: "标题",
+        description: "正文",
+        containsDynamicUrl: false,
+        publishedAt: new Date("2030-08-01T19:00:00Z"),
+        link: "https://t.bilibili.com/123",
+        type,
+      }, "https://www.example.test");
+      expect(message).toContain(`🔗 ${label} · https://www.example.test/opus/123`);
+    }
   });
 
   test("documented dynamic types use specialized headings", () => {

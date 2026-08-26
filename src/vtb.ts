@@ -1890,7 +1890,7 @@ export const formatDynamicMessage = (dynamic: VtbDynamic, webUrl: string) => {
     ...content,
     "",
     `⏰ ${dayjs(dynamic.publishedAt).format("MM月DD日 HH:mm")} 发布`,
-    ...(hasDynamicUrlInDescription ? [] : [`🔗 完整动态 · ${dynamicUrl}`]),
+    ...(hasDynamicUrlInDescription ? [] : [`🔗 ${formatDynamicLinkLabel(dynamic)} · ${dynamicUrl}`]),
   ].join("\n");
 };
 
@@ -2026,6 +2026,13 @@ const formatDynamicHeading = (dynamic: VtbDynamic) => {
     : `📮 ${dynamic.author} 发来一条新动态`;
 };
 
+const formatDynamicLinkLabel = (dynamic: VtbDynamic) => {
+  if (dynamic.isVideo || dynamic.type === "DYNAMIC_TYPE_AV") {
+    return "完整视频";
+  }
+  return dynamicTypeLinkLabels[dynamic.type ?? ""] ?? "完整动态";
+};
+
 const dynamicTypePresentations: Record<string, { icon: string; text: string }> = {
   DYNAMIC_TYPE_NONE: { icon: "📮", text: "发来一条新动态" },
   DYNAMIC_TYPE_FORWARD: { icon: "🔁", text: "转发了一条动态" },
@@ -2047,6 +2054,29 @@ const dynamicTypePresentations: Record<string, { icon: string; text: string }> =
   DYNAMIC_TYPE_UGC_SEASON: { icon: "🎞️", text: "更新了一个视频合集" },
   DYNAMIC_TYPE_SUBSCRIPTION_NEW: { icon: "🔔", text: "发布了一条预约" },
   DYNAMIC_TYPE_UPOWER_COMMON: { icon: "⚡", text: "分享了一条充电动态" },
+};
+
+const dynamicTypeLinkLabels: Record<string, string> = {
+  DYNAMIC_TYPE_FORWARD: "完整转发动态",
+  DYNAMIC_TYPE_PGC: "完整番剧",
+  DYNAMIC_TYPE_COURSES: "完整课程动态",
+  DYNAMIC_TYPE_WORD: "完整文字动态",
+  DYNAMIC_TYPE_DRAW: "完整图片",
+  DYNAMIC_TYPE_ARTICLE: "完整专栏",
+  DYNAMIC_TYPE_MUSIC: "完整音乐",
+  DYNAMIC_TYPE_COMMON_SQUARE: "完整动态",
+  DYNAMIC_TYPE_COMMON_VERTICAL: "完整动态",
+  DYNAMIC_TYPE_LIVE: "完整直播间",
+  DYNAMIC_TYPE_MEDIALIST: "完整收藏夹",
+  DYNAMIC_TYPE_COURSES_SEASON: "完整课程",
+  DYNAMIC_TYPE_COURSES_BATCH: "完整课程",
+  DYNAMIC_TYPE_AD: "完整推广",
+  DYNAMIC_TYPE_APPLET: "完整小程序",
+  DYNAMIC_TYPE_SUBSCRIPTION: "完整预约",
+  DYNAMIC_TYPE_BANNER: "完整公告",
+  DYNAMIC_TYPE_UGC_SEASON: "完整视频合集",
+  DYNAMIC_TYPE_SUBSCRIPTION_NEW: "完整预约",
+  DYNAMIC_TYPE_UPOWER_COMMON: "完整充电动态",
 };
 
 const inferDynamicTypeFromMajor = (majorType: string | undefined) => {
