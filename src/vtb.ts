@@ -2028,9 +2028,9 @@ const formatDynamicHeading = (dynamic: VtbDynamic) => {
 
 const formatDynamicLinkLabel = (dynamic: VtbDynamic) => {
   if (dynamic.isVideo || dynamic.type === "DYNAMIC_TYPE_AV") {
-    return "点开看看这个视频";
+    return "新视频走起";
   }
-  return dynamicTypeLinkLabels[dynamic.type ?? ""] ?? "点开看看这条动态";
+  return dynamicTypeLinkLabels[dynamic.type ?? ""] ?? "动态来围观";
 };
 
 const dynamicTypePresentations: Record<string, { icon: string; text: string }> = {
@@ -2057,26 +2057,26 @@ const dynamicTypePresentations: Record<string, { icon: string; text: string }> =
 };
 
 const dynamicTypeLinkLabels: Record<string, string> = {
-  DYNAMIC_TYPE_FORWARD: "点开看看这条转发",
-  DYNAMIC_TYPE_PGC: "点开追番",
-  DYNAMIC_TYPE_COURSES: "点开看看课程动态",
-  DYNAMIC_TYPE_WORD: "点开看看这条动态",
-  DYNAMIC_TYPE_DRAW: "点开看看这组图片",
-  DYNAMIC_TYPE_ARTICLE: "点开读读这篇专栏",
-  DYNAMIC_TYPE_MUSIC: "点开听听这首歌",
-  DYNAMIC_TYPE_COMMON_SQUARE: "点开看看这条动态",
-  DYNAMIC_TYPE_COMMON_VERTICAL: "点开看看这条动态",
-  DYNAMIC_TYPE_LIVE: "点开进直播间",
-  DYNAMIC_TYPE_MEDIALIST: "点开逛逛收藏夹",
-  DYNAMIC_TYPE_COURSES_SEASON: "点开看看这套课程",
-  DYNAMIC_TYPE_COURSES_BATCH: "点开看看这批课程",
-  DYNAMIC_TYPE_AD: "点开看看这则推广",
-  DYNAMIC_TYPE_APPLET: "点开试试这个小程序",
-  DYNAMIC_TYPE_SUBSCRIPTION: "点开看看这条预约",
-  DYNAMIC_TYPE_BANNER: "点开看看这则公告",
-  DYNAMIC_TYPE_UGC_SEASON: "点开看看这个视频合集",
-  DYNAMIC_TYPE_SUBSCRIPTION_NEW: "点开看看这条预约",
-  DYNAMIC_TYPE_UPOWER_COMMON: "点开看看这条充电动态",
+  DYNAMIC_TYPE_FORWARD: "转发来围观",
+  DYNAMIC_TYPE_PGC: "番剧追起来",
+  DYNAMIC_TYPE_COURSES: "课程有更新",
+  DYNAMIC_TYPE_WORD: "动态来围观",
+  DYNAMIC_TYPE_DRAW: "图片看这里",
+  DYNAMIC_TYPE_ARTICLE: "专栏读起来",
+  DYNAMIC_TYPE_MUSIC: "好歌听起来",
+  DYNAMIC_TYPE_COMMON_SQUARE: "动态来围观",
+  DYNAMIC_TYPE_COMMON_VERTICAL: "动态来围观",
+  DYNAMIC_TYPE_LIVE: "直播间走起",
+  DYNAMIC_TYPE_MEDIALIST: "收藏夹逛逛",
+  DYNAMIC_TYPE_COURSES_SEASON: "课程上新啦",
+  DYNAMIC_TYPE_COURSES_BATCH: "课程上新啦",
+  DYNAMIC_TYPE_AD: "推广看这里",
+  DYNAMIC_TYPE_APPLET: "小程序试试",
+  DYNAMIC_TYPE_SUBSCRIPTION: "预约别错过",
+  DYNAMIC_TYPE_BANNER: "公告看这里",
+  DYNAMIC_TYPE_UGC_SEASON: "合集刷起来",
+  DYNAMIC_TYPE_SUBSCRIPTION_NEW: "预约别错过",
+  DYNAMIC_TYPE_UPOWER_COMMON: "充电区逛逛",
 };
 
 const inferDynamicTypeFromMajor = (majorType: string | undefined) => {
