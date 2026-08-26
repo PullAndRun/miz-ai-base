@@ -2028,9 +2028,9 @@ const formatDynamicHeading = (dynamic: VtbDynamic) => {
 
 const formatDynamicLinkLabel = (dynamic: VtbDynamic) => {
   if (dynamic.isVideo || dynamic.type === "DYNAMIC_TYPE_AV") {
-    return "新视频走起";
+    return "新视频开冲";
   }
-  return dynamicTypeLinkLabels[dynamic.type ?? ""] ?? "动态来围观";
+  return dynamicTypeLinkLabels[dynamic.type ?? ""] ?? "速来围观";
 };
 
 const dynamicTypePresentations: Record<string, { icon: string; text: string }> = {
@@ -2057,26 +2057,26 @@ const dynamicTypePresentations: Record<string, { icon: string; text: string }> =
 };
 
 const dynamicTypeLinkLabels: Record<string, string> = {
-  DYNAMIC_TYPE_FORWARD: "转发来围观",
-  DYNAMIC_TYPE_PGC: "番剧追起来",
-  DYNAMIC_TYPE_COURSES: "课程有更新",
-  DYNAMIC_TYPE_WORD: "动态来围观",
-  DYNAMIC_TYPE_DRAW: "图片看这里",
-  DYNAMIC_TYPE_ARTICLE: "专栏读起来",
-  DYNAMIC_TYPE_MUSIC: "好歌听起来",
-  DYNAMIC_TYPE_COMMON_SQUARE: "动态来围观",
-  DYNAMIC_TYPE_COMMON_VERTICAL: "动态来围观",
-  DYNAMIC_TYPE_LIVE: "直播间走起",
-  DYNAMIC_TYPE_MEDIALIST: "收藏夹逛逛",
-  DYNAMIC_TYPE_COURSES_SEASON: "课程上新啦",
-  DYNAMIC_TYPE_COURSES_BATCH: "课程上新啦",
-  DYNAMIC_TYPE_AD: "推广看这里",
-  DYNAMIC_TYPE_APPLET: "小程序试试",
+  DYNAMIC_TYPE_FORWARD: "转发有看点",
+  DYNAMIC_TYPE_PGC: "番剧开追",
+  DYNAMIC_TYPE_COURSES: "新课请查收",
+  DYNAMIC_TYPE_WORD: "速来围观",
+  DYNAMIC_TYPE_DRAW: "美图请查收",
+  DYNAMIC_TYPE_ARTICLE: "新文请查收",
+  DYNAMIC_TYPE_MUSIC: "新歌请查收",
+  DYNAMIC_TYPE_COMMON_SQUARE: "速来围观",
+  DYNAMIC_TYPE_COMMON_VERTICAL: "速来围观",
+  DYNAMIC_TYPE_LIVE: "直播间集合",
+  DYNAMIC_TYPE_MEDIALIST: "收藏夹开逛",
+  DYNAMIC_TYPE_COURSES_SEASON: "新课请查收",
+  DYNAMIC_TYPE_COURSES_BATCH: "新课请查收",
+  DYNAMIC_TYPE_AD: "安利请查收",
+  DYNAMIC_TYPE_APPLET: "来玩小程序",
   DYNAMIC_TYPE_SUBSCRIPTION: "预约别错过",
-  DYNAMIC_TYPE_BANNER: "公告看这里",
+  DYNAMIC_TYPE_BANNER: "公告请查收",
   DYNAMIC_TYPE_UGC_SEASON: "合集刷起来",
   DYNAMIC_TYPE_SUBSCRIPTION_NEW: "预约别错过",
-  DYNAMIC_TYPE_UPOWER_COMMON: "充电区逛逛",
+  DYNAMIC_TYPE_UPOWER_COMMON: "解锁充电区",
 };
 
 const inferDynamicTypeFromMajor = (majorType: string | undefined) => {
