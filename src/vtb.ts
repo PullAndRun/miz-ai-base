@@ -2691,8 +2691,6 @@ const parseBilibiliDynamicItem = (
   // responses where the top-level type is omitted by an upstream variant.
   const dynamicType = firstText(value.type)?.toUpperCase();
   const majorType = firstText(major?.type)?.toUpperCase();
-  const resolvedDynamicType = dynamicType ?? inferDynamicTypeFromMajor(majorType) ??
-    (major?.archive != null ? "DYNAMIC_TYPE_AV" : undefined);
   if (dynamicType === "DYNAMIC_TYPE_LIVE_RCMD" || major?.live_rcmd != null) {
     return undefined;
   }
@@ -2784,6 +2782,11 @@ const parseBilibiliDynamicItem = (
     major?.subscription_new,
     major?.opus,
   );
+  const resolvedDynamicType = dynamicType === "DYNAMIC_TYPE_DRAW" &&
+    extractDynamicImageUrls(major?.draw).length === 0
+    ? "DYNAMIC_TYPE_WORD"
+    : dynamicType ?? inferDynamicTypeFromMajor(majorType) ??
+      (major?.archive != null ? "DYNAMIC_TYPE_AV" : undefined);
   const isVideoDynamic = resolvedDynamicType === "DYNAMIC_TYPE_AV";
   const videoThumbnailUrl = isVideoDynamic ? extractDynamicVideoThumbnailUrl(major?.archive) : undefined;
   if (videoThumbnailUrl && !imageUrls.includes(videoThumbnailUrl)) {

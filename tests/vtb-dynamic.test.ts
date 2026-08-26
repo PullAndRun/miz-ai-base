@@ -172,6 +172,27 @@ describe("Bilibili dynamic response parsing", () => {
     });
   });
 
+  test("treats a draw type without images as a plain text dynamic", () => {
+    const feed = parseBilibiliDynamicFeed([
+      {
+        id_str: "text-100",
+        type: "DYNAMIC_TYPE_DRAW",
+        modules: {
+          module_author: { name: "主播", pub_ts: 1_753_000_000 },
+          module_dynamic: {
+            desc: { text: "只有文字，没有配图" },
+            major: { type: "MAJOR_TYPE_DRAW", draw: { items: [] } },
+          },
+        },
+      },
+    ], "主播", "https://www.bilibili.com");
+
+    expect(feed.items[0]).toMatchObject({
+      type: "DYNAMIC_TYPE_WORD",
+    });
+    expect(feed.items[0].imageUrls).toBeUndefined();
+  });
+
   test("uses the live recommendation card shape when type is omitted", () => {
     expect(parseBilibiliDynamicFeed([
       {
