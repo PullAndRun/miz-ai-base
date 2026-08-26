@@ -12,8 +12,8 @@
     "dependencies:update": "bun run scripts/update-dependencies.ts",
     "test": "bun test",
     "typecheck": "bun run prisma:generate && tsc --noEmit",
-    "prisma:generate": "prisma generate",
-    "prisma:push": "prisma db push",
+    "prisma:generate": "bunx --no-install prisma generate",
+    "prisma:push": "bunx --no-install prisma db push",
     "prisma:migrate": "bun run scripts/prisma-migrate.ts"
   },
   "dependencies": {
