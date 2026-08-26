@@ -2017,66 +2017,66 @@ const fetchJson = async (
 
 const formatDynamicHeading = (dynamic: VtbDynamic) => {
   if (dynamic.isVideo || dynamic.type === "DYNAMIC_TYPE_AV") {
-    return `🎬 ${dynamic.author} 发布了一条新视频`;
+    return `🎬 ${dynamic.author} 投稿新视频啦`;
   }
 
   const presentation = dynamicTypePresentations[dynamic.type ?? ""];
   return presentation
     ? `${presentation.icon} ${dynamic.author} ${presentation.text}`
-    : `📮 ${dynamic.author} 发来一条新动态`;
+    : `📮 ${dynamic.author} 发动态啦`;
 };
 
 const formatDynamicLinkLabel = (dynamic: VtbDynamic) => {
   if (dynamic.isVideo || dynamic.type === "DYNAMIC_TYPE_AV") {
-    return "完整视频";
+    return "点开看看这个视频";
   }
-  return dynamicTypeLinkLabels[dynamic.type ?? ""] ?? "完整动态";
+  return dynamicTypeLinkLabels[dynamic.type ?? ""] ?? "点开看看这条动态";
 };
 
 const dynamicTypePresentations: Record<string, { icon: string; text: string }> = {
-  DYNAMIC_TYPE_NONE: { icon: "📮", text: "发来一条新动态" },
-  DYNAMIC_TYPE_FORWARD: { icon: "🔁", text: "转发了一条动态" },
-  DYNAMIC_TYPE_PGC: { icon: "📺", text: "更新了一集番剧" },
-  DYNAMIC_TYPE_COURSES: { icon: "📚", text: "发布了一条课程动态" },
-  DYNAMIC_TYPE_DRAW: { icon: "🖼️", text: "分享了一组图片" },
-  DYNAMIC_TYPE_ARTICLE: { icon: "📖", text: "发布了一篇专栏" },
-  DYNAMIC_TYPE_MUSIC: { icon: "🎵", text: "发布了一首音乐" },
-  DYNAMIC_TYPE_COMMON_SQUARE: { icon: "📌", text: "分享了一条动态" },
-  DYNAMIC_TYPE_COMMON_VERTICAL: { icon: "📌", text: "分享了一条动态" },
+  DYNAMIC_TYPE_NONE: { icon: "📮", text: "发动态啦" },
+  DYNAMIC_TYPE_FORWARD: { icon: "🔁", text: "转发动态啦" },
+  DYNAMIC_TYPE_PGC: { icon: "📺", text: "番剧更新啦" },
+  DYNAMIC_TYPE_COURSES: { icon: "📚", text: "课程动态更新啦" },
+  DYNAMIC_TYPE_DRAW: { icon: "🖼️", text: "晒了一组图片" },
+  DYNAMIC_TYPE_ARTICLE: { icon: "📖", text: "专栏更新啦" },
+  DYNAMIC_TYPE_MUSIC: { icon: "🎵", text: "发了一首歌" },
+  DYNAMIC_TYPE_COMMON_SQUARE: { icon: "📌", text: "发了一条动态" },
+  DYNAMIC_TYPE_COMMON_VERTICAL: { icon: "📌", text: "发了一条动态" },
   DYNAMIC_TYPE_LIVE: { icon: "🔴", text: "分享了直播间" },
   DYNAMIC_TYPE_MEDIALIST: { icon: "📚", text: "分享了一个收藏夹" },
-  DYNAMIC_TYPE_COURSES_SEASON: { icon: "📚", text: "更新了一套课程" },
-  DYNAMIC_TYPE_COURSES_BATCH: { icon: "📚", text: "更新了一批课程" },
-  DYNAMIC_TYPE_AD: { icon: "📣", text: "分享了一则推广" },
-  DYNAMIC_TYPE_APPLET: { icon: "🧩", text: "分享了一个小程序" },
-  DYNAMIC_TYPE_SUBSCRIPTION: { icon: "🔔", text: "发布了一条预约" },
-  DYNAMIC_TYPE_BANNER: { icon: "📰", text: "发布了一条公告" },
-  DYNAMIC_TYPE_UGC_SEASON: { icon: "🎞️", text: "更新了一个视频合集" },
-  DYNAMIC_TYPE_SUBSCRIPTION_NEW: { icon: "🔔", text: "发布了一条预约" },
-  DYNAMIC_TYPE_UPOWER_COMMON: { icon: "⚡", text: "分享了一条充电动态" },
+  DYNAMIC_TYPE_COURSES_SEASON: { icon: "📚", text: "课程上新啦" },
+  DYNAMIC_TYPE_COURSES_BATCH: { icon: "📚", text: "一批课程上新啦" },
+  DYNAMIC_TYPE_AD: { icon: "📣", text: "推广内容来啦" },
+  DYNAMIC_TYPE_APPLET: { icon: "🧩", text: "安利了个小程序" },
+  DYNAMIC_TYPE_SUBSCRIPTION: { icon: "🔔", text: "预约提醒来啦" },
+  DYNAMIC_TYPE_BANNER: { icon: "📰", text: "发了条公告" },
+  DYNAMIC_TYPE_UGC_SEASON: { icon: "🎞️", text: "视频合集更新啦" },
+  DYNAMIC_TYPE_SUBSCRIPTION_NEW: { icon: "🔔", text: "预约提醒来啦" },
+  DYNAMIC_TYPE_UPOWER_COMMON: { icon: "⚡", text: "充电动态来啦" },
 };
 
 const dynamicTypeLinkLabels: Record<string, string> = {
-  DYNAMIC_TYPE_FORWARD: "完整转发动态",
-  DYNAMIC_TYPE_PGC: "完整番剧",
-  DYNAMIC_TYPE_COURSES: "完整课程动态",
-  DYNAMIC_TYPE_WORD: "完整文字动态",
-  DYNAMIC_TYPE_DRAW: "完整图片",
-  DYNAMIC_TYPE_ARTICLE: "完整专栏",
-  DYNAMIC_TYPE_MUSIC: "完整音乐",
-  DYNAMIC_TYPE_COMMON_SQUARE: "完整动态",
-  DYNAMIC_TYPE_COMMON_VERTICAL: "完整动态",
-  DYNAMIC_TYPE_LIVE: "完整直播间",
-  DYNAMIC_TYPE_MEDIALIST: "完整收藏夹",
-  DYNAMIC_TYPE_COURSES_SEASON: "完整课程",
-  DYNAMIC_TYPE_COURSES_BATCH: "完整课程",
-  DYNAMIC_TYPE_AD: "完整推广",
-  DYNAMIC_TYPE_APPLET: "完整小程序",
-  DYNAMIC_TYPE_SUBSCRIPTION: "完整预约",
-  DYNAMIC_TYPE_BANNER: "完整公告",
-  DYNAMIC_TYPE_UGC_SEASON: "完整视频合集",
-  DYNAMIC_TYPE_SUBSCRIPTION_NEW: "完整预约",
-  DYNAMIC_TYPE_UPOWER_COMMON: "完整充电动态",
+  DYNAMIC_TYPE_FORWARD: "点开看看这条转发",
+  DYNAMIC_TYPE_PGC: "点开追番",
+  DYNAMIC_TYPE_COURSES: "点开看看课程动态",
+  DYNAMIC_TYPE_WORD: "点开看看这条动态",
+  DYNAMIC_TYPE_DRAW: "点开看看这组图片",
+  DYNAMIC_TYPE_ARTICLE: "点开读读这篇专栏",
+  DYNAMIC_TYPE_MUSIC: "点开听听这首歌",
+  DYNAMIC_TYPE_COMMON_SQUARE: "点开看看这条动态",
+  DYNAMIC_TYPE_COMMON_VERTICAL: "点开看看这条动态",
+  DYNAMIC_TYPE_LIVE: "点开进直播间",
+  DYNAMIC_TYPE_MEDIALIST: "点开逛逛收藏夹",
+  DYNAMIC_TYPE_COURSES_SEASON: "点开看看这套课程",
+  DYNAMIC_TYPE_COURSES_BATCH: "点开看看这批课程",
+  DYNAMIC_TYPE_AD: "点开看看这则推广",
+  DYNAMIC_TYPE_APPLET: "点开试试这个小程序",
+  DYNAMIC_TYPE_SUBSCRIPTION: "点开看看这条预约",
+  DYNAMIC_TYPE_BANNER: "点开看看这则公告",
+  DYNAMIC_TYPE_UGC_SEASON: "点开看看这个视频合集",
+  DYNAMIC_TYPE_SUBSCRIPTION_NEW: "点开看看这条预约",
+  DYNAMIC_TYPE_UPOWER_COMMON: "点开看看这条充电动态",
 };
 
 const inferDynamicTypeFromMajor = (majorType: string | undefined) => {

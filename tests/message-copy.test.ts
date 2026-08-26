@@ -54,8 +54,9 @@ describe("user-facing copy", () => {
     expect(offline).toContain("这次和大家一起度过了 1 小时");
     expect(offline).toContain("充好电，我们下次见");
     expect(offline).not.toContain("🔗");
-    expect(dynamic).toContain("📮 示例主播 发来一条新动态");
+    expect(dynamic).toContain("📮 示例主播 发动态啦");
     expect(dynamic).toContain("「新的安排」");
+    expect(dynamic).toContain("🔗 点开看看这条动态 · https://www.example.test/opus/123");
     expect(`${offline}\n${dynamic}`).not.toMatch(/下播时间：|本场新增粉丝：|发布时间：|查看原文：|小作文|TA/);
   });
 
@@ -70,36 +71,36 @@ describe("user-facing copy", () => {
       isVideo: true,
     }, "https://www.example.test");
 
-    expect(message).toContain("🎬 示例主播 发布了一条新视频");
+    expect(message).toContain("🎬 示例主播 投稿新视频啦");
     expect(message).toContain("「新视频」");
     expect(message).toContain("视频简介");
     expect(message).toContain("⏰ 08月01日 11:00 发布");
-    expect(message).toContain("🔗 完整视频 · https://www.bilibili.com/video/BV1test");
-    expect(message).not.toContain("发来一条新动态");
+    expect(message).toContain("🔗 点开看看这个视频 · https://www.bilibili.com/video/BV1test");
+    expect(message).not.toContain("发动态啦");
   });
 
-  test("dynamic links use type-specific labels", () => {
+  test("dynamic links use conversational type-specific labels", () => {
     const expectedLabels: Record<string, string> = {
-      DYNAMIC_TYPE_FORWARD: "完整转发动态",
-      DYNAMIC_TYPE_PGC: "完整番剧",
-      DYNAMIC_TYPE_COURSES: "完整课程动态",
-      DYNAMIC_TYPE_WORD: "完整文字动态",
-      DYNAMIC_TYPE_DRAW: "完整图片",
-      DYNAMIC_TYPE_ARTICLE: "完整专栏",
-      DYNAMIC_TYPE_MUSIC: "完整音乐",
-      DYNAMIC_TYPE_COMMON_SQUARE: "完整动态",
-      DYNAMIC_TYPE_COMMON_VERTICAL: "完整动态",
-      DYNAMIC_TYPE_LIVE: "完整直播间",
-      DYNAMIC_TYPE_MEDIALIST: "完整收藏夹",
-      DYNAMIC_TYPE_COURSES_SEASON: "完整课程",
-      DYNAMIC_TYPE_COURSES_BATCH: "完整课程",
-      DYNAMIC_TYPE_AD: "完整推广",
-      DYNAMIC_TYPE_APPLET: "完整小程序",
-      DYNAMIC_TYPE_SUBSCRIPTION: "完整预约",
-      DYNAMIC_TYPE_BANNER: "完整公告",
-      DYNAMIC_TYPE_UGC_SEASON: "完整视频合集",
-      DYNAMIC_TYPE_SUBSCRIPTION_NEW: "完整预约",
-      DYNAMIC_TYPE_UPOWER_COMMON: "完整充电动态",
+      DYNAMIC_TYPE_FORWARD: "点开看看这条转发",
+      DYNAMIC_TYPE_PGC: "点开追番",
+      DYNAMIC_TYPE_COURSES: "点开看看课程动态",
+      DYNAMIC_TYPE_WORD: "点开看看这条动态",
+      DYNAMIC_TYPE_DRAW: "点开看看这组图片",
+      DYNAMIC_TYPE_ARTICLE: "点开读读这篇专栏",
+      DYNAMIC_TYPE_MUSIC: "点开听听这首歌",
+      DYNAMIC_TYPE_COMMON_SQUARE: "点开看看这条动态",
+      DYNAMIC_TYPE_COMMON_VERTICAL: "点开看看这条动态",
+      DYNAMIC_TYPE_LIVE: "点开进直播间",
+      DYNAMIC_TYPE_MEDIALIST: "点开逛逛收藏夹",
+      DYNAMIC_TYPE_COURSES_SEASON: "点开看看这套课程",
+      DYNAMIC_TYPE_COURSES_BATCH: "点开看看这批课程",
+      DYNAMIC_TYPE_AD: "点开看看这则推广",
+      DYNAMIC_TYPE_APPLET: "点开试试这个小程序",
+      DYNAMIC_TYPE_SUBSCRIPTION: "点开看看这条预约",
+      DYNAMIC_TYPE_BANNER: "点开看看这则公告",
+      DYNAMIC_TYPE_UGC_SEASON: "点开看看这个视频合集",
+      DYNAMIC_TYPE_SUBSCRIPTION_NEW: "点开看看这条预约",
+      DYNAMIC_TYPE_UPOWER_COMMON: "点开看看这条充电动态",
     };
 
     for (const [type, label] of Object.entries(expectedLabels)) {
@@ -118,26 +119,26 @@ describe("user-facing copy", () => {
 
   test("documented dynamic types use specialized headings", () => {
     const expectedHeadings: Record<string, string> = {
-      DYNAMIC_TYPE_FORWARD: "🔁 示例主播 转发了一条动态",
-      DYNAMIC_TYPE_PGC: "📺 示例主播 更新了一集番剧",
-      DYNAMIC_TYPE_COURSES: "📚 示例主播 发布了一条课程动态",
-      DYNAMIC_TYPE_WORD: "📮 示例主播 发来一条新动态",
-      DYNAMIC_TYPE_DRAW: "🖼️ 示例主播 分享了一组图片",
-      DYNAMIC_TYPE_ARTICLE: "📖 示例主播 发布了一篇专栏",
-      DYNAMIC_TYPE_MUSIC: "🎵 示例主播 发布了一首音乐",
-      DYNAMIC_TYPE_COMMON_SQUARE: "📌 示例主播 分享了一条动态",
-      DYNAMIC_TYPE_COMMON_VERTICAL: "📌 示例主播 分享了一条动态",
+      DYNAMIC_TYPE_FORWARD: "🔁 示例主播 转发动态啦",
+      DYNAMIC_TYPE_PGC: "📺 示例主播 番剧更新啦",
+      DYNAMIC_TYPE_COURSES: "📚 示例主播 课程动态更新啦",
+      DYNAMIC_TYPE_WORD: "📮 示例主播 发动态啦",
+      DYNAMIC_TYPE_DRAW: "🖼️ 示例主播 晒了一组图片",
+      DYNAMIC_TYPE_ARTICLE: "📖 示例主播 专栏更新啦",
+      DYNAMIC_TYPE_MUSIC: "🎵 示例主播 发了一首歌",
+      DYNAMIC_TYPE_COMMON_SQUARE: "📌 示例主播 发了一条动态",
+      DYNAMIC_TYPE_COMMON_VERTICAL: "📌 示例主播 发了一条动态",
       DYNAMIC_TYPE_LIVE: "🔴 示例主播 分享了直播间",
       DYNAMIC_TYPE_MEDIALIST: "📚 示例主播 分享了一个收藏夹",
-      DYNAMIC_TYPE_COURSES_SEASON: "📚 示例主播 更新了一套课程",
-      DYNAMIC_TYPE_COURSES_BATCH: "📚 示例主播 更新了一批课程",
-      DYNAMIC_TYPE_AD: "📣 示例主播 分享了一则推广",
-      DYNAMIC_TYPE_APPLET: "🧩 示例主播 分享了一个小程序",
-      DYNAMIC_TYPE_SUBSCRIPTION: "🔔 示例主播 发布了一条预约",
-      DYNAMIC_TYPE_BANNER: "📰 示例主播 发布了一条公告",
-      DYNAMIC_TYPE_UGC_SEASON: "🎞️ 示例主播 更新了一个视频合集",
-      DYNAMIC_TYPE_SUBSCRIPTION_NEW: "🔔 示例主播 发布了一条预约",
-      DYNAMIC_TYPE_UPOWER_COMMON: "⚡ 示例主播 分享了一条充电动态",
+      DYNAMIC_TYPE_COURSES_SEASON: "📚 示例主播 课程上新啦",
+      DYNAMIC_TYPE_COURSES_BATCH: "📚 示例主播 一批课程上新啦",
+      DYNAMIC_TYPE_AD: "📣 示例主播 推广内容来啦",
+      DYNAMIC_TYPE_APPLET: "🧩 示例主播 安利了个小程序",
+      DYNAMIC_TYPE_SUBSCRIPTION: "🔔 示例主播 预约提醒来啦",
+      DYNAMIC_TYPE_BANNER: "📰 示例主播 发了条公告",
+      DYNAMIC_TYPE_UGC_SEASON: "🎞️ 示例主播 视频合集更新啦",
+      DYNAMIC_TYPE_SUBSCRIPTION_NEW: "🔔 示例主播 预约提醒来啦",
+      DYNAMIC_TYPE_UPOWER_COMMON: "⚡ 示例主播 充电动态来啦",
     };
 
     for (const [type, heading] of Object.entries(expectedHeadings)) {
