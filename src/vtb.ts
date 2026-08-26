@@ -2031,7 +2031,6 @@ const dynamicTypePresentations: Record<string, { icon: string; text: string }> =
   DYNAMIC_TYPE_FORWARD: { icon: "🔁", text: "转发了一条动态" },
   DYNAMIC_TYPE_PGC: { icon: "📺", text: "更新了一集番剧" },
   DYNAMIC_TYPE_COURSES: { icon: "📚", text: "发布了一条课程动态" },
-  DYNAMIC_TYPE_WORD: { icon: "📝", text: "发来一条文字动态" },
   DYNAMIC_TYPE_DRAW: { icon: "🖼️", text: "分享了一组图片" },
   DYNAMIC_TYPE_ARTICLE: { icon: "📖", text: "发布了一篇专栏" },
   DYNAMIC_TYPE_MUSIC: { icon: "🎵", text: "发布了一首音乐" },

@@ -83,7 +83,7 @@ describe("user-facing copy", () => {
       DYNAMIC_TYPE_FORWARD: "🔁 示例主播 转发了一条动态",
       DYNAMIC_TYPE_PGC: "📺 示例主播 更新了一集番剧",
       DYNAMIC_TYPE_COURSES: "📚 示例主播 发布了一条课程动态",
-      DYNAMIC_TYPE_WORD: "📝 示例主播 发来一条文字动态",
+      DYNAMIC_TYPE_WORD: "📮 示例主播 发来一条新动态",
       DYNAMIC_TYPE_DRAW: "🖼️ 示例主播 分享了一组图片",
       DYNAMIC_TYPE_ARTICLE: "📖 示例主播 发布了一篇专栏",
       DYNAMIC_TYPE_MUSIC: "🎵 示例主播 发布了一首音乐",
