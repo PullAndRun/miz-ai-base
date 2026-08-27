@@ -56,7 +56,7 @@ describe("user-facing copy", () => {
     expect(offline).not.toContain("🔗");
     expect(dynamic).toContain("📮 示例主播 发动态啦");
     expect(dynamic).toContain("「新的安排」");
-    expect(dynamic).toContain("🔗 速来围观 · https://www.example.test/opus/123");
+    expect(dynamic).toContain("🔗 https://www.example.test/opus/123");
     expect(`${offline}\n${dynamic}`).not.toMatch(/下播时间：|本场新增粉丝：|发布时间：|查看原文：|小作文|TA/);
   });
 
@@ -75,37 +75,35 @@ describe("user-facing copy", () => {
     expect(message).toContain("「新视频」");
     expect(message).toContain("视频简介");
     expect(message).toContain("⏰ 08月01日 11:00 发布");
-    expect(message).toContain("🔗 新视频开冲 · https://www.bilibili.com/video/BV1test");
+    expect(message).toContain("🔗 https://www.bilibili.com/video/BV1test");
     expect(message).not.toContain("发动态啦");
   });
 
-  test("dynamic links use short conversational type-specific labels", () => {
-    const expectedLabels: Record<string, string> = {
-      DYNAMIC_TYPE_FORWARD: "转发有看点",
-      DYNAMIC_TYPE_PGC: "番剧开追",
-      DYNAMIC_TYPE_COURSES: "新课请查收",
-      DYNAMIC_TYPE_WORD: "速来围观",
-      DYNAMIC_TYPE_DRAW: "美图请查收",
-      DYNAMIC_TYPE_ARTICLE: "新文请查收",
-      DYNAMIC_TYPE_MUSIC: "新歌请查收",
-      DYNAMIC_TYPE_COMMON_SQUARE: "速来围观",
-      DYNAMIC_TYPE_COMMON_VERTICAL: "速来围观",
-      DYNAMIC_TYPE_LIVE: "直播间集合",
-      DYNAMIC_TYPE_MEDIALIST: "收藏夹开逛",
-      DYNAMIC_TYPE_COURSES_SEASON: "新课请查收",
-      DYNAMIC_TYPE_COURSES_BATCH: "新课请查收",
-      DYNAMIC_TYPE_AD: "安利请查收",
-      DYNAMIC_TYPE_APPLET: "来玩小程序",
-      DYNAMIC_TYPE_SUBSCRIPTION: "预约别错过",
-      DYNAMIC_TYPE_BANNER: "公告请查收",
-      DYNAMIC_TYPE_UGC_SEASON: "合集刷起来",
-      DYNAMIC_TYPE_SUBSCRIPTION_NEW: "预约别错过",
-      DYNAMIC_TYPE_UPOWER_COMMON: "解锁充电区",
-    };
+  test("dynamic links show the URL directly for every dynamic type", () => {
+    const dynamicTypes = [
+      "DYNAMIC_TYPE_FORWARD",
+      "DYNAMIC_TYPE_PGC",
+      "DYNAMIC_TYPE_COURSES",
+      "DYNAMIC_TYPE_WORD",
+      "DYNAMIC_TYPE_DRAW",
+      "DYNAMIC_TYPE_ARTICLE",
+      "DYNAMIC_TYPE_MUSIC",
+      "DYNAMIC_TYPE_COMMON_SQUARE",
+      "DYNAMIC_TYPE_COMMON_VERTICAL",
+      "DYNAMIC_TYPE_LIVE",
+      "DYNAMIC_TYPE_MEDIALIST",
+      "DYNAMIC_TYPE_COURSES_SEASON",
+      "DYNAMIC_TYPE_COURSES_BATCH",
+      "DYNAMIC_TYPE_AD",
+      "DYNAMIC_TYPE_APPLET",
+      "DYNAMIC_TYPE_SUBSCRIPTION",
+      "DYNAMIC_TYPE_BANNER",
+      "DYNAMIC_TYPE_UGC_SEASON",
+      "DYNAMIC_TYPE_SUBSCRIPTION_NEW",
+      "DYNAMIC_TYPE_UPOWER_COMMON",
+    ];
 
-    for (const [type, label] of Object.entries(expectedLabels)) {
-      expect(Array.from(label).length).toBeGreaterThanOrEqual(4);
-      expect(Array.from(label).length).toBeLessThanOrEqual(5);
+    for (const type of dynamicTypes) {
       const message = formatDynamicMessage({
         author: "示例主播",
         title: "标题",
@@ -115,7 +113,8 @@ describe("user-facing copy", () => {
         link: "https://t.bilibili.com/123",
         type,
       }, "https://www.example.test");
-      expect(message).toContain(`🔗 ${label} · https://www.example.test/opus/123`);
+      expect(message).toContain("🔗 https://www.example.test/opus/123");
+      expect(message).not.toContain(" · https://www.example.test/opus/123");
     }
   });
 

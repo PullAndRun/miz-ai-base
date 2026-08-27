@@ -1890,7 +1890,7 @@ export const formatDynamicMessage = (dynamic: VtbDynamic, webUrl: string) => {
     ...content,
     "",
     `⏰ ${dayjs(dynamic.publishedAt).format("MM月DD日 HH:mm")} 发布`,
-    ...(hasDynamicUrlInDescription ? [] : [`🔗 ${formatDynamicLinkLabel(dynamic)} · ${dynamicUrl}`]),
+    ...(hasDynamicUrlInDescription ? [] : [`🔗 ${dynamicUrl}`]),
   ].join("\n");
 };
 
@@ -2026,13 +2026,6 @@ const formatDynamicHeading = (dynamic: VtbDynamic) => {
     : `📮 ${dynamic.author} 发动态啦`;
 };
 
-const formatDynamicLinkLabel = (dynamic: VtbDynamic) => {
-  if (dynamic.isVideo || dynamic.type === "DYNAMIC_TYPE_AV") {
-    return "新视频开冲";
-  }
-  return dynamicTypeLinkLabels[dynamic.type ?? ""] ?? "速来围观";
-};
-
 const dynamicTypePresentations: Record<string, { icon: string; text: string }> = {
   DYNAMIC_TYPE_NONE: { icon: "📮", text: "发动态啦" },
   DYNAMIC_TYPE_FORWARD: { icon: "🔁", text: "转发动态啦" },
@@ -2054,29 +2047,6 @@ const dynamicTypePresentations: Record<string, { icon: string; text: string }> =
   DYNAMIC_TYPE_UGC_SEASON: { icon: "🎞️", text: "视频合集更新啦" },
   DYNAMIC_TYPE_SUBSCRIPTION_NEW: { icon: "🔔", text: "预约提醒来啦" },
   DYNAMIC_TYPE_UPOWER_COMMON: { icon: "⚡", text: "充电动态来啦" },
-};
-
-const dynamicTypeLinkLabels: Record<string, string> = {
-  DYNAMIC_TYPE_FORWARD: "转发有看点",
-  DYNAMIC_TYPE_PGC: "番剧开追",
-  DYNAMIC_TYPE_COURSES: "新课请查收",
-  DYNAMIC_TYPE_WORD: "速来围观",
-  DYNAMIC_TYPE_DRAW: "美图请查收",
-  DYNAMIC_TYPE_ARTICLE: "新文请查收",
-  DYNAMIC_TYPE_MUSIC: "新歌请查收",
-  DYNAMIC_TYPE_COMMON_SQUARE: "速来围观",
-  DYNAMIC_TYPE_COMMON_VERTICAL: "速来围观",
-  DYNAMIC_TYPE_LIVE: "直播间集合",
-  DYNAMIC_TYPE_MEDIALIST: "收藏夹开逛",
-  DYNAMIC_TYPE_COURSES_SEASON: "新课请查收",
-  DYNAMIC_TYPE_COURSES_BATCH: "新课请查收",
-  DYNAMIC_TYPE_AD: "安利请查收",
-  DYNAMIC_TYPE_APPLET: "来玩小程序",
-  DYNAMIC_TYPE_SUBSCRIPTION: "预约别错过",
-  DYNAMIC_TYPE_BANNER: "公告请查收",
-  DYNAMIC_TYPE_UGC_SEASON: "合集刷起来",
-  DYNAMIC_TYPE_SUBSCRIPTION_NEW: "预约别错过",
-  DYNAMIC_TYPE_UPOWER_COMMON: "解锁充电区",
 };
 
 const inferDynamicTypeFromMajor = (majorType: string | undefined) => {
