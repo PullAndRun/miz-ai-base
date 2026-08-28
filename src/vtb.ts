@@ -1859,15 +1859,15 @@ export const formatLiveMessage = (
   fans: number | undefined,
   liveWebUrl: string,
 ) => [
-  `🔴 ${live.name} 开播啦！`,
+  `🔴 ${live.name} 的直播间开门啦！`,
   "",
-  "今天直播：",
+  "今天播的是——",
   `「${cleanBilibiliEmoteText(live.title) || "还没有直播标题"}」`,
   "",
   ...(live.liveStartedAt ? [`⏰ ${dayjs(live.liveStartedAt).format("MM月DD日 HH:mm")} 开播`] : []),
   ...(live.roomId ? [`🔗 ${formatLiveRoomUrl(live.roomId, liveWebUrl)}`] : []),
   "",
-  "直播间集合，开冲！",
+  "来得正好，一起去看看吧！",
 ].join("\n");
 
 export const formatLiveQueryMessage = (live: VtbLiveInfo, fans: number | undefined, liveWebUrl: string) => [

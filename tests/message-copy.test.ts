@@ -15,10 +15,10 @@ describe("user-facing copy", () => {
       liveStartedAt: new Date("2030-08-01T20:00:00+08:00"),
     }, 12_345, "https://live.example.test");
 
-    expect(message).toContain("🔴 示例主播 开播啦！");
-    expect(message).toContain("今天直播：");
+    expect(message).toContain("🔴 示例主播 的直播间开门啦！");
+    expect(message).toContain("今天播的是——");
     expect(message).toContain("「今晚一起聊天」");
-    expect(message).toContain("直播间集合，开冲！");
+    expect(message).toContain("来得正好，一起去看看吧！");
     expect(message).not.toContain("位粉丝");
     expect(message).not.toMatch(/开播时间：|当前粉丝：|亮灯|营业|TA|传送门|舞台进行中/);
 
