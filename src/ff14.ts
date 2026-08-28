@@ -107,6 +107,12 @@ export const createFf14PriceAlertMentionMessage = (
 const DEFAULT_MAX_LISTING_COUNT = 10;
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_FF14_RESPONSE_BYTES = 5 * 1024 * 1024;
+// A proxy that accepts a connection but never completes a request should not
+// hold up the whole alert poll through the shared, long HTTP backoff policy.
+// Probe it once, then give the direct route a small number of retries.
+const FF14_PROXY_RETRY_COUNT = 0;
+const FF14_DIRECT_RETRY_COUNT = 2;
+const FF14_RETRY_DELAY_MS = 2_000;
 export const FF14_REQUEST_INTERVAL_MS = 200;
 const waitForFf14RequestSlot = createFf14RequestGate(FF14_REQUEST_INTERVAL_MS);
 
@@ -320,6 +326,8 @@ const fetchJsonResponse = (
   ...requestInit,
   ...(proxy ? { proxy } : {}),
   timeoutMs: FETCH_TIMEOUT_MS,
+  retryCount: proxy ? FF14_PROXY_RETRY_COUNT : FF14_DIRECT_RETRY_COUNT,
+  retryDelayMs: FF14_RETRY_DELAY_MS,
 });
 
 const isHttpResponseError = (error: unknown) =>

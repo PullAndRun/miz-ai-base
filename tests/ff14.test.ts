@@ -101,6 +101,38 @@ describe("FF14 Universalis lookup", () => {
     expect(marketUrl.searchParams.get("listings")).toBe("3");
     expect(marketUrl.searchParams.get("entries")).toBe("0");
   });
+
+  test("falls back to a direct request after a proxy transport timeout", async () => {
+    const calls: Array<{ url: string; proxy?: string }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const proxy = (init as RequestInit & { proxy?: string } | undefined)?.proxy;
+      calls.push({ url: String(input), proxy });
+      if (proxy) {
+        throw new DOMException("The operation timed out.", "TimeoutError");
+      }
+      return new Response(JSON.stringify({
+        itemID: 7,
+        listings: [],
+        hasData: false,
+      }), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    await queryFf14Market({
+      regionKey: "猫",
+      itemName: "水之碎晶",
+      itemSearchApiUrl: "https://search.example.test/items",
+      marketApiUrl: "https://universalis.example.test/api/v2",
+      proxyUrl: "http://127.0.0.1:7890",
+      itemStore: {
+        findFf14Item: async () => ({ id: 7, name: "水之碎晶" }),
+        upsertFf14Item: async () => {},
+      },
+    });
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0].proxy).toBe("http://127.0.0.1:7890");
+    expect(calls[1].proxy).toBeUndefined();
+  });
 });
 
 describe("FF14 price alert mentions", () => {
