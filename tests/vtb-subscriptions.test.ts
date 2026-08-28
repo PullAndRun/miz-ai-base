@@ -43,4 +43,14 @@ describe("VTB subscription updates", () => {
     expect(changeVtbSubscriptions(withDynamic, 1, "主播", "unsubscribe", "dynamic"))
       .toEqual([{ groupId: 1, streamers: ["主播"], dynamicStreamers: [] }]);
   });
+
+  test("preserves contribution subscriptions when partitioning available groups", async () => {
+    const { partitionVtbSubscriptionsByGroup } = await import("@/vtb-subscriptions");
+    const result = partitionVtbSubscriptionsByGroup([
+      { groupId: 1, streamers: ["主播"], contributionStreamers: ["主播"] },
+    ], new Set(["1"]));
+    expect(result.enabled).toEqual([
+      { groupId: 1, streamers: ["主播"], contributionStreamers: ["主播"] },
+    ]);
+  });
 });

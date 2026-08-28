@@ -524,6 +524,12 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
     contributionBatches.delete(key);
     clearTimeout(batch.timer);
     if (batch.events.length === 0 || batch.groupIds.length === 0) return;
+    const currentGroupIds = getCurrentContributionGroupIds(batch.events[0]);
+    if (currentGroupIds.length === 0) return;
+    const groupIds = batch.groupIds.filter((groupId) =>
+      currentGroupIds.some((currentGroupId) => String(currentGroupId) === String(groupId)),
+    );
+    if (groupIds.length === 0) return;
     const displayEvents = batch.events.map((event) => ({
       userName: event.userName,
       kind: event.kind === "super-chat" ? "super-chat" as const : "gift" as const,
@@ -539,7 +545,7 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
       streamerName: batch.events[0].streamerName,
       liveRoomUrl: formatVtbEventRoomUrl(batch.events[0].roomId, pollingConfig.vtb.liveWebUrl),
     }));
-    await sendVtbGroupMessage(batch.groupIds, message, gateway, logger, "contribution", batch.events[0].userName);
+    await sendVtbGroupMessage(groupIds, message, gateway, logger, "contribution", batch.events[0].userName);
   };
   const flushContributionBatches = async (streamerMid?: string, sessionStart?: Date) => {
     const keys = [...contributionBatches.entries()]
@@ -585,14 +591,24 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
     };
     contributionBatches.set(key, batch);
   };
+  const getCurrentContributionGroupIds = (event: Pick<VtbLiveEventNotification, "streamerName" | "groupIds">) => {
+    const currentGroupIds = new Set(
+      pollingConfig.vtb.subscriptions
+        .filter((subscription) => subscription.contributionStreamers?.includes(event.streamerName) === true)
+        .map((subscription) => String(subscription.groupId)),
+    );
+    return event.groupIds.filter((groupId) => currentGroupIds.has(String(groupId)));
+  };
   const liveEventManager = createVtbLiveEventManager(config.vtb, repository, logger, async (event) => {
-    if (event.groupIds.length === 0) return;
+    const groupIds = getCurrentContributionGroupIds(event);
+    if (groupIds.length === 0) return;
+    const currentEvent = groupIds.length === event.groupIds.length ? event : { ...event, groupIds };
     if (event.kind === "gift" || event.kind === "super-chat") {
-      queueContributionBatch(event);
+      queueContributionBatch(currentEvent);
       return;
     }
     const message = createVtbNotificationMessage(formatContributionMessage(event, pollingConfig.vtb.liveWebUrl));
-    await sendVtbGroupMessage(event.groupIds, message, gateway, logger, "contribution", event.userName);
+    await sendVtbGroupMessage(groupIds, message, gateway, logger, "contribution", event.userName);
   });
   const runTask = () => pollingConfig.vtb.subscriptions.length === 0
     ? Promise.resolve()
@@ -656,6 +672,7 @@ const pollVtbSubscriptions = async (
   liveEventManager: ReturnType<typeof createVtbLiveEventManager>,
   flushContributionBatches: (streamerMid: string, sessionStart?: Date) => Promise<void>,
 ) => {
+  logger.info("plugin", "vtb poll started", { subscriptions: config.vtb.subscriptions.length });
   const streamerGroups = new Map<string, Map<string, VtbSubscriptionGroup>>();
   for (const subscription of config.vtb.subscriptions) {
     const streamers = new Set([...subscription.streamers, ...(subscription.dynamicStreamers ?? [])]);
@@ -708,6 +725,12 @@ const pollVtbSubscriptions = async (
     // stable MID before any polling or delivery work so each streamer is
     // queried once and its feed is fanned out to all subscribed groups.
     const uniqueStreamerSubscriptions = mergeVtbSubscriptionsByMid(resolvedSubscriptions);
+    logger.info("plugin", "vtb poll streamers resolved", {
+      count: uniqueStreamerSubscriptions.length,
+      contributions: uniqueStreamerSubscriptions.filter((subscription) =>
+        [...subscription.groups.values()].some((group) => group.contribution),
+      ).map((subscription) => subscription.streamer.mid),
+    });
 
     let liveInfos: Map<string, VtbLiveInfo>;
     try {
@@ -715,6 +738,9 @@ const pollVtbSubscriptions = async (
         uniqueStreamerSubscriptions.map((subscription) => subscription.streamer),
         config.vtb,
       );
+      logger.info("plugin", "vtb live statuses fetched", {
+        live: [...liveInfos.values()].filter((live) => live.isLive).map((live) => live.name),
+      });
     } catch (error) {
       pollState.livePollInterruptedAt ??= Date.now();
       logger.error("plugin", "vtb batch live request failed", normalizeError(error));

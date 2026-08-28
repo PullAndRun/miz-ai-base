@@ -41,6 +41,9 @@ const VTB_FAN_CLUB_REQUEST_INTERVAL_MS = 1_000;
 const VTB_STATS_CACHE_MS = 60_000;
 const VTB_LIVE_QUERY_CACHE_MS = 60_000;
 const VTB_IMAGE_CACHE_MS = 10 * 60_000;
+// Keep image notifications useful for high-resolution covers while still
+// bounding memory use when an upstream returns an unexpectedly large body.
+const MAX_VTB_IMAGE_BYTES = 16 * 1024 * 1024;
 const MAX_VTB_RESPONSE_BYTES = 5 * 1024 * 1024;
 const MAX_VTB_IMAGE_CACHE_ENTRIES = 16;
 const MAX_VTB_QUERY_CACHE_ENTRIES = 1_000;
@@ -241,7 +244,7 @@ export const closeVtbRepository = async () => {
 };
 
 export const resolveVtbStreamer = async (name: string, config: VtbConfig): Promise<VtbStreamer | undefined> => {
-  const cacheKey = `${config.userApiUrl}\n${name}`;
+  const cacheKey = `${config.userApiUrl}\n${config.webUrl}\n${config.proxyUrl}\n${name}`;
   const cacheRead = readExpiringCache(vtbUserSearchCache, cacheKey, Date.now());
   vtbUserSearchCache = cacheRead.cache;
   if (cacheRead.value !== undefined) {
@@ -686,7 +689,10 @@ export const getVtbCardInfos = async (mids: readonly string[], config: VtbConfig
       const previous = cards.get(mid) ?? {};
       cards.set(mid, { ...stats, ...previous });
     }
-    const cacheTimeToLiveMs = (config.cardCacheMinutes ?? 30) * 60_000;
+    const configuredCardCacheMinutes = Number(config.cardCacheMinutes ?? 30);
+    const cacheTimeToLiveMs = (Number.isFinite(configuredCardCacheMinutes) && configuredCardCacheMinutes > 0
+      ? configuredCardCacheMinutes
+      : 30) * 60_000;
     for (const mid of batch) {
       vtbCardQueryCache = writeExpiringCache(
         vtbCardQueryCache,
@@ -738,7 +744,9 @@ export const getVtbLiveInfos = async (streamers: readonly VtbStreamer[], config:
   if (uniqueStreamers.length === 0) return results;
   if (isDocumentedLiveRoomInfoUrl(config.liveApiUrl)) {
     const credential = await getBilibiliCredentialHeader().catch(() => undefined);
-    for (const streamer of uniqueStreamers) {
+    // The shared request queue still enforces the per-host interval, so these
+    // tasks can be scheduled together without increasing upstream pressure.
+    const liveResults = await Promise.all(uniqueStreamers.map(async (streamer) => {
       let roomId = normalizeRoomId(streamer.roomId);
       if (!roomId) {
         try {
@@ -748,8 +756,7 @@ export const getVtbLiveInfos = async (streamers: readonly VtbStreamer[], config:
         }
       }
       if (!roomId) {
-        results.set(streamer.mid, toVtbLiveInfo({ ...streamer, roomId: undefined }, undefined));
-        continue;
+        return [streamer.mid, toVtbLiveInfo({ ...streamer, roomId: undefined }, undefined)] as const;
       }
       const url = createLiveRoomInfoUrl(config.liveApiUrl, roomId);
       const response = z.looseObject({ code: integerSchema, data: z.unknown().optional() }).parse(
@@ -764,7 +771,6 @@ export const getVtbLiveInfos = async (streamers: readonly VtbStreamer[], config:
       assertVtbApiSuccess(url, "live", response.code);
       const live = liveInfoSchema.safeParse(response.data);
       const result = toVtbLiveInfo(streamer, live.success ? live.data : undefined);
-      results.set(streamer.mid, result);
       vtbLiveQueryCache = writeExpiringCache(
         vtbLiveQueryCache,
         getVtbLiveCacheKey(config, streamer.mid),
@@ -772,6 +778,10 @@ export const getVtbLiveInfos = async (streamers: readonly VtbStreamer[], config:
         VTB_LIVE_QUERY_CACHE_MS,
         Date.now(),
       );
+      return [streamer.mid, result] as const;
+    }));
+    for (const [mid, live] of liveResults) {
+      results.set(mid, live);
     }
     return results;
   }
@@ -822,7 +832,8 @@ export const getVtbDynamics = async (
   }
 
   const dynamicApiUrl = config.dynamicApiUrl || endpointFromBase(config.webUrl, "/x/polymer/web-dynamic/v1/feed/space");
-  const cacheKey = `${dynamicApiUrl}\n${config.webUrl}\n${streamer.mid}`;
+  const credentialKey = createHash("sha256").update(cookie).digest("base64url");
+  const cacheKey = `${dynamicApiUrl}\n${config.webUrl}\n${config.proxyUrl}\n${credentialKey}\n${streamer.mid}`;
   const cacheRead = readExpiringCache(vtbDynamicQueryCache, cacheKey, Date.now());
   vtbDynamicQueryCache = cacheRead.cache;
   const cached = cacheRead.value;
@@ -866,7 +877,7 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
     return undefined;
   }
 
-  const cacheKey = `${url}\n${config.webUrl}`;
+  const cacheKey = `${url}\n${config.webUrl}\n${config.proxyUrl}`;
   const cacheRead = readExpiringCache(vtbImageCache, cacheKey, Date.now());
   vtbImageCache = cacheRead.cache;
   const cached = cacheRead.value;
@@ -900,10 +911,9 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
         await response.body?.cancel().catch(() => undefined);
         throw new Error(`VTB image response has unsupported content type: ${contentType}`);
       }
-      // Dynamic images can be full-resolution originals. The shared reader
-      // still validates the stream and rejects malformed chunks, but VTB does
-      // not impose an artificial per-image size cap here.
-      const bytes = await readResponseBytes(response, Number.MAX_SAFE_INTEGER);
+      // Dynamic images can be full-resolution originals, but keep a generous
+      // upper bound so a malformed response cannot exhaust process memory.
+      const bytes = await readResponseBytes(response, MAX_VTB_IMAGE_BYTES);
       if (bytes.length === 0) {
         throw new Error("VTB image response is empty");
       }
@@ -2434,10 +2444,10 @@ const getRequestHeadersKey = (headers: HeadersInit | undefined) => {
 };
 
 const getVtbLiveCacheKey = (config: VtbConfig, mid: string) =>
-  `${config.liveApiUrl}\n${mid}`;
+  `${config.liveApiUrl}\n${config.liveWebUrl}\n${config.proxyUrl}\n${mid}`;
 
 const getVtbCardCacheKey = (config: VtbConfig, mid: string) =>
-  `${config.cardApiUrl}\n${mid}`;
+  `${config.cardApiUrl}\n${config.liveMasterApiUrl}\n${config.fanClubApiUrl}\n${config.webUrl}\n${config.proxyUrl}\n${mid}`;
 
 const getVtbLiveStatsCacheKey = (mid: string, config: VtbConfig) =>
   `${config.liveMasterApiUrl || endpointFromBase(config.liveWebUrl, "/live_user/v1/Master/info")}\n${config.liveWebUrl}\n${config.cardApiUrl}\n${config.proxyUrl}\n${mid}`;
@@ -2531,7 +2541,7 @@ const extractVtbSearchUsers = (value: unknown): VtbStreamer[] => {
   return [...users.values()];
 };
 
-const signBilibiliUrl = async (url: string, config: VtbConfig) => {
+export const signBilibiliUrl = async (url: string, config: VtbConfig) => {
   const parsed = new URL(url);
   const mixinKey = await getVtbWbiMixinKey(config);
   const entries = [...parsed.searchParams.entries()]

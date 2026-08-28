@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { VtbConfig } from "@/config";
+import { decodeSendGiftV2Payload, normalizeUserToastV2 } from "@/vtb-live-events";
 import {
   createVtbNotificationMessage,
   findVtbNameChanges,
@@ -24,6 +25,80 @@ const config = {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+const encodeVarint = (value: number) => {
+  const bytes: number[] = [];
+  do {
+    let byte = value % 128;
+    value = Math.floor(value / 128);
+    if (value > 0) byte |= 0x80;
+    bytes.push(byte);
+  } while (value > 0);
+  return Uint8Array.from(bytes);
+};
+const concatBytes = (...parts: Uint8Array[]) => {
+  const result = new Uint8Array(parts.reduce((size, part) => size + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+};
+const protoVarint = (number: number, value: number) => concatBytes(encodeVarint(number * 8), encodeVarint(value));
+const protoText = (number: number, value: string) => {
+  const bytes = new TextEncoder().encode(value);
+  return concatBytes(encodeVarint(number * 8 + 2), encodeVarint(bytes.length), bytes);
+};
+const protoBytes = (number: number, value: Uint8Array) => concatBytes(encodeVarint(number * 8 + 2), encodeVarint(value.length), value);
+
+test("decodes SEND_GIFT_V2 protobuf gift payloads", () => {
+  const gift = concatBytes(
+    protoVarint(1, 1001),
+    protoText(2, "辣条"),
+    protoVarint(3, 2),
+    protoVarint(5, 100),
+    protoVarint(7, 200),
+    protoText(8, "gold"),
+    protoText(9, "gift-tid"),
+  );
+  const payload = concatBytes(protoVarint(1, 256393), protoText(2, "迷子"), protoBytes(10, gift));
+  expect(decodeSendGiftV2Payload({ pb: Buffer.from(payload).toString("base64") })).toEqual([{
+    uid: "256393",
+    uname: "迷子",
+    giftId: 1001,
+    giftName: "辣条",
+    num: 2,
+    giftType: 0,
+    price: 100,
+    total_coin: 200,
+    coin_type: "gold",
+    tid: "gift-tid",
+    timestamp: 0,
+    rnd: "",
+    action: "",
+    gift_info: { img_basic: "" },
+  }]);
+});
+
+test("normalizes USER_TOAST_MSG_V2 guard purchases", () => {
+  expect(normalizeUserToastV2({
+    sender_uinfo: { uid: 123, base: { name: "舰长" } },
+    guard_info: { start_time: 100, end_time: 200 },
+    pay_info: { price: 19800, num: 1 },
+    gift_info: { gift_name: "舰长" },
+    toast_msg: "续费了大航海",
+  })).toMatchObject({
+    uid: 123,
+    uname: "舰长",
+    price: 19800,
+    num: 1,
+    start_time: 100,
+    end_time: 200,
+    role_name: "舰长",
+    __vtbRenewal: true,
+  });
 });
 
 describe("Bilibili live lookup", () => {
