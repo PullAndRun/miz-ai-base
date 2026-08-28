@@ -255,10 +255,16 @@ export const createVtbLiveEventManager = (
       const payload = parseJson(packet.body);
       if (!payload || typeof payload !== "object") continue;
       const command = String((payload as any).cmd ?? "");
-      const data = (payload as any).data ?? {};
+      const rawData = (payload as any).data ?? {};
+      const data = typeof rawData === "string"
+        ? (() => { try { return JSON.parse(rawData); } catch { return {}; } })()
+        : rawData;
       const isRedPacket = command === "POPULARITY_RED_POCKET_START" || command === "POPULARITY_RED_POCKET_NEW" || command === "RED_POCKET_START";
+      // GUARD_BUY is the canonical purchase event. USER_TOAST_MSG is a
+      // presentation event emitted by some rooms and may be absent.
+      const isGuardBuy = command === "GUARD_BUY";
       const uid = text(data.uid ?? data.mid ?? data.sender_uid ?? data.senderUid ?? (isRedPacket ? "red-packet" : ""));
-      const userName = text(data.uname ?? data.username) || uid || "观众";
+      const userName = text(data.uname ?? data.username ?? data.user_name ?? data.userName) || uid || "观众";
       if (!uid) continue;
       let kind: VtbContributionEvent["kind"] | undefined;
       let amount = 0;
@@ -270,26 +276,35 @@ export const createVtbLiveEventManager = (
         itemName = text(data.award_text ?? data.awardText ?? data.danmu ?? data.title) || "直播间红包";
         amount = finiteNumber(data.total_money ?? data.totalMoney ?? data.amount);
         count = finiteNumber(data.total_num ?? data.totalNum ?? data.num, 1) || 1;
-      } else if (command === "USER_TOAST_MSG") {
-        const operation = Number(data.op_type);
-        kind = operation === 2 ? "guard-renewal" : operation === 1 ? "guard-activation" : undefined;
-        amount = finiteNumber(data.price);
+      } else if (command === "USER_TOAST_MSG" || isGuardBuy) {
+        const operation = Number(data.op_type ?? data.group_op_type);
+        // GUARD_BUY denotes a new purchase. For toast messages op_type=1 is
+        // activation and op_type=2 is renewal; unknown values are treated as
+        // activation so the contribution is not silently lost.
+        kind = isGuardBuy
+          ? operation === 2 ? "guard-renewal" : "guard-activation"
+          : operation === 2 ? "guard-renewal" : operation === 1 ? "guard-activation" : undefined;
+        amount = finiteNumber(data.price ?? data.total_coin);
         count = finiteNumber(data.num, 1) || 1;
-        roleName = text(data.role_name ?? data.roleName) || undefined;
+        roleName = text(data.role_name ?? data.roleName ?? data.gift_name ?? data.giftName) || undefined;
       } else if (command === "SEND_GIFT" || command === "COMBO_SEND") {
         kind = "gift";
-        count = finiteNumber(data.num ?? data.combo_num, 1) || 1;
-        amount = finiteNumber(data.total_coin) || finiteNumber(data.price) * count;
-        itemName = text(data.gift_name ?? data.giftName) || undefined;
+        count = finiteNumber(data.num ?? data.combo_num ?? data.combo_num_total, 1) || 1;
+        amount = finiteNumber(data.total_coin ?? data.combo_total_coin) || finiteNumber(data.price) * count;
+        itemName = text(data.gift_name ?? data.giftName ?? data.original_gift_name ?? data.originalGiftName) || undefined;
       } else if (command === "SUPER_CHAT_MESSAGE") {
         kind = "super-chat";
-        amount = finiteNumber(data.price) * 1_000;
+        amount = finiteNumber(data.price ?? data.rmb) * 1_000;
       }
       if (!kind) continue;
       amount = Math.max(0, finiteNumber(amount));
       count = Math.max(1, Math.round(finiteNumber(count, 1)));
-      const eventId = text(data.payflow_id ?? data.tid ?? data.rpid ?? data.lottery_id ?? data.lotteryId ?? data.message_id ?? data.msg_id) ||
-        `${command}:${uid}:${text(data.start_time ?? data.ts) || Date.now()}:${amount}:${count}`;
+      const explicitEventId = text(data.payflow_id ?? data.tid ?? data.rpid ?? data.id ?? data.lottery_id ?? data.lotteryId ?? data.message_id ?? data.msg_id);
+      // GUARD_BUY and USER_TOAST_MSG can both be emitted for one purchase;
+      // use a shared fallback key so the repository de-duplicates them.
+      const eventId = (isGuardBuy || command === "USER_TOAST_MSG")
+        ? `guard:${kind}:${uid}:${text(data.start_time ?? data.ts) || Date.now()}:${amount}:${count}`
+        : explicitEventId || `${command}:${uid}:${text(data.start_time ?? data.ts) || Date.now()}:${amount}:${count}`;
       const recorded = await repository.recordLiveContributionEvent({
         eventId,
         streamerMid: connection.mid,
