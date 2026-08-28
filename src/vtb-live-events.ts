@@ -11,6 +11,8 @@ export type VtbLiveEventNotification = VtbContributionEvent & { itemName?: strin
 const DEFAULT_ENDPOINT = "wss://broadcastlv.chat.bilibili.com:443/sub";
 const HEARTBEAT_INTERVAL_MS = 25_000;
 const SOCKET_OPEN_TIMEOUT_MS = 15_000;
+const MAX_PENDING_EVENT_HANDLERS = 128;
+const BACKLOG_WARNING_INTERVAL_MS = 60_000;
 
 /** Maintains a small, rate-limited set of live-room event connections. */
 export const createVtbLiveEventManager = (
@@ -26,6 +28,8 @@ export const createVtbLiveEventManager = (
   const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const reconnectAttempts = new Map<string, number>();
   const pendingWrites = new Map<string, Set<Promise<unknown>>>();
+  const eventChains = new Map<string, Promise<void>>();
+  const backlogWarningAt = new Map<string, number>();
   let connectTimer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
 
@@ -97,13 +101,40 @@ export const createVtbLiveEventManager = (
       logger.debug("plugin", "vtb live event connection opened", { streamerMid: target.mid });
     });
     socket.addEventListener("message", (event: any) => {
+      const pending = pendingWrites.get(target.mid);
+      if (pending && pending.size >= MAX_PENDING_EVENT_HANDLERS) {
+        const now = Date.now();
+        const lastWarning = backlogWarningAt.get(target.mid) ?? 0;
+        if (now - lastWarning >= BACKLOG_WARNING_INTERVAL_MS) {
+          backlogWarningAt.set(target.mid, now);
+          logger.warn("plugin", "vtb live event backlog is full; packet skipped", {
+            streamerMid: target.mid,
+            pending: pending.size,
+          });
+        }
+        return;
+      }
       const operation = consumeMessage(connection, event.data).catch((error) => {
         logger.debug("plugin", "vtb live event packet ignored", { streamerMid: target.mid, error: normalize(error) });
       });
-      const pending = pendingWrites.get(target.mid) ?? new Set<Promise<unknown>>();
-      pending.add(operation);
-      pendingWrites.set(target.mid, pending);
-      void operation.finally(() => pending.delete(operation));
+      const previous = eventChains.get(target.mid) ?? Promise.resolve();
+      const serialized = previous
+        .catch(() => undefined)
+        .then(() => operation);
+      eventChains.set(target.mid, serialized);
+      const operations = pending ?? new Set<Promise<unknown>>();
+      operations.add(serialized);
+      pendingWrites.set(target.mid, operations);
+      void serialized.then(
+        () => {
+          operations.delete(serialized);
+          if (eventChains.get(target.mid) === serialized) eventChains.delete(target.mid);
+        },
+        () => {
+          operations.delete(serialized);
+          if (eventChains.get(target.mid) === serialized) eventChains.delete(target.mid);
+        },
+      );
     });
     const close = () => {
       clearTimeout(openTimer);
@@ -181,6 +212,7 @@ export const createVtbLiveEventManager = (
       reconnectTimers.delete(mid);
     }
     reconnectAttempts.delete(mid);
+    backlogWarningAt.delete(mid);
     const connection = connections.get(mid);
     if (connection) {
       connections.delete(mid);
@@ -191,6 +223,7 @@ export const createVtbLiveEventManager = (
   };
 
   const flush = async (mid: string) => {
+    await eventChains.get(mid);
     const pending = pendingWrites.get(mid);
     if (pending && pending.size > 0) await Promise.allSettled([...pending]);
     pendingWrites.delete(mid);

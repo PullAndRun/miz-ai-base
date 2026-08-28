@@ -802,6 +802,8 @@ const getDisplayName = (value: unknown, keys: readonly string[], seen = new Set<
 
 const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
   let selfId: Promise<string | undefined> | undefined;
+  let permissionCache = createExpiringCache<string, boolean>(MAX_GROUP_PERMISSION_CACHE_ENTRIES);
+  const inFlightChecks = new Map<string, Promise<boolean>>();
 
   const getSelfId = () => {
     if (!selfId) {
@@ -822,6 +824,18 @@ const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
   };
 
   return async (groupId: number | string) => {
+    const key = String(groupId);
+    const cached = readExpiringCache(permissionCache, key, Date.now());
+    permissionCache = cached.cache;
+    if (cached.value !== undefined) {
+      return cached.value;
+    }
+    const inFlight = inFlightChecks.get(key);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const check = (async () => {
     try {
       const botId = await getSelfId();
       if (!botId) {
@@ -843,11 +857,20 @@ const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
           GROUP_PERMISSION_CHECK_TIMEOUT_MS,
         ),
       ]);
-      return getGroupSendPermission(groupInfo, memberInfo).allowed;
+      const allowed = getGroupSendPermission(groupInfo, memberInfo).allowed;
+      permissionCache = writeExpiringCache(permissionCache, key, allowed, GROUP_PERMISSION_CACHE_MS, Date.now());
+      return allowed;
     } catch (error) {
       logger.warn("gateway", "group send skipped: unable to read mute status", { groupId, error });
       return false;
     }
+    })();
+    inFlightChecks.set(key, check);
+    void check.then(
+      () => inFlightChecks.delete(key),
+      () => inFlightChecks.delete(key),
+    );
+    return check;
   };
 };
 
