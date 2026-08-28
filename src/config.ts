@@ -452,7 +452,7 @@ export type VtbConfig = {
   fanClubApiUrl: string;
   liveMasterApiUrl: string;
   liveEventEnabled: boolean;
-  /** Minimum single contribution value, in batteries, for real-time pushes. */
+  /** Minimum accumulated contribution value, in RMB, for real-time pushes. */
   contributionMinAmount: number;
   /** Quiet period used to aggregate consecutive contributions, in milliseconds. */
   contributionBatchWindowMs: number;

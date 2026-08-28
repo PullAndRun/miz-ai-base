@@ -104,7 +104,7 @@ dynamicConcurrency = 2
 # 粉丝数不需要随直播状态频繁刷新，默认缓存 30 分钟。
 cardCacheMinutes = 30
 liveEventEnabled = true
-# 普通礼物/醒目留言达到该电池数才实时感谢；加入大航海、续费和红包不受此项限制。
+# 打赏汇总金额达到该人民币数才实时感谢；加入大航海、续费和红包不受此项限制。
 contributionMinAmount = 50
 # 连续打赏的静默汇总窗口；每次新打赏都会刷新计时（单位：毫秒）。
 contributionBatchWindowMs = 10000

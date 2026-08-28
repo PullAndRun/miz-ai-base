@@ -49,7 +49,7 @@ import {
   type VtbStreamer,
 } from "@/vtb";
 import { createVtbLiveEventManager, type VtbLiveEventNotification } from "@/vtb-live-events";
-import { formatVtbContributionBatchMessage } from "@/vtb-contribution";
+import { formatVtbContributionBatchMessage, meetsVtbContributionThreshold } from "@/vtb-contribution";
 
 const ALL_GROUPS_DELIVERED_MARKER = "*";
 const SCHEDULED_DELIVERY_CONCURRENCY = 5;
@@ -523,13 +523,21 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
     contributionBatches.delete(key);
     clearTimeout(batch.timer);
     if (batch.events.length === 0 || batch.groupIds.length === 0) return;
-    const message = createVtbNotificationMessage(formatVtbContributionBatchMessage(batch.events.map((event) => ({
+    const displayEvents = batch.events.map((event) => ({
       userName: event.userName,
-      kind: event.kind === "super-chat" ? "super-chat" : "gift",
+      kind: event.kind === "super-chat" ? "super-chat" as const : "gift" as const,
       amount: event.amount,
       count: event.count,
       itemName: event.itemName,
-    }))));
+    }));
+    const thresholdRmb = Number.isFinite(pollingConfig.vtb.contributionMinAmount)
+      ? pollingConfig.vtb.contributionMinAmount
+      : 50;
+    if (!meetsVtbContributionThreshold(displayEvents, thresholdRmb)) return;
+    const message = createVtbNotificationMessage(formatVtbContributionBatchMessage(displayEvents, {
+      streamerName: batch.events[0].streamerName,
+      liveRoomUrl: formatVtbEventRoomUrl(batch.events[0].roomId, pollingConfig.vtb.liveWebUrl),
+    }));
     await sendVtbGroupMessage(batch.groupIds, message, gateway, logger, "contribution", batch.events[0].userName);
   };
   const flushContributionBatches = async (streamerMid?: string, sessionStart?: Date) => {
@@ -582,7 +590,7 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
       queueContributionBatch(event);
       return;
     }
-    const message = createVtbNotificationMessage(formatContributionMessage(event));
+    const message = createVtbNotificationMessage(formatContributionMessage(event, pollingConfig.vtb.liveWebUrl));
     await sendVtbGroupMessage(event.groupIds, message, gateway, logger, "contribution", event.userName);
   });
   const runTask = () => pollingConfig.vtb.subscriptions.length === 0
@@ -862,7 +870,7 @@ const pollVtbSubscriptions = async (
         const activeSession = session?.endedAt ? undefined : session;
         if (live.isLive && activeSession) {
           if (contributionGroupIds.length > 0) {
-            liveEventManager.start(streamer.mid, live.roomId ?? activeSession.roomId, activeSession.startedAt, contributionGroupIds);
+            liveEventManager.start(streamer.mid, streamer.name, live.roomId ?? activeSession.roomId, activeSession.startedAt, contributionGroupIds);
           } else {
             liveEventManager.stop(streamer.mid);
           }
@@ -950,7 +958,7 @@ const pollVtbSubscriptions = async (
             // first send is retried even after the freshness window closes.
             await repository.startLiveSession(streamer, live, currentFans, deliveredGroupIds, stats, startGuardSnapshot);
             if (contributionGroupIds.length > 0) {
-              liveEventManager.start(streamer.mid, live.roomId, live.liveStartedAt ?? new Date(), contributionGroupIds);
+              liveEventManager.start(streamer.mid, streamer.name, live.roomId, live.liveStartedAt ?? new Date(), contributionGroupIds);
             }
           }
           if (deliveredGroups.length > 0) {
@@ -1268,24 +1276,30 @@ const resolveVtbNotificationImage = async (
   }
 };
 
-const formatContributionMessage = (event: VtbLiveEventNotification) => {
+const formatContributionMessage = (event: VtbLiveEventNotification, liveWebUrl: string) => {
+  const room = `【${event.streamerName}】直播间`;
+  const roomUrl = formatVtbEventRoomUrl(event.roomId, liveWebUrl);
+  const link = roomUrl ? `\n🔗 ${roomUrl}` : "";
   if (event.kind === "red-packet") {
     const details = [
       event.amount > 0 ? `价值 ${(event.amount / 1_000).toFixed(2)} 电池` : "",
       event.count > 1 ? `${event.count} 份` : "",
     ].filter(Boolean).join(" · ");
-    return `🧧 ${event.userName === "red-packet" ? "直播间红包" : `${event.userName} 发起的红包`}${details ? `（${details}）` : ""}来啦！\n手速快一点，进直播间抢红包：${event.itemName || "直播间红包"}`;
+    return `🧧 ${room}掉红包啦！\n${event.userName === "red-packet" ? "直播间红包" : `${event.userName} 发起的红包`}${details ? `（${details}）` : ""}来啦！\n手速快一点，进直播间抢：${event.itemName || "直播间红包"}${link}`;
   }
   if (event.kind === "guard-activation" || event.kind === "guard-renewal") {
     if (event.kind === "guard-renewal") {
-      return `⚓ ${event.userName} 续费${event.roleName ? `成为${event.roleName}` : "大航海"}啦，感谢继续陪伴！`;
+      return `🔁 ${room}收到续费啦！\n${event.userName} 续费${event.roleName ? `成为${event.roleName}` : "大航海成员"}，感谢继续陪伴！${link}`;
     }
-    return `⚓ ${event.userName} 加入大航海${event.roleName ? `，成为${event.roleName}` : ""}啦，感谢支持！`;
+    return `⚓ ${room}迎来新舰长！\n${event.userName} 加入${event.streamerName}的大航海${event.roleName ? `，成为${event.roleName}` : ""}，感谢支持！${link}`;
   }
   const gift = event.itemName || "礼物";
   const battery = event.amount / 1_000;
-  return `🎁 ${event.userName} 送来支持，感谢投喂！\n${gift} ×${event.count} · 价值 ${battery.toFixed(2)} 电池`;
+  return `🎁 ${room}收到投喂！\n${event.userName} 送来 ${gift} ×${event.count} · 价值 ${battery.toFixed(2)} 电池\n感谢你的热爱，继续在直播间玩起来！${link}`;
 };
+
+const formatVtbEventRoomUrl = (roomId: string | undefined, liveWebUrl: string) =>
+  roomId && liveWebUrl ? `${liveWebUrl.replace(/\/+$/, "")}/${roomId}` : "";
 
 const resolveVtbNotificationImages = async (
   imageUrls: readonly string[],

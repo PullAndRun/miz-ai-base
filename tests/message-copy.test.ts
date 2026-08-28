@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { formatNewsMessages, formatScheduledNewsItems } from "@/news";
 import { formatDynamicMessage, formatLiveMessage, formatLiveQueryMessage, formatOfflineMessage, getVtbNewGuardNames } from "@/vtb";
-import { formatVtbContributionBatchMessage } from "@/vtb-contribution";
+import { formatVtbContributionBatchMessage, meetsVtbContributionThreshold } from "@/vtb-contribution";
 import { createWallpaperMessage } from "@/wallpaper";
 import divinationPlugin from "../plugins/divination";
 
@@ -281,11 +281,23 @@ describe("user-facing copy", () => {
       { userName: "甲", kind: "gift", itemName: "小心心", amount: 30_000, count: 3 },
       { userName: "甲", kind: "super-chat", amount: 50_000, count: 1 },
       { userName: "乙", kind: "gift", itemName: "辣条", amount: 80_000, count: 1 },
-    ]);
-    expect(message).toContain("🎁 这一波打赏感谢名单：");
+    ], {
+      streamerName: "示例主播",
+      liveRoomUrl: "https://live.bilibili.com/123",
+    });
+    expect(message).toContain("🎁 这一波打赏感谢名单： 【示例主播】直播间");
     expect(message).toContain("- 甲：小心心 ×5（50.00 电池）、醒目留言 ×1（50.00 电池）");
     expect(message).toContain("- 乙：辣条 ×1（80.00 电池）");
-    expect(message).toContain("本轮共收到 180.00 电池，感谢大家的投喂！");
+    expect(message).toContain("本轮共收到 180.00 电池，感谢大家的投喂！\n🔗 https://live.bilibili.com/123");
+  });
+
+  test("contribution threshold uses accumulated RMB with ten batteries per yuan", () => {
+    const events = [
+      { userName: "甲", kind: "gift" as const, itemName: "小心心", amount: 60_000, count: 6 },
+      { userName: "乙", kind: "gift" as const, itemName: "辣条", amount: 40_000, count: 4 },
+    ];
+    expect(meetsVtbContributionThreshold(events, 10)).toBe(true);
+    expect(meetsVtbContributionThreshold(events, 10.01)).toBe(false);
   });
 
   test("dynamic messages omit duplicated title or description text", () => {

@@ -4,9 +4,15 @@ import type { VtbConfig } from "@/config";
 import type { VtbContributionEvent, VtbRepository } from "@/vtb";
 import { fetchWithRiskControlProxy, fetchWithRetry } from "@/http";
 
-type Target = { mid: string; roomId: string; sessionStart: Date; contributionGroupIds: Array<string | number> };
+type Target = { mid: string; streamerName: string; roomId: string; sessionStart: Date; contributionGroupIds: Array<string | number> };
 type Connection = Target & { socket: any; heartbeat?: ReturnType<typeof setInterval>; reconnectAttempt: number };
-export type VtbLiveEventNotification = VtbContributionEvent & { itemName?: string; roleName?: string; groupIds: Array<string | number> };
+export type VtbLiveEventNotification = VtbContributionEvent & {
+  itemName?: string;
+  roleName?: string;
+  groupIds: Array<string | number>;
+  streamerName: string;
+  roomId: string;
+};
 
 const DEFAULT_ENDPOINT = "wss://broadcastlv.chat.bilibili.com:443/sub";
 const HEARTBEAT_INTERVAL_MS = 25_000;
@@ -187,13 +193,14 @@ export const createVtbLiveEventManager = (
     reconnectTimers.set(mid, timer);
   };
 
-  const start = (mid: string, roomId: string | undefined, sessionStart: Date, contributionGroupIds: readonly (string | number)[] = []) => {
+  const start = (mid: string, streamerName: string, roomId: string | undefined, sessionStart: Date, contributionGroupIds: readonly (string | number)[] = []) => {
     if (!config.liveEventEnabled || !roomId || stopped) return;
-    const nextTarget = { mid, roomId, sessionStart, contributionGroupIds: [...contributionGroupIds] };
+    const nextTarget = { mid, streamerName, roomId, sessionStart, contributionGroupIds: [...contributionGroupIds] };
     targets.set(mid, nextTarget);
     const connection = connections.get(mid);
     if (connection) {
       connection.roomId = roomId;
+      connection.streamerName = streamerName;
       connection.sessionStart = sessionStart;
       connection.contributionGroupIds = [...contributionGroupIds];
     }
@@ -296,8 +303,9 @@ export const createVtbLiveEventManager = (
         roleName,
         occurredAt: new Date(),
       });
-      const contributionMinCoins = Math.max(0, (Number.isFinite(config.contributionMinAmount) ? config.contributionMinAmount : 50) * 1_000);
-      if (recorded && notify && (kind === "red-packet" || kind === "guard-activation" || kind === "guard-renewal" || amount >= contributionMinCoins)) {
+      // Gifts and Super Chats are queued so the task layer can aggregate them
+      // across the quiet window before applying the RMB threshold.
+      if (recorded && notify) {
         await notify({
           eventId,
           streamerMid: connection.mid,
@@ -311,6 +319,8 @@ export const createVtbLiveEventManager = (
           roleName,
           occurredAt: new Date(),
           groupIds: connection.contributionGroupIds,
+          streamerName: connection.streamerName,
+          roomId: connection.roomId,
         });
       }
     }
