@@ -20,7 +20,10 @@ export const meetsVtbContributionThreshold = (
   thresholdRmb: number,
 ) => getVtbContributionAmount(events) >= Math.max(0, thresholdRmb) * 10_000;
 
-const formatBattery = (amount: number) => `${(amount / 1_000).toFixed(2)} 电池`;
+export const formatVtbBattery = (amount: number) =>
+  `${(amount / 1_000).toFixed(2).replace(/\.?0+$/, "")} 电池`;
+
+const formatBattery = (amount: number) => formatVtbBattery(amount);
 
 export const formatVtbContributionMessage = (event: VtbContributionDisplayEvent, context: VtbContributionMessageContext = {}) => {
   const itemName = event.itemName || (event.kind === "super-chat" ? "醒目留言" : "礼物");

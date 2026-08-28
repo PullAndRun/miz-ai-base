@@ -15,6 +15,7 @@ import type { MizConfig, VtbConfig } from "@/config";
 import { createDatabaseClient, getDatabaseUrl } from "@/database";
 import { fetchWithRiskControlProxy, fetchWithRetry, readResponseBytes, readResponseJson } from "@/http";
 import { partitionVtbSubscriptionsByGroup } from "@/vtb-subscriptions";
+import { formatVtbBattery } from "@/vtb-contribution";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_DYNAMIC_DESCRIPTION_LENGTH = 1_800;
@@ -1933,7 +1934,7 @@ export const formatOfflineMessage = (
     : [
         "🏆 本场打赏 Top 5：",
         ...contributionSummary.topGifts.map((entry, index) =>
-          `- ${index + 1}. ${entry.userName}${entry.amount > 0 ? `（${(entry.amount / 1_000).toFixed(2)} 电池）` : `（${entry.count} 次）`}`),
+          `- ${index + 1}. ${entry.userName}${entry.amount > 0 ? `（${formatVtbBattery(entry.amount)}）` : `（${entry.count} 次）`}`),
         "",
       ];
   return [

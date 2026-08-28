@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { formatNewsMessages, formatScheduledNewsItems } from "@/news";
 import { formatDynamicMessage, formatLiveMessage, formatLiveQueryMessage, formatOfflineMessage, getVtbNewGuardNames } from "@/vtb";
-import { formatVtbContributionBatchMessage, meetsVtbContributionThreshold } from "@/vtb-contribution";
+import { formatVtbBattery, formatVtbContributionBatchMessage, meetsVtbContributionThreshold } from "@/vtb-contribution";
 import { createWallpaperMessage } from "@/wallpaper";
 import divinationPlugin from "../plugins/divination";
 
@@ -247,7 +247,7 @@ describe("user-facing copy", () => {
     );
     expect(message).toContain("⚓ 感谢本场加入大航海的观众：\n- 上舰观众");
     expect(message).toContain("🔁 感谢续费大航海的观众：\n- 续舰观众");
-    expect(message).toContain("🏆 本场打赏 Top 5：\n- 1. 甲（0.50 电池）\n- 2. 乙（0.10 电池）");
+    expect(message).toContain("🏆 本场打赏 Top 5：\n- 1. 甲（0.5 电池）\n- 2. 乙（0.1 电池）");
   });
 
   test("offline guard thanks prefers renewals and removes duplicate names", () => {
@@ -286,9 +286,15 @@ describe("user-facing copy", () => {
       liveRoomUrl: "https://live.bilibili.com/123",
     });
     expect(message).toContain("🎁 这一波打赏感谢名单： 【示例主播】直播间");
-    expect(message).toContain("- 甲：小心心 ×5（50.00 电池）、醒目留言 ×1（50.00 电池）");
-    expect(message).toContain("- 乙：辣条 ×1（80.00 电池）");
-    expect(message).toContain("本轮共收到 180.00 电池，感谢大家的投喂！\n🔗 https://live.bilibili.com/123");
+    expect(message).toContain("- 甲：小心心 ×5（50 电池）、醒目留言 ×1（50 电池）");
+    expect(message).toContain("- 乙：辣条 ×1（80 电池）");
+    expect(message).toContain("本轮共收到 180 电池，感谢大家的投喂！\n🔗 https://live.bilibili.com/123");
+  });
+
+  test("contribution battery amounts omit trailing zeroes", () => {
+    expect(formatVtbBattery(100)).toBe("0.1 电池");
+    expect(formatVtbBattery(110)).toBe("0.11 电池");
+    expect(formatVtbBattery(1_000)).toBe("1 电池");
   });
 
   test("contribution threshold uses accumulated RMB with ten batteries per yuan", () => {

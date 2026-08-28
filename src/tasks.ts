@@ -49,7 +49,11 @@ import {
   type VtbStreamer,
 } from "@/vtb";
 import { createVtbLiveEventManager, type VtbLiveEventNotification } from "@/vtb-live-events";
-import { formatVtbContributionBatchMessage, meetsVtbContributionThreshold } from "@/vtb-contribution";
+import {
+  formatVtbBattery,
+  formatVtbContributionBatchMessage,
+  meetsVtbContributionThreshold,
+} from "@/vtb-contribution";
 
 const ALL_GROUPS_DELIVERED_MARKER = "*";
 const SCHEDULED_DELIVERY_CONCURRENCY = 5;
@@ -1313,7 +1317,7 @@ const formatContributionMessage = (event: VtbLiveEventNotification, liveWebUrl: 
   const link = roomUrl ? `\n🔗 ${roomUrl}` : "";
   if (event.kind === "red-packet") {
     const details = [
-      event.amount > 0 ? `价值 ${(event.amount / 1_000).toFixed(2)} 电池` : "",
+      event.amount > 0 ? `价值 ${formatVtbBattery(event.amount)}` : "",
       event.count > 1 ? `${event.count} 份` : "",
     ].filter(Boolean).join(" · ");
     return `🧧 ${room}掉红包啦！\n${event.userName === "red-packet" ? "直播间红包" : `${event.userName} 发起的红包`}${details ? `（${details}）` : ""}来啦！\n手速快一点，进直播间抢：${event.itemName || "直播间红包"}${link}`;
@@ -1325,8 +1329,7 @@ const formatContributionMessage = (event: VtbLiveEventNotification, liveWebUrl: 
     return `⚓ ${room}迎来新舰长！\n${event.userName} 加入${event.streamerName}的大航海${event.roleName ? `，成为${event.roleName}` : ""}，感谢支持！${link}`;
   }
   const gift = event.itemName || "礼物";
-  const battery = event.amount / 1_000;
-  return `🎁 ${room}收到投喂！\n${event.userName} 送来 ${gift} ×${event.count} · 价值 ${battery.toFixed(2)} 电池\n感谢你的热爱，继续在直播间玩起来！${link}`;
+  return `🎁 ${room}收到投喂！\n${event.userName} 送来 ${gift} ×${event.count} · 价值 ${formatVtbBattery(event.amount)}\n感谢你的热爱，继续在直播间玩起来！${link}`;
 };
 
 const formatVtbEventRoomUrl = (roomId: string | undefined, liveWebUrl: string) =>
