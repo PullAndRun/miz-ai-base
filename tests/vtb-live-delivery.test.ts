@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   getUndeliveredVtbLiveEndGroupIds,
+  isVtbInitialDynamicRecent,
   isVtbLivePromotion,
   isVtbLiveStartRecent,
   selectVtbDynamicPollBatch,
@@ -68,6 +69,14 @@ describe("VTB live-start recovery", () => {
 });
 
 describe("VTB dynamic filtering", () => {
+  test("allows only dynamics from the last hour on initial delivery", () => {
+    const now = new Date("2030-01-01T10:00:00Z").getTime();
+
+    expect(isVtbInitialDynamicRecent(new Date("2030-01-01T09:00:01Z"), now)).toBeTrue();
+    expect(isVtbInitialDynamicRecent(new Date("2030-01-01T09:00:00Z"), now)).toBeFalse();
+    expect(isVtbInitialDynamicRecent(new Date("2030-01-01T08:00:00Z"), now)).toBeFalse();
+  });
+
   test("normalizes the configured live URL when filtering promotions", () => {
     expect(isVtbLivePromotion({
       title: "直播预告",

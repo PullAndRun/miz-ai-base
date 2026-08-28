@@ -56,6 +56,7 @@ const SCHEDULED_DELIVERY_CONCURRENCY = 5;
 const WALLPAPER_DELIVERY_CONCURRENCY = 3;
 const WALLPAPER_SEND_INTERVAL_MS = 2_000;
 const FF14_PRICE_ALERT_DELIVERY_RETENTION_MS = 3 * 24 * 60 * 60_000;
+const VTB_INITIAL_DYNAMIC_MAX_AGE_MS = 60 * 60_000;
 const vtbPollingIntervalCache = new Map<string, number>();
 
 type VtbPollState = {
@@ -643,6 +644,9 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
   };
 };
 
+export const isVtbInitialDynamicRecent = (publishedAt: Date, now = Date.now()) =>
+  now - publishedAt.getTime() < VTB_INITIAL_DYNAMIC_MAX_AGE_MS;
+
 const pollVtbSubscriptions = async (
   config: MizConfig,
   gateway: Gateway,
@@ -1084,6 +1088,7 @@ const pollVtbSubscriptions = async (
         const isCurrentDynamic = dynamicState?.publishedAt.getTime() === latestDynamic.publishedAt.getTime();
         const isRecent = now - latestDynamic.publishedAt.getTime() <
           config.vtb.dynamicPollMinutes * 60_000 + getVtbPollingIntervalMs(config.vtb.cron);
+        const isInitialDynamicRecent = dynamicState !== undefined || isVtbInitialDynamicRecent(latestDynamic.publishedAt, now);
         const isLivePromotion = isVtbLivePromotion(latestDynamic, config.vtb.liveWebUrl);
         const recoveredAfterDynamicRetry = recoveredDynamicMids.has(streamer.mid);
         const deliveredGroupIds = isCurrentDynamic ? dynamicState.deliveredGroupIds : [];
@@ -1092,7 +1097,7 @@ const pollVtbSubscriptions = async (
           : dynamicGroupIds.filter((groupId) => !deliveredGroupIds.includes(String(groupId)));
         const hasPendingDynamicDelivery = isCurrentDynamic && undeliveredDynamicGroupIds.length > 0;
 
-        if (((isNewDynamic && (isRecent || recoveredAfterDynamicRetry)) || hasPendingDynamicDelivery) && !isLivePromotion) {
+        if (((isNewDynamic && (isRecent || recoveredAfterDynamicRetry) && isInitialDynamicRecent) || hasPendingDynamicDelivery) && !isLivePromotion) {
             if (undeliveredDynamicGroupIds.length === 0) {
               continue;
             }
