@@ -142,6 +142,24 @@ export type VtbLiveStats = {
   guards?: number;
 };
 export type VtbGuardSnapshot = { ids: string[]; names: string[]; captured: boolean };
+export type VtbContributionEvent = {
+  eventId: string;
+  streamerMid: string;
+  sessionStart: Date;
+  userId: string;
+  userName: string;
+  kind: "guard-renewal" | "guard-activation" | "gift" | "super-chat" | "red-packet";
+  amount: number;
+  count: number;
+  itemName?: string;
+  roleName?: string;
+  occurredAt: Date;
+};
+export type VtbContributionSummary = {
+  guardRenewals: string[];
+  guardActivations: string[];
+  topGifts: Array<{ userName: string; amount: number; count: number }>;
+};
 export type VtbDynamic = {
   title: string;
   description: string;
@@ -1087,6 +1105,53 @@ const createVtbRepository = (prisma: PrismaClient) => {
     });
   };
 
+  const recordLiveContributionEvent = async (event: VtbContributionEvent) => {
+    const amount = normalizeContributionInteger(event.amount);
+    const count = Math.max(1, normalizeContributionInteger(event.count, 1));
+    const result = await prisma.vtbLiveContributionEvent.createMany({
+      data: {
+        eventId: event.eventId,
+        streamerMid: toMid(event.streamerMid),
+        sessionStart: event.sessionStart,
+        userId: event.userId,
+        userName: event.userName,
+        kind: event.kind,
+        amount,
+        count,
+        itemName: event.itemName,
+        roleName: event.roleName,
+        occurredAt: event.occurredAt,
+      },
+      skipDuplicates: true,
+    });
+    return result.count > 0;
+  };
+
+  const getLiveContributionSummary = async (mid: string, sessionStart: Date): Promise<VtbContributionSummary> => {
+    const events = await prisma.vtbLiveContributionEvent.findMany({
+      where: { streamerMid: toMid(mid), sessionStart },
+      orderBy: { occurredAt: "asc" },
+      select: { userId: true, userName: true, kind: true, amount: true, count: true },
+    });
+    const renewals = new Map<string, string>();
+    const activations = new Map<string, string>();
+    const gifts = new Map<string, { userName: string; amount: number; count: number }>();
+    for (const event of events) {
+      const name = event.userName || event.userId;
+      if (event.kind === "guard-renewal") renewals.set(event.userId, name);
+      else if (event.kind === "guard-activation") activations.set(event.userId, name);
+      else if (event.kind === "gift" || event.kind === "super-chat") {
+        const previous = gifts.get(event.userId) ?? { userName: name, amount: 0, count: 0 };
+        gifts.set(event.userId, { userName: name, amount: previous.amount + event.amount, count: previous.count + event.count });
+      }
+    }
+    return {
+      guardRenewals: [...renewals.values()],
+      guardActivations: [...activations.values()],
+      topGifts: [...gifts.values()].sort((a, b) => b.amount - a.amount || b.count - a.count).slice(0, 5),
+    };
+  };
+
   const findFf14Item = async (queryName: string) => {
     const item = await prisma.ff14Item.findUnique({ where: { queryName } });
     return item ? { id: item.itemId, name: item.name } : undefined;
@@ -1754,7 +1819,7 @@ const createVtbRepository = (prisma: PrismaClient) => {
     cleanupExpiredFf14PriceAlertDeliveries,
     findStreamerByName, listStreamers, deleteStreamersNotInNames, deleteStreamerByName,
     upsertStreamer, getLiveSession, startLiveSession, captureLiveSessionStartGuards,
-    recordLiveDelivery, markLiveSessionEnded,
+    recordLiveDelivery, markLiveSessionEnded, recordLiveContributionEvent, getLiveContributionSummary,
     recordLiveEndDelivery,
     getDynamicDeliveryState, startDynamicDelivery, recordDynamicDelivery,
     getDeliveredNewsIds, recordNewsDeliveries, ensureReminderStorage, createReminder, claimDueReminders,
@@ -1778,15 +1843,15 @@ const getNextReminderTime = (current: Date, intervalMinutes: number, now: Date) 
 const formatSyncFailure = (error: unknown) => {
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   if (error instanceof Error && (error.name === "VtbRateLimitError" || error.name === "VtbCooldownError")) {
-    return "B 站这会儿不让查，请等一会儿再试";
+    return "B 站这会儿有点忙，晚点再查～";
   }
   if (/database|prisma|postgres|connection refused|econnrefused/.test(message)) {
-    return "数据库没连上，请检查数据库状态再试";
+    return "数据库暂时没连上，检查一下状态再试～";
   }
   if (/fetch failed|network|timeout|timed out|socket|dns|bilibili .*api|api failed|http \d/.test(message)) {
-    return "B 站接口这会儿没回消息，请检查网络或代理配置再试";
+    return "B 站接口没回话，看看网络或代理再试～";
   }
-  return "这次同步没处理好，请稍后再试";
+  return "这次同步没跑顺，晚点再试～";
 };
 
 export const formatLiveMessage = (
@@ -1794,26 +1859,26 @@ export const formatLiveMessage = (
   fans: number | undefined,
   liveWebUrl: string,
 ) => [
-  `🔴 ${live.name} 的直播间开门啦！`,
+  `🔴 ${live.name} 开播啦！`,
   "",
-  "今天播的是——",
+  "今天直播：",
   `「${cleanBilibiliEmoteText(live.title) || "还没有直播标题"}」`,
   "",
   ...(live.liveStartedAt ? [`⏰ ${dayjs(live.liveStartedAt).format("MM月DD日 HH:mm")} 开播`] : []),
   ...(live.roomId ? [`🔗 ${formatLiveRoomUrl(live.roomId, liveWebUrl)}`] : []),
   "",
-  "来得正好，一起去看看吧！",
+  "直播间集合，开冲！",
 ].join("\n");
 
 export const formatLiveQueryMessage = (live: VtbLiveInfo, fans: number | undefined, liveWebUrl: string) => [
-  `📺 ${live.name} 的直播小窗`,
-  live.isLive ? "🔴 现在正在直播" : "🌙 现在还没开播",
+  `📺 ${live.name} 的直播情报`,
+  live.isLive ? "🔴 正在直播" : "🌙 还没开播",
   "",
   `「${cleanBilibiliEmoteText(live.title) || "还没有直播标题"}」`,
   ...(live.liveStartedAt ? ["", `⏰ ${dayjs(live.liveStartedAt).format("MM月DD日 HH:mm")} 开播`] : []),
   ...(live.roomId ? [`🔗 ${formatLiveRoomUrl(live.roomId, liveWebUrl)}`] : []),
   "",
-  live.isLive ? "直播间正热闹，来得及的话就去看看吧！" : "今天还在蓄力，等下次开播再见。",
+  live.isLive ? "直播间正热闹，进来一起玩！" : "先去忙你的，等 TA 开播再来蹲～",
 ].join("\n");
 
 export const formatOfflineMessage = (
@@ -1827,25 +1892,54 @@ export const formatOfflineMessage = (
   startStats: VtbLiveStats = {},
   endStats: VtbLiveStats = {},
   guardNames: readonly string[] = [],
+  contributionSummary: VtbContributionSummary = { guardRenewals: [], guardActivations: [], topGifts: [] },
 ) => {
   const fanChange = positiveCountChange(startFans, endFans);
   const fanClubChange = positiveCountChange(startStats.fanClub, endStats.fanClub);
   const guardChange = positiveCountChange(startStats.guards, endStats.guards);
   const durationMinutes = Math.max(1, Math.floor((endedAt.getTime() - startedAt.getTime()) / 60_000));
-  const guardThanks = guardNames.length === 0
+  const renewalNames = uniqueContributionNames(contributionSummary.guardRenewals);
+  const renewalNameKeys = new Set(renewalNames.map((name) => name.trim()));
+  const activationNames = uniqueContributionNames(contributionSummary.guardActivations)
+    .filter((name) => !renewalNameKeys.has(name.trim()));
+  const activationNameKeys = new Set(activationNames.map((name) => name.trim()));
+  const snapshotGuardNames = uniqueContributionNames(guardNames)
+    .filter((name) => !renewalNameKeys.has(name.trim()) && !activationNameKeys.has(name.trim()));
+  const guardThanks = snapshotGuardNames.length === 0
     ? []
-    : ["特别感谢新加入大航海的观众：", ...guardNames.map((guardName) => `- ${guardName}`), ""];
+    : ["💙 感谢新加入大航海的观众：", ...snapshotGuardNames.map((guardName) => `- ${guardName}`), ""];
+  const activationThanks = activationNames.length === 0
+    ? []
+    : [
+        "⚓ 感谢本场加入大航海的观众：",
+        ...activationNames.slice(0, 10).map((name) => `- ${name}`),
+        "",
+      ];
+  const renewalThanks = renewalNames.length === 0
+    ? []
+    : ["🔁 感谢续费大航海的观众：", ...renewalNames.slice(0, 10).map((name) => `- ${name}`), ""];
+  const giftThanks = contributionSummary.topGifts.length === 0
+    ? []
+    : [
+        "🏆 本场打赏 Top 5：",
+        ...contributionSummary.topGifts.map((entry, index) =>
+          `- ${index + 1}. ${entry.userName}${entry.amount > 0 ? `（${(entry.amount / 1_000).toFixed(2)} 电池）` : `（${entry.count} 次）`}`),
+        "",
+      ];
   return [
-    `🌙 ${name} 今天收工啦`,
+    `🌙 ${name} 下播啦，今天辛苦了！`,
     "",
-    `这次和大家一起度过了 ${formatLiveDuration(durationMinutes)}`,
-    `⏰ ${dayjs(endedAt).format("MM月DD日 HH:mm")} 结束`,
-    ...(fanChange === undefined ? [] : [`✨ 本场新关注 +${fanChange.toLocaleString("zh-CN")}`]),
-    ...(fanClubChange === undefined ? [] : [`💖 本场粉丝团 +${fanClubChange.toLocaleString("zh-CN")}`]),
-    ...(guardChange === undefined ? [] : [`⚓ 本场大航海 +${guardChange.toLocaleString("zh-CN")}`]),
+    `本场直播陪伴了 ${formatLiveDuration(durationMinutes)}`,
+    `⏰ ${dayjs(endedAt).format("MM月DD日 HH:mm")} 下播`,
+    ...(fanChange === undefined ? [] : [`✨ 新增关注 +${fanChange.toLocaleString("zh-CN")}`]),
+    ...(fanClubChange === undefined ? [] : [`💖 粉丝团 +${fanClubChange.toLocaleString("zh-CN")}`]),
+    ...(guardChange === undefined ? [] : [`⚓ 大航海 +${guardChange.toLocaleString("zh-CN")}`]),
     "",
     ...guardThanks,
-    "辛苦啦，也谢谢大家一路陪到下播。充好电，我们下次见！",
+    ...activationThanks,
+    ...renewalThanks,
+    ...giftThanks,
+    "今天的直播到这里，感谢大家一路陪伴！下次开播见～",
   ].join("\n");
 };
 
@@ -1868,6 +1962,21 @@ const positiveCountChange = (start: number | undefined, end: number | undefined)
   return end - start;
 };
 
+const uniqueContributionNames = (names: readonly string[]) => {
+  const seen = new Set<string>();
+  return names.filter((name) => {
+    const key = name.trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const normalizeContributionInteger = (value: number, fallback = 0) => {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(2_147_483_647, Math.max(0, Math.round(value)));
+};
+
 export const formatDynamicMessage = (dynamic: VtbDynamic, webUrl: string) => {
   const dynamicUrl = formatDynamicUrl(dynamic.link, webUrl);
   const hasDynamicUrlInDescription =
@@ -1882,7 +1991,7 @@ export const formatDynamicMessage = (dynamic: VtbDynamic, webUrl: string) => {
     ? [`「${display.title}」`, ...(display.description ? ["", ...display.description.split("\n")] : [])]
     : display.description
       ? display.description.split("\n")
-      : ["只留下了标题，点进原文看看吧。"];
+      : ["只留下标题啦，点开原文看看～"];
 
   return [
     formatDynamicHeading(dynamic),

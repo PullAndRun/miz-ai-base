@@ -103,6 +103,20 @@ dynamicPollMinutes = 15
 dynamicConcurrency = 2
 # 粉丝数不需要随直播状态频繁刷新，默认缓存 30 分钟。
 cardCacheMinutes = 30
+liveEventEnabled = true
+# 普通礼物/醒目留言达到该电池数才实时感谢；加入大航海、续费和红包不受此项限制。
+contributionMinAmount = 50
+# 连续打赏的静默汇总窗口；每次新打赏都会刷新计时（单位：毫秒）。
+contributionBatchWindowMs = 10000
+# 单批打赏汇总的最长等待时间，避免持续打赏无限延迟（单位：毫秒）。
+contributionBatchMaxWaitMs = 120000
+liveEventMaxConnections = 12
+liveEventConnectIntervalMs = 1500
+liveEventReconnectBaseMs = 5000
+liveEventReconnectMaxMs = 300000
+# Optional custom Bilibili live WebSocket endpoint.
+liveEventApiUrl = ""
+liveEventTokenApiUrl = ""
 userApiUrl = ""
 cardApiUrl = ""
 liveApiUrl = ""

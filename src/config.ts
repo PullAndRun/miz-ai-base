@@ -159,6 +159,16 @@ const rawMizConfigSchema = z.object({
       guardApiUrl: nonEmptyStringSchema.optional(),
       fanClubApiUrl: nonEmptyStringSchema.optional(),
       liveMasterApiUrl: nonEmptyStringSchema.optional(),
+      liveEventEnabled: z.boolean().optional(),
+      contributionMinAmount: z.number().min(0).max(1_000_000).optional(),
+      contributionBatchWindowMs: z.number().int().min(1_000).max(60_000).optional(),
+      contributionBatchMaxWaitMs: z.number().int().min(10_000).max(600_000).optional(),
+      liveEventMaxConnections: z.number().int().positive().max(100).optional(),
+      liveEventConnectIntervalMs: z.number().int().min(250).max(60_000).optional(),
+      liveEventReconnectBaseMs: z.number().int().min(1_000).max(300_000).optional(),
+      liveEventReconnectMaxMs: z.number().int().min(5_000).max(3_600_000).optional(),
+      liveEventApiUrl: nonEmptyStringSchema.optional(),
+      liveEventTokenApiUrl: nonEmptyStringSchema.optional(),
       qrGenerateApiUrl: nonEmptyStringSchema.optional(),
       qrPollApiUrl: nonEmptyStringSchema.optional(),
       webUrl: nonEmptyStringSchema.optional(),
@@ -175,6 +185,7 @@ const rawMizConfigSchema = z.object({
             atAllStreamers: z.array(nonEmptyStringSchema).optional(),
             dynamicStreamers: z.array(nonEmptyStringSchema).optional(),
             dynamicAtAllStreamers: z.array(nonEmptyStringSchema).optional(),
+            contributionStreamers: z.array(nonEmptyStringSchema).optional(),
           }).refine((subscription) => subscription.streamers.length > 0 || (subscription.dynamicStreamers?.length ?? 0) > 0, {
             message: "VTB subscription must include a live or dynamic streamer",
           }),
@@ -297,6 +308,16 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     guardApiUrl: config.vtb?.guardApiUrl ?? "",
     fanClubApiUrl: config.vtb?.fanClubApiUrl ?? "",
     liveMasterApiUrl: config.vtb?.liveMasterApiUrl ?? "",
+    liveEventEnabled: config.vtb?.liveEventEnabled ?? true,
+    contributionMinAmount: config.vtb?.contributionMinAmount ?? 50,
+    contributionBatchWindowMs: config.vtb?.contributionBatchWindowMs ?? 10_000,
+    contributionBatchMaxWaitMs: config.vtb?.contributionBatchMaxWaitMs ?? 120_000,
+    liveEventMaxConnections: config.vtb?.liveEventMaxConnections ?? 12,
+    liveEventConnectIntervalMs: config.vtb?.liveEventConnectIntervalMs ?? 1_500,
+    liveEventReconnectBaseMs: config.vtb?.liveEventReconnectBaseMs ?? 5_000,
+    liveEventReconnectMaxMs: config.vtb?.liveEventReconnectMaxMs ?? 300_000,
+    liveEventApiUrl: config.vtb?.liveEventApiUrl ?? "",
+    liveEventTokenApiUrl: config.vtb?.liveEventTokenApiUrl ?? "",
     qrGenerateApiUrl: config.vtb?.qrGenerateApiUrl ?? "",
     qrPollApiUrl: config.vtb?.qrPollApiUrl ?? "",
     webUrl: config.vtb?.webUrl ?? "",
@@ -319,6 +340,9 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
       ...(subscription.dynamicAtAllStreamers === undefined
         ? {}
         : { dynamicAtAllStreamers: subscription.dynamicAtAllStreamers.filter((name) => subscription.dynamicStreamers?.includes(name) === true) }),
+      ...(subscription.contributionStreamers === undefined
+        ? {}
+        : { contributionStreamers: subscription.contributionStreamers.filter((name) => subscription.streamers.includes(name)) }),
     })),
   },
 }));
@@ -427,6 +451,19 @@ export type VtbConfig = {
   guardApiUrl: string;
   fanClubApiUrl: string;
   liveMasterApiUrl: string;
+  liveEventEnabled: boolean;
+  /** Minimum single contribution value, in batteries, for real-time pushes. */
+  contributionMinAmount: number;
+  /** Quiet period used to aggregate consecutive contributions, in milliseconds. */
+  contributionBatchWindowMs: number;
+  /** Maximum time a contribution batch may remain open, in milliseconds. */
+  contributionBatchMaxWaitMs: number;
+  liveEventMaxConnections: number;
+  liveEventConnectIntervalMs: number;
+  liveEventReconnectBaseMs: number;
+  liveEventReconnectMaxMs: number;
+  liveEventApiUrl: string;
+  liveEventTokenApiUrl: string;
   qrGenerateApiUrl: string;
   qrPollApiUrl: string;
   webUrl: string;
@@ -443,6 +480,8 @@ export type VtbConfig = {
     readonly dynamicStreamers?: readonly string[];
     /** Streamers whose dynamic notifications should mention every group member. */
     readonly dynamicAtAllStreamers?: readonly string[];
+    /** Streamers whose guard and high-value contribution events should be pushed in real time. */
+    readonly contributionStreamers?: readonly string[];
   }>;
 };
 
@@ -604,6 +643,42 @@ export const setVtbDynamicStreamer = (
     dynamicStreamers: result.dynamicStreamers,
   };
 });
+
+export const setVtbContributionStreamer = (
+  groupId: string | number,
+  streamerName: string,
+  enabled: boolean,
+) => queueVtbSubscriptionUpdate(async () => {
+  const source = await readVtbSubscriptionConfig();
+  const result = setVtbContributionStreamerInSource(source, groupId, streamerName, enabled);
+  if (result.changed) await writeVtbSubscriptionConfig(result.source);
+  return { changed: result.changed, subscribed: result.subscribed, contributionStreamers: result.contributionStreamers };
+});
+
+export const setVtbContributionStreamerInSource = (
+  source: string,
+  groupId: string | number,
+  streamerName: string,
+  enabled: boolean,
+) => {
+  const subscription = findVtbSubscriptionBlock(source, groupId);
+  if (!subscription || !subscription.streamers.includes(streamerName)) {
+    return { changed: false, subscribed: false, source, contributionStreamers: subscription?.contributionStreamers ?? [] };
+  }
+  const current = subscription.contributionStreamers ?? [];
+  const alreadyEnabled = current.includes(streamerName);
+  if (alreadyEnabled === enabled) return { changed: false, subscribed: true, source, contributionStreamers: current };
+  const contributionStreamers = enabled
+    ? [...current, streamerName]
+    : current.filter((name) => name !== streamerName);
+  const updatedBlock = replaceOrInsertTomlArrayAssignment(subscription.text, "contributionStreamers", contributionStreamers, "streamers");
+  return {
+    changed: true,
+    subscribed: true,
+    source: `${source.slice(0, subscription.start)}${updatedBlock}${source.slice(subscription.end)}`,
+    contributionStreamers,
+  };
+};
 
 export const setVtbDynamicStreamerInSource = (
   source: string,
@@ -829,6 +904,7 @@ type VtbSubscriptionBlock = {
   atAllStreamers?: string[];
   dynamicStreamers?: string[];
   dynamicAtAllStreamers?: string[];
+  contributionStreamers?: string[];
 };
 
 const queueFf14PriceAlertUpdate = <T>(operation: () => Promise<T>) => {
@@ -916,7 +992,13 @@ const findVtbSubscriptionBlock = (source: string, groupId: string | number): Vtb
         throw new Error(`Invalid dynamicAtAllStreamers for VTB subscription group ${groupId}`);
       }
       const dynamicAtAllStreamers = rawDynamicAtAllStreamers as string[] | undefined;
-      return { start, end, text, streamers: normalizedStreamers, atAllStreamers, dynamicStreamers, dynamicAtAllStreamers };
+      const rawContributionStreamers = parseTomlAssignment(text, "contributionStreamers");
+      if (rawContributionStreamers !== undefined &&
+        (!Array.isArray(rawContributionStreamers) || !rawContributionStreamers.every((name) => typeof name === "string"))) {
+        throw new Error(`Invalid contributionStreamers for VTB subscription group ${groupId}`);
+      }
+      const contributionStreamers = rawContributionStreamers as string[] | undefined;
+      return { start, end, text, streamers: normalizedStreamers, atAllStreamers, dynamicStreamers, dynamicAtAllStreamers, contributionStreamers };
     }
     start = nextStart;
   }
@@ -1034,7 +1116,7 @@ const replaceOrInsertTomlArrayAssignment = (
 };
 
 const replaceVtbNameAssignments = (source: string, renames: ReadonlyMap<string, string>) => {
-  const keys = ["streamers", "atAllStreamers", "dynamicStreamers", "dynamicAtAllStreamers"];
+  const keys = ["streamers", "atAllStreamers", "dynamicStreamers", "dynamicAtAllStreamers", "contributionStreamers"];
   const assignments = keys.flatMap((key) => {
     const matches: Array<{ key: string; assignment: TomlAssignment }> = [];
     let offset = 0;
@@ -1102,6 +1184,10 @@ const replaceSubscriptionBlock = (
   if (subscription.dynamicAtAllStreamers) {
     const dynamicAtAllStreamers = subscription.dynamicAtAllStreamers.filter((name) => dynamicStreamers?.includes(name) ?? false);
     updatedBlock = replaceTomlArrayAssignment(updatedBlock, "dynamicAtAllStreamers", dynamicAtAllStreamers);
+  }
+  if (subscription.contributionStreamers) {
+    const contributionStreamers = subscription.contributionStreamers.filter((name) => streamers.includes(name));
+    updatedBlock = replaceTomlArrayAssignment(updatedBlock, "contributionStreamers", contributionStreamers);
   }
   return `${source.slice(0, subscription.start)}${updatedBlock}${source.slice(subscription.end)}`;
 };
@@ -1204,6 +1290,8 @@ const APP_API_URL_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "guardApiUrl",
     "fanClubApiUrl",
     "liveMasterApiUrl",
+    "liveEventApiUrl",
+    "liveEventTokenApiUrl",
     "qrGenerateApiUrl",
     "qrPollApiUrl",
     "webUrl",

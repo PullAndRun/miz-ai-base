@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { formatNewsMessages, formatScheduledNewsItems } from "@/news";
 import { formatDynamicMessage, formatLiveMessage, formatLiveQueryMessage, formatOfflineMessage, getVtbNewGuardNames } from "@/vtb";
+import { formatVtbContributionBatchMessage } from "@/vtb-contribution";
 import { createWallpaperMessage } from "@/wallpaper";
 import divinationPlugin from "../plugins/divination";
 
@@ -14,10 +15,10 @@ describe("user-facing copy", () => {
       liveStartedAt: new Date("2030-08-01T20:00:00+08:00"),
     }, 12_345, "https://live.example.test");
 
-    expect(message).toContain("🔴 示例主播 的直播间开门啦！");
-    expect(message).toContain("今天播的是——");
+    expect(message).toContain("🔴 示例主播 开播啦！");
+    expect(message).toContain("今天直播：");
     expect(message).toContain("「今晚一起聊天」");
-    expect(message).toContain("来得正好，一起去看看吧！");
+    expect(message).toContain("直播间集合，开冲！");
     expect(message).not.toContain("位粉丝");
     expect(message).not.toMatch(/开播时间：|当前粉丝：|亮灯|营业|TA|传送门|舞台进行中/);
 
@@ -50,9 +51,9 @@ describe("user-facing copy", () => {
       link: "https://t.bilibili.com/123",
     }, "https://www.example.test");
 
-    expect(offline).toContain("🌙 示例主播 今天收工啦");
-    expect(offline).toContain("这次和大家一起度过了 1 小时");
-    expect(offline).toContain("充好电，我们下次见");
+    expect(offline).toContain("🌙 示例主播 下播啦，今天辛苦了！");
+    expect(offline).toContain("本场直播陪伴了 1 小时");
+    expect(offline).toContain("今天的直播到这里，感谢大家一路陪伴");
     expect(offline).not.toContain("🔗");
     expect(dynamic).toContain("📮 示例主播 发动态啦");
     expect(dynamic).toContain("「新的安排」");
@@ -168,8 +169,8 @@ describe("user-facing copy", () => {
       { fanClub: 20, guards: 4 },
       { fanClub: 23, guards: 4 },
     );
-    expect(increased).toContain("本场新关注 +10");
-    expect(increased).toContain("本场粉丝团 +3");
+    expect(increased).toContain("新增关注 +10");
+    expect(increased).toContain("粉丝团 +3");
     expect(increased).not.toContain("大航海");
 
     const noBaseline = formatOfflineMessage(
@@ -196,10 +197,10 @@ describe("user-facing copy", () => {
       "主播", new Date("2030-08-01T20:00:00+08:00"), new Date("2030-08-01T21:00:00+08:00"),
       undefined, undefined, undefined, "", {}, {}, ["甲", "乙"],
     );
-    expect(offline).toContain("特别感谢新加入大航海的观众：\n- 甲\n- 乙");
+    expect(offline).toContain("💙 感谢新加入大航海的观众：\n- 甲\n- 乙");
     expect(offline).not.toContain("感谢本场上舰的观众：");
-    expect(offline.indexOf("特别感谢新加入大航海的观众：")).toBeGreaterThan(offline.indexOf("⏰ 08月01日 21:00 结束"));
-    expect(offline.indexOf("特别感谢新加入大航海的观众：")).toBeLessThan(offline.indexOf("辛苦啦，也谢谢大家一路陪到下播。"));
+    expect(offline.indexOf("💙 感谢新加入大航海的观众：")).toBeGreaterThan(offline.indexOf("⏰ 08月01日 21:00 下播"));
+    expect(offline.indexOf("💙 感谢新加入大航海的观众：")).toBeLessThan(offline.indexOf("今天的直播到这里，感谢大家一路陪伴"));
     expect(getVtbNewGuardNames(start, {
       ids: ["1", "2", "3", "4", "5", "6", "7"],
       names: ["续舰", "甲", "乙", "丙", "丁", "戊", "己"], captured: true,
@@ -221,6 +222,70 @@ describe("user-facing copy", () => {
       { guards: 7 },
     );
     expect(message).toContain("+3");
+  });
+
+  test("offline notifications thank renewals and show the top five contributors", () => {
+    const message = formatOfflineMessage(
+      "示例主播",
+      new Date("2030-08-01T20:00:00Z"),
+      new Date("2030-08-01T21:00:00Z"),
+      undefined,
+      undefined,
+      undefined,
+      "https://live.bilibili.com",
+      {},
+      {},
+      [],
+      {
+        guardRenewals: ["续舰观众"],
+        guardActivations: ["上舰观众"],
+        topGifts: [
+          { userName: "甲", amount: 500, count: 2 },
+          { userName: "乙", amount: 100, count: 1 },
+        ],
+      },
+    );
+    expect(message).toContain("⚓ 感谢本场加入大航海的观众：\n- 上舰观众");
+    expect(message).toContain("🔁 感谢续费大航海的观众：\n- 续舰观众");
+    expect(message).toContain("🏆 本场打赏 Top 5：\n- 1. 甲（0.50 电池）\n- 2. 乙（0.10 电池）");
+  });
+
+  test("offline guard thanks prefers renewals and removes duplicate names", () => {
+    const message = formatOfflineMessage(
+      "示例主播",
+      new Date("2030-08-01T20:00:00Z"),
+      new Date("2030-08-01T21:00:00Z"),
+      undefined,
+      undefined,
+      undefined,
+      "https://live.bilibili.com",
+      {},
+      {},
+      ["同一观众", "快照观众"],
+      {
+        guardRenewals: ["同一观众"],
+        guardActivations: ["同一观众", "加入观众"],
+        topGifts: [],
+      },
+    );
+    expect(message).toContain("🔁 感谢续费大航海的观众：\n- 同一观众");
+    expect(message).toContain("⚓ 感谢本场加入大航海的观众：\n- 加入观众");
+    expect(message).toContain("💙 感谢新加入大航海的观众：\n- 快照观众");
+    expect(message.match(/- 同一观众/g)).toHaveLength(1);
+    expect(message).not.toContain("⚓ 感谢本场加入大航海的观众：\n- 同一观众");
+  });
+
+  test("contribution batches merge repeated gifts by viewer and item", () => {
+    const message = formatVtbContributionBatchMessage([
+      { userName: "甲", kind: "gift", itemName: "小心心", amount: 20_000, count: 2 },
+      { userName: "甲", kind: "gift", itemName: "小心心", amount: 30_000, count: 3 },
+      { userName: "甲", kind: "super-chat", amount: 50_000, count: 1 },
+      { userName: "乙", kind: "gift", itemName: "辣条", amount: 80_000, count: 1 },
+    ]);
+    expect(message).toContain("🎁 这一波打赏感谢名单：");
+    expect(message).toContain("- 甲：小心心 ×5（50.00 电池）、醒目留言 ×1（50.00 电池）");
+    expect(message).toContain("- 乙：辣条 ×1（80.00 电池）");
+    expect(message).toContain("本轮共收到 180.00 电池，感谢大家的投喂！");
   });
 
   test("dynamic messages omit duplicated title or description text", () => {

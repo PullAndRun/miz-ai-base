@@ -45,7 +45,7 @@ describe("VTB subscription commands", () => {
         replyText = String(message);
       },
     } as never);
-    expect(replyText).toContain("没用对");
+    expect(replyText).toContain("格式不对");
   });
 
   test("rejects a live-room URL before querying Bilibili", async () => {
@@ -188,6 +188,7 @@ describe("VTB subscription commands", () => {
       atAllStreamers: ["主播乙"],
       dynamicStreamers: ["主播乙"],
       dynamicAtAllStreamers: ["主播乙"],
+      contributionStreamers: ["主播乙"],
     }]);
     let replyText = "";
     const plugin = createVtbPlugin({ loadCurrentConfig: async () => config });
@@ -201,7 +202,7 @@ describe("VTB subscription commands", () => {
       },
     } as never);
 
-    expect(replyText).toContain("📺 本群已订阅 2 位主播：\n1. 主播甲\n   · 直播推送\n\n2. 主播乙\n   · 直播推送\n   · 动态推送\n   · 开播 @全体成员\n   · 动态 @全体成员");
+    expect(replyText).toContain("📺 本群关注了 2 位主播：\n1. 主播甲\n   · 直播推送\n\n2. 主播乙\n   · 直播推送\n   · 动态推送\n   · 开播 @全体成员\n   · 动态 @全体成员");
     expect(replyText).not.toContain("动态推送：否");
     expect(replyText).not.toContain("动态 @全体成员：否");
     expect(replyText).not.toContain("开播 @全体成员：否");
@@ -257,7 +258,31 @@ describe("VTB subscription commands", () => {
     } as never);
 
     expect(calls).toEqual([[100, "主播甲", "dynamic"]]);
-    expect(replyText).toContain("动态推送");
+    expect(replyText).toContain("动态提醒");
+  });
+
+  test("contribution subscription can be toggled for a live-subscribed streamer", async () => {
+    const config = createConfig([{ groupId: 100, streamers: ["streamer-a"] }]);
+    const calls: unknown[][] = [];
+    let replyText = "";
+    const plugin = createVtbPlugin({
+      setContributionStreamer: async (...args) => {
+        calls.push(args);
+        return { changed: true, subscribed: true, contributionStreamers: ["streamer-a"] };
+      },
+      loadCurrentConfig: async () => config,
+    });
+
+    await plugin.handle!({
+      command: { name: "vtb", args: "subscribe contribution streamer-a", raw: "vtb subscribe contribution streamer-a" },
+      config,
+      message: adminMessage,
+      logger: { info: () => undefined },
+      reply: async (message: unknown) => { replyText = String(message); },
+    } as never);
+
+    expect(calls).toEqual([[100, "streamer-a", true]]);
+    expect(replyText).toContain("实时打赏感谢");
   });
 
   test("dynamic subscription accepts a VTB whitelist user but rejects ordinary members", async () => {
@@ -359,6 +384,6 @@ describe("VTB subscription commands", () => {
       } as never,
     );
 
-    expect(replyText).toBe("订阅没成功（主播“新主播”）：VTB 订阅名单没能读写。请检查 config/vtb.toml，再试一次。");
+    expect(replyText).toBe("订阅失败（主播“新主播”）：订阅名单暂时读写不了，请检查 config/vtb.toml～");
   });
 });

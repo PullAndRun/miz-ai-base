@@ -48,6 +48,8 @@ import {
   type VtbLiveStats,
   type VtbStreamer,
 } from "@/vtb";
+import { createVtbLiveEventManager, type VtbLiveEventNotification } from "@/vtb-live-events";
+import { formatVtbContributionBatchMessage } from "@/vtb-contribution";
 
 const ALL_GROUPS_DELIVERED_MARKER = "*";
 const SCHEDULED_DELIVERY_CONCURRENCY = 5;
@@ -69,6 +71,7 @@ type VtbSubscriptionGroup = {
   atAll: boolean;
   dynamic: boolean;
   dynamicAtAll: boolean;
+  contribution: boolean;
 };
 
 type VtbResolvedSubscription = {
@@ -503,9 +506,88 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
     livePollInterruptedAt: undefined,
   };
   let pollingConfig = config;
+  const contributionBatches = new Map<string, {
+    events: VtbLiveEventNotification[];
+    groupIds: Array<string | number>;
+    startedAt: number;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  const getContributionBatchTiming = () => {
+    const windowMs = Math.max(1_000, Math.floor(pollingConfig.vtb.contributionBatchWindowMs));
+    const maxWaitMs = Math.max(10_000, Math.floor(pollingConfig.vtb.contributionBatchMaxWaitMs));
+    return { windowMs, maxWaitMs };
+  };
+  const flushContributionBatch = async (key: string) => {
+    const batch = contributionBatches.get(key);
+    if (!batch) return;
+    contributionBatches.delete(key);
+    clearTimeout(batch.timer);
+    if (batch.events.length === 0 || batch.groupIds.length === 0) return;
+    const message = createVtbNotificationMessage(formatVtbContributionBatchMessage(batch.events.map((event) => ({
+      userName: event.userName,
+      kind: event.kind === "super-chat" ? "super-chat" : "gift",
+      amount: event.amount,
+      count: event.count,
+      itemName: event.itemName,
+    }))));
+    await sendVtbGroupMessage(batch.groupIds, message, gateway, logger, "contribution", batch.events[0].userName);
+  };
+  const flushContributionBatches = async (streamerMid?: string, sessionStart?: Date) => {
+    const keys = [...contributionBatches.entries()]
+      .filter(([, batch]) => (streamerMid === undefined || batch.events[0]?.streamerMid === streamerMid) &&
+        (sessionStart === undefined || batch.events[0]?.sessionStart.getTime() === sessionStart.getTime()))
+      .map(([key]) => key);
+    await Promise.all(keys.map(async (key) => {
+      try {
+        await flushContributionBatch(key);
+      } catch (error) {
+        logger.warn("plugin", "vtb contribution batch delivery failed", normalizeError(error));
+      }
+    }));
+  };
+  const queueContributionBatch = (event: VtbLiveEventNotification) => {
+    const groupIds = [...new Map(event.groupIds.map((groupId) => [String(groupId), groupId])).values()];
+    if (groupIds.length === 0) return;
+    const groupKey = groupIds.map(String).sort().join(",");
+    const key = `${event.streamerMid}:${event.sessionStart.getTime()}:${groupKey}`;
+    const current = contributionBatches.get(key);
+    if (current) {
+      current.events.push(event);
+      clearTimeout(current.timer);
+      const { windowMs, maxWaitMs } = getContributionBatchTiming();
+      const remainingMaxWait = Math.max(0, maxWaitMs - (Date.now() - current.startedAt));
+      current.timer = setTimeout(() => {
+        void flushContributionBatch(key).catch((error) => {
+          logger.warn("plugin", "vtb contribution batch delivery failed", normalizeError(error));
+        });
+      }, Math.min(windowMs, remainingMaxWait));
+      return;
+    }
+    const { windowMs, maxWaitMs } = getContributionBatchTiming();
+    const batch = {
+      events: [event],
+      groupIds,
+      startedAt: Date.now(),
+      timer: setTimeout(() => {
+        void flushContributionBatch(key).catch((error) => {
+          logger.warn("plugin", "vtb contribution batch delivery failed", normalizeError(error));
+        });
+      }, Math.min(windowMs, maxWaitMs)),
+    };
+    contributionBatches.set(key, batch);
+  };
+  const liveEventManager = createVtbLiveEventManager(config.vtb, repository, logger, async (event) => {
+    if (event.groupIds.length === 0) return;
+    if (event.kind === "gift" || event.kind === "super-chat") {
+      queueContributionBatch(event);
+      return;
+    }
+    const message = createVtbNotificationMessage(formatContributionMessage(event));
+    await sendVtbGroupMessage(event.groupIds, message, gateway, logger, "contribution", event.userName);
+  });
   const runTask = () => pollingConfig.vtb.subscriptions.length === 0
     ? Promise.resolve()
-    : pollVtbSubscriptions(pollingConfig, gateway, logger, repository, pollState);
+    : pollVtbSubscriptions(pollingConfig, gateway, logger, repository, pollState, liveEventManager, flushContributionBatches);
 
   logger.info("plugin", "vtb task started", {
     cronExpression,
@@ -546,6 +628,8 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
   return {
     stop: async () => {
       detachSubscriptionListener();
+      await liveEventManager.stopAll();
+      await flushContributionBatches();
       await task.stop();
     },
   };
@@ -557,6 +641,8 @@ const pollVtbSubscriptions = async (
   logger: Logger,
   repository: Awaited<ReturnType<typeof getVtbRepository>>,
   pollState: VtbPollState,
+  liveEventManager: ReturnType<typeof createVtbLiveEventManager>,
+  flushContributionBatches: (streamerMid: string, sessionStart?: Date) => Promise<void>,
 ) => {
   const streamerGroups = new Map<string, Map<string, VtbSubscriptionGroup>>();
   for (const subscription of config.vtb.subscriptions) {
@@ -571,6 +657,7 @@ const pollVtbSubscriptions = async (
         atAll: existing?.atAll === true || subscription.atAllStreamers?.includes(streamer) === true,
         dynamic: existing?.dynamic === true || subscription.dynamicStreamers?.includes(streamer) === true,
         dynamicAtAll: existing?.dynamicAtAll === true || subscription.dynamicAtAllStreamers?.includes(streamer) === true,
+        contribution: existing?.contribution === true || subscription.contributionStreamers?.includes(streamer) === true,
       });
       streamerGroups.set(streamer, groups);
     }
@@ -744,6 +831,9 @@ const pollVtbSubscriptions = async (
             .filter(([, group]) => group.atAll)
             .map(([groupId]) => groupId),
         );
+        const contributionGroupIds = [...groups.values()]
+          .filter((group) => group.contribution)
+          .map((group) => group.groupId);
         const cachedPush =
           pushCache.get(streamer.mid) ??
           Promise.all([
@@ -770,6 +860,13 @@ const pollVtbSubscriptions = async (
         let stats: VtbLiveStats = { fans: currentFans, fanClub: currentFanClub, guards: currentGuards };
         const session = await repository.getLiveSession(streamer.mid);
         const activeSession = session?.endedAt ? undefined : session;
+        if (live.isLive && activeSession) {
+          if (contributionGroupIds.length > 0) {
+            liveEventManager.start(streamer.mid, live.roomId ?? activeSession.roomId, activeSession.startedAt, contributionGroupIds);
+          } else {
+            liveEventManager.stop(streamer.mid);
+          }
+        }
         if (live.isLive && activeSession && !activeSession.startGuardSnapshot?.captured) {
           try {
             const startGuardSnapshot = live.roomId
@@ -852,6 +949,9 @@ const pollVtbSubscriptions = async (
             // Store an empty list as a pending delivery as well, so a failed
             // first send is retried even after the freshness window closes.
             await repository.startLiveSession(streamer, live, currentFans, deliveredGroupIds, stats, startGuardSnapshot);
+            if (contributionGroupIds.length > 0) {
+              liveEventManager.start(streamer.mid, live.roomId, live.liveStartedAt ?? new Date(), contributionGroupIds);
+            }
           }
           if (deliveredGroups.length > 0) {
             logger.info("plugin", "vtb live started notification sent", { streamer: live.name, groupIds: deliveredGroups });
@@ -869,6 +969,9 @@ const pollVtbSubscriptions = async (
             liveStartedAt: live.liveStartedAt,
           });
         } else if (groupIds.length > 0 && !live.isLive && session) {
+          liveEventManager.stop(streamer.mid);
+          await liveEventManager.flush(streamer.mid);
+          await flushContributionBatches(streamer.mid, session.startedAt);
           const endedAt = session.endedAt ?? new Date(now);
           let endFans = session.endFans ?? currentFans;
           let endFanClub = session.endFanClub ?? currentFanClub;
@@ -914,6 +1017,11 @@ const pollVtbSubscriptions = async (
             session.endDeliveredGroupIds,
           );
           if (undeliveredEndGroupIds.length > 0) {
+            const contributionSummary = await repository.getLiveContributionSummary(streamer.mid, session.startedAt)
+              .catch((error) => {
+                logger.warn("plugin", "vtb contribution summary unavailable; sending live-end message without it", normalizeError(error));
+                return { guardRenewals: [], guardActivations: [], topGifts: [] };
+              });
             const message = createVtbNotificationMessage(
               formatOfflineMessage(
                 live.name,
@@ -926,6 +1034,7 @@ const pollVtbSubscriptions = async (
                 { fanClub: session.startFanClub, guards: session.startGuards },
                 { fanClub: endFanClub, guards: endGuards },
                 getVtbNewGuardNames(session.startGuardSnapshot, endGuardSnapshot),
+                contributionSummary,
               ),
             );
             const deliveredGroups = await sendVtbGroupMessage(
@@ -1095,6 +1204,7 @@ const mergeVtbSubscriptionsByMid = (
         atAll: previous?.atAll === true || group.atAll,
         dynamic: previous?.dynamic === true || group.dynamic,
         dynamicAtAll: previous?.dynamicAtAll === true || group.dynamicAtAll,
+        contribution: previous?.contribution === true || group.contribution,
       });
     }
   }
@@ -1106,7 +1216,7 @@ const sendVtbGroupMessage = async (
   message: unknown,
   gateway: Gateway,
   logger: Logger,
-  kind: "live start" | "live end" | "dynamic",
+  kind: "live start" | "live end" | "dynamic" | "contribution",
   streamer: string,
   atAllGroupIds: ReadonlySet<string> = new Set(),
 ) => {
@@ -1156,6 +1266,25 @@ const resolveVtbNotificationImage = async (
     });
     return undefined;
   }
+};
+
+const formatContributionMessage = (event: VtbLiveEventNotification) => {
+  if (event.kind === "red-packet") {
+    const details = [
+      event.amount > 0 ? `价值 ${(event.amount / 1_000).toFixed(2)} 电池` : "",
+      event.count > 1 ? `${event.count} 份` : "",
+    ].filter(Boolean).join(" · ");
+    return `🧧 ${event.userName === "red-packet" ? "直播间红包" : `${event.userName} 发起的红包`}${details ? `（${details}）` : ""}来啦！\n手速快一点，进直播间抢红包：${event.itemName || "直播间红包"}`;
+  }
+  if (event.kind === "guard-activation" || event.kind === "guard-renewal") {
+    if (event.kind === "guard-renewal") {
+      return `⚓ ${event.userName} 续费${event.roleName ? `成为${event.roleName}` : "大航海"}啦，感谢继续陪伴！`;
+    }
+    return `⚓ ${event.userName} 加入大航海${event.roleName ? `，成为${event.roleName}` : ""}啦，感谢支持！`;
+  }
+  const gift = event.itemName || "礼物";
+  const battery = event.amount / 1_000;
+  return `🎁 ${event.userName} 送来支持，感谢投喂！\n${gift} ×${event.count} · 价值 ${battery.toFixed(2)} 电池`;
 };
 
 const resolveVtbNotificationImages = async (

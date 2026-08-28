@@ -22,6 +22,7 @@ import {
   setVtbAtAllStreamer,
   setVtbDynamicStreamer,
   setVtbDynamicAtAllStreamer,
+  setVtbContributionStreamer,
   updateVtbSubscriptionNames,
 } from "@/config";
 import { findVtbSubscription } from "@/vtb-subscriptions";
@@ -39,6 +40,7 @@ type VtbPluginDependencies = {
   setAtAllStreamer?: typeof setVtbAtAllStreamer;
   setDynamicStreamer?: typeof setVtbDynamicStreamer;
   setDynamicAtAllStreamer?: typeof setVtbDynamicAtAllStreamer;
+  setContributionStreamer?: typeof setVtbContributionStreamer;
   getRepository?: typeof getVtbRepository;
   notifySubscriptionChange?: typeof notifyVtbSubscriptionChange;
 };
@@ -52,28 +54,29 @@ export const createVtbPlugin = ({
   setAtAllStreamer = setVtbAtAllStreamer,
   setDynamicStreamer = setVtbDynamicStreamer,
   setDynamicAtAllStreamer = setVtbDynamicAtAllStreamer,
+  setContributionStreamer = setVtbContributionStreamer,
   getRepository = getVtbRepository,
   notifySubscriptionChange = notifyVtbSubscriptionChange,
 }: VtbPluginDependencies = {}): MizPlugin => ({
   name: "vtb",
   commands: ["vtb"],
   description: [
-    "VTB subscriptions: miz vtb subscribe live|dynamic <streamer>",
-    "Cancel one type: miz vtb unsubscribe live|dynamic <streamer>",
-    "AT-all: miz vtb atall live|dynamic enable/disable <streamer>",
-    "追踪 B 站主播的直播和动态，也能管理本群的关注名单。",
-    "查询直播：miz vtb live 主播昵称",
-    "查询动态：miz vtb dynamic 主播昵称",
-    "查看订阅：miz vtb list",
-    "同步昵称与直播间：miz vtb sync",
-    "扫码登录：miz vtb login",
+    "VTB 直播订阅：miz vtb subscribe live|dynamic|contribution <主播>",
+    "取消一项订阅：miz vtb unsubscribe live|dynamic|contribution <主播>",
+    "设置 @全体：miz vtb atall live|dynamic enable/disable <主播>",
+    "跟踪 B 站主播的直播、动态和打赏感谢，群里一条命令搞定。",
+    "查直播：miz vtb live 主播昵称",
+    "查动态：miz vtb dynamic 主播昵称",
+    "看订阅：miz vtb list",
+    "同步资料：miz vtb sync",
+    "登录 B 站：miz vtb login",
     "退出登录：miz vtb logout",
-    "订阅管理、推送开关和资料同步需要 VTB 管理员白名单权限；扫码登录和退出登录仅限私聊，并需要同样的白名单权限。",
+    "订阅管理和资料同步需要群管理员或 VTB 管理员白名单；登录和退出登录仅限私聊，并需要同样的白名单权限。",
   ].join("\n"),
   async handle({ command, config, logger, message, reply }) {
     const [type, ...rawArgumentParts] = command.args.trim().split(/\s+/);
     const subscriptionType = (type === "subscribe" || type === "unsubscribe") &&
-      (rawArgumentParts[0] === "live" || rawArgumentParts[0] === "dynamic")
+      (rawArgumentParts[0] === "live" || rawArgumentParts[0] === "dynamic" || rawArgumentParts[0] === "contribution")
       ? rawArgumentParts[0]
       : undefined;
     const argumentParts = subscriptionType ? rawArgumentParts.slice(1) : rawArgumentParts;
@@ -98,32 +101,33 @@ export const createVtbPlugin = ({
       (type === "atall" && (atAllType === undefined || atAllAction === undefined))
     ) {
       await reply([
-        "这条命令没用对。请按下面的格式发送：",
-        "直播状态：miz vtb live 主播昵称",
-        "最新动态：miz vtb dynamic 主播昵称",
-        "订阅列表：miz vtb list",
-        "订阅直播：miz vtb subscribe live 主播昵称",
-        "订阅动态：miz vtb subscribe dynamic 主播昵称",
-        "取消直播/动态：miz vtb unsubscribe live/dynamic 主播昵称",
+        "这条命令格式不对，照着下面发：",
+        "看看直播：miz vtb live 主播昵称",
+        "看看动态：miz vtb dynamic 主播昵称",
+        "查看关注：miz vtb list",
+        "开启直播提醒：miz vtb subscribe live 主播昵称",
+        "开启动态提醒：miz vtb subscribe dynamic 主播昵称",
+        "开启打赏感谢：miz vtb subscribe contribution 主播昵称",
+        "关闭提醒：miz vtb unsubscribe live/dynamic/contribution 主播昵称",
         "设置 @全体：miz vtb atall live/dynamic enable/disable 主播昵称",
-        "同步资料：miz vtb sync",
-        "扫码登录：miz vtb login（私聊）",
-        "退出登录：miz vtb logout（私聊）",
+        "同步主播资料：miz vtb sync",
+        "登录 B 站：miz vtb login（私聊）",
+        "退出 B 站登录：miz vtb logout（私聊）",
       ].join("\n"));
       return;
     }
 
     if (type === "login") {
       if (message.groupId !== undefined) {
-        await reply("登录没成功：扫码登录只能在私聊进行。请私聊发送 miz vtb login。");
+        await reply("登录失败：扫码只能在私聊进行，请私聊发送 miz vtb login。");
         return;
       }
       if (!isWhitelistedUser(message.userId, config.vtb.adminWhitelistUserIds)) {
-        await reply("登录没成功：这个账号不在 VTB 管理员白名单中。请让 VTB 管理员来登录。");
+        await reply("登录失败：你的账号不在 VTB 管理员白名单里，请让管理员来操作。");
         return;
       }
       if (vtbLoginInProgress) {
-        await reply("登录没成功：已经有一个扫码登录在进行中。等它完成或过期后，再发送 miz vtb login。");
+        await reply("已经有一个登录二维码在等扫码啦，请等它完成或过期后再试。");
         return;
       }
 
@@ -131,11 +135,11 @@ export const createVtbPlugin = ({
       try {
         const qr = await generateBilibiliQrLogin(config.vtb.proxyUrl);
         await reply([
-          { type: "text", data: { text: "请使用 Bilibili App 扫描下方二维码登录；二维码 5 分钟内有效。" } },
+          { type: "text", data: { text: "请打开哔哩哔哩 App 扫描下方二维码，5 分钟内有效～" } },
           { type: "image", data: { file: `base64://${qr.image.toString("base64")}` } },
         ]);
         await waitForBilibiliQrLogin(qr.qrcodeKey, config.vtb.proxyUrl);
-        await reply("B 站登录成功，完整凭据已保存，后续 VTB 请求会自动使用。\n如需重新登录，再次发送 miz vtb login 即可。");
+        await reply("✅ B 站登录成功！之后的 VTB 请求会自动使用这份登录状态。\n需要换号时，再发一次 miz vtb login 就好。");
       } catch (error) {
         logger.warn("plugin", "vtb bilibili QR login failed", { error: summarizeError(error) });
         await reply(formatVtbCommandFailure("login", "", error));
@@ -147,11 +151,11 @@ export const createVtbPlugin = ({
 
     if (type === "logout") {
       if (message.groupId !== undefined) {
-        await reply("退出登录没成功：只能在私聊清除 B 站登录凭据。请私聊发送 miz vtb logout。");
+        await reply("退出失败：登录状态只能在私聊清除，请私聊发送 miz vtb logout。");
         return;
       }
       if (!isWhitelistedUser(message.userId, config.vtb.adminWhitelistUserIds)) {
-        await reply("退出登录没成功：这个账号不在 VTB 管理员白名单中。请让 VTB 管理员来操作。");
+        await reply("退出失败：你的账号不在 VTB 管理员白名单里，请让管理员来操作。");
         return;
       }
       try {
@@ -161,12 +165,12 @@ export const createVtbPlugin = ({
         await reply(formatVtbCommandFailure("logout", "", error));
         return;
       }
-      await reply("B 站已退出扫码登录；后续 VTB 和视频下载将不再携带登录凭据。");
+      await reply("✅ 已退出 B 站登录，之后的 VTB 请求和视频下载不会再携带登录状态。");
       return;
     }
 
     if (!config.vtb.enabled) {
-      await reply("操作没成功：VTB 还没有开通。请管理员打开配置里的 miz.vtb.enabled，再试一次。");
+      await reply("VTB 功能还没开通，请管理员先开启 miz.vtb.enabled。");
       return;
     }
 
@@ -174,7 +178,7 @@ export const createVtbPlugin = ({
       (type === "dynamic" && dynamicAction === undefined) ||
       type === "subscribe";
     if (performsStreamerLookup && looksLikeUrl(streamerName)) {
-      await reply("没查成：这里要填主播当前使用的完整 B 站昵称，不是直播间链接。换成昵称再试。");
+      await reply("这里要填主播当前的完整 B 站昵称，不是直播间链接～换成昵称再试一次。");
       return;
     }
 
@@ -186,24 +190,25 @@ export const createVtbPlugin = ({
     const missingSyncApi = type === "sync" &&
       (!config.vtb.userApiUrl || !config.vtb.cardApiUrl || !config.vtb.liveApiUrl || !config.vtb.webUrl);
     if (missingLiveApi || missingDynamicApi || missingSyncApi) {
-      await reply("没查成：VTB 接口还没配齐。请管理员补好配置，再试一次。");
+      await reply("VTB 接口还没配齐，请管理员补好配置后再来试。");
       return;
     }
 
     try {
       const isDynamicMutation = type === "dynamic" && dynamicAction !== undefined;
+      const isContributionMutation = (type === "subscribe" || type === "unsubscribe") && subscriptionType === "contribution";
       const isDynamicAtAllMutation =
         (String(type) === "dynamicatall" || String(type) === "dynamic-atall") && dynamicAtAllAction !== undefined;
       if (type === "list" || type === "subscribe" || type === "unsubscribe" || type === "atall" || isDynamicMutation || isDynamicAtAllMutation) {
         if (message.groupId === undefined) {
-          await reply("没改成：订阅名单只能在群里管理。请到目标群发送命令。");
+          await reply("订阅名单只能在群里管理，请到目标群发送这条命令。");
           return;
         }
         if (!isGroupAdministrator(message.raw) && !isWhitelistedUser(
           message.userId,
           config.vtb.adminWhitelistUserIds,
         )) {
-          await reply("没改成：你没有修改本群 VTB 订阅的权限。请让群管理员或 VTB 管理员来操作。");
+          await reply("这项设置需要群管理员或 VTB 管理员来操作～");
           return;
         }
 
@@ -215,7 +220,7 @@ export const createVtbPlugin = ({
               ? [...new Set([...subscription.streamers, ...(subscription.dynamicStreamers ?? [])])]
               : [];
             if (names.length === 0) {
-              await reply("\u{1F4FA} 关注名单还是空的。\n添加：miz vtb subscribe live 主播昵称 或 miz vtb subscribe dynamic 主播昵称");
+              await reply("📺 本群还没有关注主播～\n添加：miz vtb subscribe live 主播昵称");
               return;
             }
             await reply(formatVtbSubscriptionList(subscription!));
@@ -247,11 +252,11 @@ export const createVtbPlugin = ({
             ? await setDynamicAtAllStreamer(message.groupId, streamerName, enabled)
             : await setAtAllStreamer(message.groupId, streamerName, enabled);
           if (!result.subscribed) {
-            await reply(`设置没成功：${streamerName} 还没订阅。请先发送 miz vtb subscribe ${streamerName}。`);
+          await reply(`${streamerName} 还没开启直播提醒，请先发送 miz vtb subscribe live ${streamerName}。`);
             return;
           }
           if (!result.changed) {
-            await reply(`${streamerName} 的开播 @全体成员已经${enabled ? "开启" : "关闭"}了。`);
+            await reply(`${streamerName} 的开播 @全体提醒已经${enabled ? "开启" : "关闭"}啦。`);
             return;
           }
           logger.info("plugin", "vtb group at-all setting updated", {
@@ -263,7 +268,7 @@ export const createVtbPlugin = ({
             groupId: message.groupId,
             subscriptions: (await loadCurrentConfig()).vtb.subscriptions,
           });
-          await reply(`已${enabled ? "开启" : "关闭"} ${streamerName} 的开播 @全体成员。`);
+          await reply(`已${enabled ? "开启" : "关闭"} ${streamerName} 的开播 @全体提醒～`);
           return;
         }
 
@@ -271,11 +276,11 @@ export const createVtbPlugin = ({
           const enabled = dynamicAction === "enable";
           const result = await setDynamicStreamer(message.groupId, streamerName, enabled);
           if (!result.subscribed) {
-            await reply(`设置没成功：${streamerName} 还没订阅。请先发送 miz vtb subscribe ${streamerName}。`);
+          await reply(`${streamerName} 还没开启直播提醒，请先发送 miz vtb subscribe live ${streamerName}。`);
             return;
           }
           if (!result.changed) {
-            await reply(`${streamerName} 的动态推送已经${enabled ? "开启" : "关闭"}了。`);
+            await reply(`${streamerName} 的动态提醒已经${enabled ? "开启" : "关闭"}啦。`);
             return;
           }
           const nextSubscriptions = (await loadCurrentConfig()).vtb.subscriptions;
@@ -288,7 +293,24 @@ export const createVtbPlugin = ({
             groupId: message.groupId,
             subscriptions: nextSubscriptions,
           });
-          await reply(`${streamerName} 的动态推送已${enabled ? "开启" : "关闭"}。`);
+          await reply(`${streamerName} 的动态提醒已${enabled ? "开启" : "关闭"}～`);
+          return;
+        }
+
+        if (isContributionMutation) {
+          const enabled = type === "subscribe";
+          const result = await setContributionStreamer(message.groupId, streamerName, enabled);
+          if (!result.subscribed) {
+            await reply(`${streamerName} 还没开启直播提醒，请先发送 miz vtb subscribe live ${streamerName}。`);
+            return;
+          }
+          if (!result.changed) {
+            await reply(`${streamerName} 的实时打赏感谢已经${enabled ? "开启" : "关闭"}啦。`);
+            return;
+          }
+          const nextSubscriptions = (await loadCurrentConfig()).vtb.subscriptions;
+          notifySubscriptionChange({ groupId: message.groupId, subscriptions: nextSubscriptions });
+          await reply(`${streamerName} 的实时打赏感谢已${enabled ? "开启" : "关闭"}～`);
           return;
         }
 
@@ -296,11 +318,11 @@ export const createVtbPlugin = ({
           const enabled = dynamicAtAllAction === "enable";
           const result = await setDynamicAtAllStreamer(message.groupId, streamerName, enabled);
           if (!result.subscribed) {
-            await reply(`设置没成功：${streamerName} 还没订阅。请先发送 miz vtb subscribe ${streamerName}。`);
+          await reply(`${streamerName} 还没开启对应提醒，请先订阅这位主播。`);
             return;
           }
           if (!result.changed) {
-            await reply(`${streamerName} 的动态 @全体成员已经${enabled ? "开启" : "关闭"}了。`);
+            await reply(`${streamerName} 的动态 @全体提醒已经${enabled ? "开启" : "关闭"}啦。`);
             return;
           }
           const nextSubscriptions = (await loadCurrentConfig()).vtb.subscriptions;
@@ -313,21 +335,22 @@ export const createVtbPlugin = ({
             groupId: message.groupId,
             subscriptions: nextSubscriptions,
           });
-          await reply(`动态推送的 @全体成员已${enabled ? "开启" : "关闭"}：${streamerName}。`);
+          await reply(`${streamerName} 的动态 @全体提醒已${enabled ? "开启" : "关闭"}～`);
           return;
         }
 
+        const regularSubscriptionType = subscriptionType === "contribution" ? undefined : subscriptionType;
         const result = type === "subscribe"
-          ? subscriptionType
-            ? await addSubscription(message.groupId, streamerName, subscriptionType)
+          ? regularSubscriptionType
+            ? await addSubscription(message.groupId, streamerName, regularSubscriptionType)
             : await addSubscription(message.groupId, streamerName)
-          : subscriptionType
-            ? await removeSubscription(message.groupId, streamerName, subscriptionType)
+          : regularSubscriptionType
+            ? await removeSubscription(message.groupId, streamerName, regularSubscriptionType)
             : await removeSubscription(message.groupId, streamerName);
         if (!result.changed) {
           await reply(type === "subscribe"
-            ? `没订上：${streamerName} 已经在关注名单里了，不用重复订阅。`
-            : `没取消成：关注名单里没有 ${streamerName}。检查一下昵称再试。`);
+            ? `${streamerName} 已经在关注名单里啦，不用重复添加。`
+            : `关注名单里没有 ${streamerName}，检查一下昵称再试～`);
           return;
         }
 
@@ -392,22 +415,22 @@ export const createVtbPlugin = ({
         if (subscriptionType) {
           await reply(type === "subscribe"
             ? subscriptionType === "live"
-              ? `📺 已订阅 ${streamerName} 的直播推送。动态推送可另行使用 miz vtb subscribe dynamic ${streamerName}。`
-              : `📮 已订阅 ${streamerName} 的动态推送。直播推送可另行使用 miz vtb subscribe live ${streamerName}。`
-            : `已取消 ${streamerName} 的${subscriptionType === "live" ? "直播" : "动态"}推送。`);
+              ? `📺 ${streamerName} 的直播提醒已上线！想看动态，再发 miz vtb subscribe dynamic ${streamerName}。`
+              : `📮 ${streamerName} 的动态提醒已上线！想蹲开播，再发 miz vtb subscribe live ${streamerName}。`
+            : `已关闭 ${streamerName} 的${subscriptionType === "live" ? "直播" : "动态"}提醒。`);
           return;
         }
         await reply(type === "subscribe"
           ? databaseSynchronized
-            ? `📺 已关注 ${streamerName}！\n之后的开播和下播会来到这个群；动态推送默认关闭，需要时发送 miz vtb dynamic enable ${streamerName}。`
-            : `📺 已把 ${streamerName} 加入关注名单。\n资料还在同步，后台会继续追上；同步完成后默认推送开播和下播，动态可另行开启。`
-          : `已经取消关注 ${streamerName}。`);
+              ? `📺 已关注 ${streamerName}！\n之后开播、下播都会来群里报到；动态提醒默认关闭，需要时发送 miz vtb dynamic enable ${streamerName}。`
+              : `📺 已把 ${streamerName} 加入关注名单！\n资料还在同步，稍后会补齐开播和下播提醒。`
+          : `已取消关注 ${streamerName}。下次想看，随时再加回来～`);
         return;
       }
 
       if (type === "sync") {
         if (!isWhitelistedUser(message.userId, config.vtb.adminWhitelistUserIds)) {
-          await reply("同步没成功：这个账号不在 VTB 管理员白名单中。请让 VTB 管理员执行 miz vtb sync。");
+          await reply("资料同步需要 VTB 管理员权限，请让管理员来执行 miz vtb sync～");
           return;
         }
 
@@ -430,18 +453,18 @@ export const createVtbPlugin = ({
         });
         await reply(
           [
-            `🔄 资料同步跑完啦：新增 ${databaseSync.added.length} 位，移除 ${databaseSync.removed.length} 位，没找到 ${databaseSync.skipped.length} 位。`,
+            `🔄 资料同步完成：新增 ${databaseSync.added.length} 位，移除 ${databaseSync.removed.length} 位，暂未找到 ${databaseSync.skipped.length} 位。`,
             renamed.length > 0
               ? [
                   `✏️ 根据 MID 更新了 ${renamed.length} 位主播的昵称：`,
                   ...renamed.map((item) => `- ${item.previousName} → ${item.name}（MID：${item.mid}）`),
                 ].join("\n")
-              : "主播昵称都和 B 站资料对上啦。",
-            ...(roomUpdated.length > 0 ? [`🏠 对上了 ${roomUpdated.length} 个直播间 ID。`] : []),
+              : "主播昵称都和 B 站资料对上啦～",
+            ...(roomUpdated.length > 0 ? [`🏠 已匹配 ${roomUpdated.length} 个直播间。`] : []),
             ...(databaseSync.skipped.length > 0
               ? [
                   `有 ${databaseSync.skipped.length} 位主播没找到：${databaseSync.skipped.slice(0, 10).join("、")}`,
-                  "请确认关注名单里填的是主播当前的完整 B 站昵称。",
+                  "请确认关注名单里填的是主播当前的完整 B 站昵称～",
                 ]
               : []),
             ...(syncFailures.length > 0
@@ -449,7 +472,7 @@ export const createVtbPlugin = ({
                   `有 ${syncFailures.length} 位主播没同步上，原因是：`,
                   ...syncFailures.slice(0, 10).map((item) => `- ${item.name}：${item.reason}`),
                   ...(syncFailures.length > 10 ? ["其余失败原因请查看日志。"] : []),
-                  "请检查 B 站接口和网络，再发送 miz vtb sync。",
+                  "检查一下 B 站接口和网络，再发送 miz vtb sync。",
                 ]
               : []),
           ].join("\n"),
@@ -460,7 +483,7 @@ export const createVtbPlugin = ({
       const repository = await getRepository(config);
       const streamer = await resolveVtbStreamerForQuery(streamerName, config.vtb, repository);
       if (!streamer) {
-        await reply(`没查到“${streamerName}”：请换成主播当前完整的 B 站昵称再试。`);
+        await reply(`没找到“${streamerName}”，换成主播当前的完整 B 站昵称再试试～`);
         return;
       }
 
@@ -493,7 +516,7 @@ export const createVtbPlugin = ({
       const feed = await getVtbDynamics(streamer, config.vtb);
       const latestDynamic = feed.items[0];
       if (!latestDynamic) {
-        await reply("这位主播最近还没有可以展示的新动态。");
+        await reply("这位主播最近还没有新动态，晚点再来看看～");
         return;
       }
       const dynamicImageFiles = await Promise.all((latestDynamic.imageUrls ?? []).map(async (imageUrl) => {
@@ -541,11 +564,11 @@ export const createVtbPlugin = ({
           const remainingMinutes = typeof remainingMs === "number"
             ? Math.max(1, Math.ceil(remainingMs / 60_000))
             : 5;
-          await reply(`${formatVtbFailure(type, streamerName, dynamicAction !== undefined)}：B 站这会儿限流了。等约 ${remainingMinutes} 分钟再试。`);
+          await reply(`${formatVtbFailure(type, streamerName, dynamicAction !== undefined)}：B站暂时限流，约 ${remainingMinutes} 分钟后再试～`);
           return;
         }
         if (error.name === "VtbCooldownError") {
-          await reply(`${formatVtbFailure(type, streamerName, dynamicAction !== undefined)}：B 站接口这会儿没回消息。稍后再试。`);
+          await reply(`${formatVtbFailure(type, streamerName, dynamicAction !== undefined)}：B站接口没回话，晚点再试～`);
           return;
         }
       }
@@ -587,7 +610,7 @@ const formatVtbOperation = (type: string, dynamicMutation = false) => {
 
 const formatVtbFailure = (type: string, streamerName: string, dynamicMutation = false) => {
   const operation = formatVtbOperation(type, dynamicMutation);
-  return `${operation}没成功${streamerName ? `（主播“${streamerName}”）` : ""}`;
+  return `${operation}失败${streamerName ? `（主播“${streamerName}”）` : ""}`;
 };
 
 const formatVtbCommandFailure = (
@@ -600,28 +623,28 @@ const formatVtbCommandFailure = (
   const message = error instanceof Error ? error.message.toLowerCase() : "";
 
   if (message.includes("logged-in credential")) {
-    return `${failure}：还没登录 B 站。请让管理员私聊发送 miz vtb login，登录后再试。`;
+    return `${failure}：还没登录 B 站，请让管理员私聊发送 miz vtb login～`;
   }
   if (message.includes("qr code expired") || message.includes("qr login timed out") || message.includes("timed out while waiting")) {
-    return `${failure}：二维码过期了，或者等超时了。请重新发送 miz vtb login，扫新的二维码。`;
+    return `${failure}：二维码过期或等待超时，请重新发送 miz vtb login 扫码～`;
   }
   if (error instanceof Error && (error.name === "VtbRateLimitError" || error.name === "VtbCooldownError")) {
-    return `${failure}：B 站暂时不让查。等一会儿再试。`;
+    return `${failure}：B站暂时限流，等一会儿再试～`;
   }
   if (type === "subscribe" || type === "unsubscribe" || type === "atall" ||
     type === "dynamicatall" || type === "dynamic-atall" || type === "list" || dynamicMutation) {
-    return `${failure}：VTB 订阅名单没能读写。请检查 config/vtb.toml，再试一次。`;
+    return `${failure}：订阅名单暂时读写不了，请检查 config/vtb.toml～`;
   }
   if (/eacces|eperm|permission denied|read-only|vtb\.toml|config file/.test(message)) {
-    return `${failure}：VTB 配置文件读写失败。请检查 config/vtb.toml 是否存在、可写，再试一次。`;
+    return `${failure}：VTB 配置文件读写失败，请检查 config/vtb.toml 是否存在且可写～`;
   }
   if (/database|prisma|postgres|connection refused|econnrefused/.test(message)) {
-    return `${failure}：数据库没连上。请检查数据库状态，再试一次。`;
+    return `${failure}：数据库暂时没连上，检查一下状态再试～`;
   }
   if (/fetch failed|network|timeout|timed out|socket|dns|bilibili .*api|api failed|http \d/.test(message)) {
-    return `${failure}：B 站接口这会儿没回消息。请检查网络或代理配置，再试一次。`;
+    return `${failure}：B站接口没回话，检查网络或代理配置再试～`;
   }
-  return `${failure}：系统这次没处理好。请稍后再试。`;
+  return `${failure}：这次没跑顺，稍后再试～`;
 };
 
 const formatVtbSubscriptionList = (
@@ -631,6 +654,7 @@ const formatVtbSubscriptionList = (
     atAllStreamers?: readonly string[];
     dynamicStreamers?: readonly string[];
     dynamicAtAllStreamers?: readonly string[];
+    contributionStreamers?: readonly string[];
   }>,
 ) => {
   const names = [...new Set([
@@ -643,10 +667,11 @@ const formatVtbSubscriptionList = (
     ...(subscription.dynamicStreamers?.includes(name) ? ["   · 动态推送"] : []),
     ...(subscription.atAllStreamers?.includes(name) ? ["   · 开播 @全体成员"] : []),
     ...(subscription.dynamicAtAllStreamers?.includes(name) ? ["   · 动态 @全体成员"] : []),
+    ...(subscription.contributionStreamers?.includes(name) ? ["   · 实时打赏感谢"] : []),
     ...(index < names.length - 1 ? [""] : []),
   ]);
   return [
-    `📺 本群已订阅 ${names.length} 位主播：`,
+    `📺 本群关注了 ${names.length} 位主播：`,
     ...legacyLines,
   ].join("\n");
 };

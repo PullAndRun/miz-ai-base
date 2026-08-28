@@ -44,7 +44,27 @@ model VtbLiveSession {
   endGuardNames  String[]      @default([]) @map("end_guard_names")
   endGuardSnapshotCaptured Boolean @default(false) @map("end_guard_snapshot_captured")
 
+  contributionEvents VtbLiveContributionEvent[]
+
   @@map("vtb_live_sessions")
+}
+
+model VtbLiveContributionEvent {
+  eventId      String   @id @map("event_id")
+  streamerMid  BigInt   @map("streamer_mid")
+  sessionStart DateTime @map("session_start")
+  userId       String   @map("user_id")
+  userName     String   @map("user_name")
+  kind         String
+  amount       Int      @default(0)
+  count        Int      @default(1)
+  itemName     String?  @map("item_name")
+  roleName     String?  @map("role_name")
+  occurredAt   DateTime @map("occurred_at")
+  session      VtbLiveSession @relation(fields: [streamerMid], references: [streamerMid], onDelete: Cascade)
+
+  @@index([streamerMid, sessionStart])
+  @@map("vtb_live_contribution_events")
 }
 
 model VtbDynamicState {

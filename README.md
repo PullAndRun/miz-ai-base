@@ -154,7 +154,11 @@ Docker 模式最后再合并：
 | `[miz.news]` | 财经新闻接口、目标群和定时表达式。 |
 | `[miz.wallpaper]` | Bing 官方元数据接口、图片基址、开关和定时表达式。 |
 | `[miz.ff14]` | Universalis 市场接口及其前端使用的物品搜索接口、返回条数、低价提醒开关、定时表达式和管理白名单；每条 `priceAlerts` 可单独配置提醒成员列表 `priceAlertAtUserIds`。 |
-| `[miz.vtb]` | B 站数据接口、网页与直播基址、轮询策略、缓存及管理白名单。 |
+| `[miz.vtb]` | B 站数据接口、网页与直播基址、轮询策略、实时大航海/打赏连接限流、缓存及管理白名单。 |
+
+VTB 实时事件默认只连接当前正在直播的房间；`liveEventMaxConnections`（默认 12）、`liveEventConnectIntervalMs`、`liveEventReconnectBaseMs` 和 `liveEventReconnectMaxMs` 控制并发、错峰及退避。`contributionMinAmount`（默认 50，单位为电池）控制普通礼物/醒目留言的最低实时感谢金额；加入大航海、续费大航海和红包不受此项限制。连续打赏会进入可配置的防刷屏汇总窗口：`contributionBatchWindowMs`（默认 10000 毫秒）控制静默等待时间，每次新打赏都会刷新计时；`contributionBatchMaxWaitMs`（默认 120000 毫秒）限制单批最长等待时间。加入大航海、续费和红包仍即时提醒。相关事件写入 PostgreSQL，下播时感谢加入大航海和续费观众，并展示打赏金额前 5 名。若 WebSocket 或事件令牌接口不可用，原有 HTTP 轮询和新增大航海感谢仍会继续工作。
+
+在 `config/vtb.toml` 的订阅块中设置 `contributionStreamers = ["主播昵称"]`，即可为该群开启实时打赏感谢；该主播必须同时存在于 `streamers`。舰长、提督、总督加入大航海和续费都会推送，普通礼物单笔价值达到 `miz.vtb.contributionMinAmount` 电池才推送，直播间红包开始时也会提醒群员进入直播间抢红包。
 
 未填写对应接口地址时，依赖该接口的命令会提示尚未配置，相关定时任务会自动停用并记录原因。示例配置已填写 Bing 官方地址。
 
@@ -245,7 +249,7 @@ napcatMediaDirectory = "/app/media"
 | `miz todo list/done/cancel ...` | 查看、完成或取消待办；创建者、负责人和管理者拥有不同的处理权限。 |
 | `miz vtb live <主播昵称>` | 查询主播当前直播状态。 |
 | `miz vtb dynamic <主播昵称>` | 查询主播最新动态。 |
-| `miz vtb list/subscribe/unsubscribe ...` | 查看或维护本群订阅；`list` 按主播分组列出已开启的直播、动态推送及 `@全体成员` 设置，关闭项不显示；需要群管理员或 VTB 管理员白名单权限。 |
+| `miz vtb list/subscribe/unsubscribe ...` | 查看或维护本群订阅；支持 `live`、`dynamic`、`contribution`，`list` 会列出实时打赏感谢状态；需要群管理员或 VTB 管理员白名单权限。 |
 | `miz vtb atall live/dynamic enable/disable <主播昵称>` | 分别开启或关闭直播、动态通知的 `@全体成员`；需要先订阅对应类型，并需要群管理员或 VTB 管理员白名单权限。 |
 | `miz vtb sync` | 同步主播昵称、MID 和直播间资料；仅 VTB 管理员白名单可用。 |
 | `miz ff14 <分区> <道具名>` | 查询国服市场；分区简写为猫、猪、狗、鸟。 |
