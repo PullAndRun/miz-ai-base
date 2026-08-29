@@ -145,7 +145,7 @@ export type VtbLiveStats = {
   fanClub?: number;
   guards?: number;
 };
-export type VtbGuardSnapshot = { ids: string[]; names: string[]; captured: boolean };
+export type VtbGuardSnapshot = { ids: string[]; names: string[]; roles?: Array<string | undefined>; captured: boolean };
 export type VtbContributionEvent = {
   eventId: string;
   streamerMid: string;
@@ -159,9 +159,10 @@ export type VtbContributionEvent = {
   roleName?: string;
   occurredAt: Date;
 };
+export type VtbGuardContribution = { userName: string; roleName?: string };
 export type VtbContributionSummary = {
-  guardRenewals: string[];
-  guardActivations: string[];
+  guardRenewals: Array<string | VtbGuardContribution>;
+  guardActivations: Array<string | VtbGuardContribution>;
   topGifts: Array<{ userName: string; amount: number; count: number }>;
 };
 export type VtbDynamic = {
@@ -1142,16 +1143,20 @@ const createVtbRepository = (prisma: PrismaClient) => {
     const events = await prisma.vtbLiveContributionEvent.findMany({
       where: { streamerMid: toMid(mid), sessionStart },
       orderBy: { occurredAt: "asc" },
-      select: { userId: true, userName: true, kind: true, amount: true, count: true },
+      select: { userId: true, userName: true, kind: true, amount: true, count: true, roleName: true },
     });
-    const renewals = new Map<string, string>();
-    const activations = new Map<string, string>();
+    const renewals = new Map<string, VtbGuardContribution>();
+    const activations = new Map<string, VtbGuardContribution>();
     const gifts = new Map<string, { userName: string; amount: number; count: number }>();
     for (const event of events) {
       const name = event.userName || event.userId;
-      if (event.kind === "guard-renewal") renewals.set(event.userId, name);
-      else if (event.kind === "guard-activation") activations.set(event.userId, name);
-      else if (event.kind === "gift" || event.kind === "super-chat") {
+      if (event.kind === "guard-renewal") {
+        const previous = renewals.get(event.userId);
+        renewals.set(event.userId, { userName: name, roleName: event.roleName || previous?.roleName });
+      } else if (event.kind === "guard-activation") {
+        const previous = activations.get(event.userId);
+        activations.set(event.userId, { userName: name, roleName: event.roleName || previous?.roleName });
+      } else if (event.kind === "gift" || event.kind === "super-chat") {
         const previous = gifts.get(event.userId) ?? { userName: name, amount: 0, count: 0 };
         gifts.set(event.userId, { userName: name, amount: previous.amount + event.amount, count: previous.count + event.count });
       }
@@ -1902,33 +1907,27 @@ export const formatOfflineMessage = (
   liveWebUrl = "",
   startStats: VtbLiveStats = {},
   endStats: VtbLiveStats = {},
-  guardNames: readonly string[] = [],
+  guardNames: readonly (string | VtbGuardContribution)[] = [],
   contributionSummary: VtbContributionSummary = { guardRenewals: [], guardActivations: [], topGifts: [] },
 ) => {
   const fanChange = positiveCountChange(startFans, endFans);
   const fanClubChange = positiveCountChange(startStats.fanClub, endStats.fanClub);
   const guardChange = positiveCountChange(startStats.guards, endStats.guards);
   const durationMinutes = Math.max(1, Math.floor((endedAt.getTime() - startedAt.getTime()) / 60_000));
-  const renewalNames = uniqueContributionNames(contributionSummary.guardRenewals);
-  const renewalNameKeys = new Set(renewalNames.map((name) => name.trim()));
-  const activationNames = uniqueContributionNames(contributionSummary.guardActivations)
-    .filter((name) => !renewalNameKeys.has(name.trim()));
-  const activationNameKeys = new Set(activationNames.map((name) => name.trim()));
-  const snapshotGuardNames = uniqueContributionNames(guardNames)
-    .filter((name) => !renewalNameKeys.has(name.trim()) && !activationNameKeys.has(name.trim()));
-  const guardThanks = snapshotGuardNames.length === 0
+  const renewalEntries = uniqueGuardContributions(contributionSummary.guardRenewals);
+  const renewalNameKeys = new Set(renewalEntries.map(({ userName }) => userName.trim()));
+  const activationEntries = uniqueGuardContributions(contributionSummary.guardActivations)
+    .filter(({ userName }) => !renewalNameKeys.has(userName.trim()));
+  const activationNameKeys = new Set(activationEntries.map(({ userName }) => userName.trim()));
+  const snapshotGuardEntries = uniqueGuardContributions(guardNames)
+    .filter(({ userName }) => !renewalNameKeys.has(userName.trim()) && !activationNameKeys.has(userName.trim()));
+  const joinedEntries = uniqueGuardContributions([...activationEntries, ...snapshotGuardEntries]);
+  const joinedThanks = joinedEntries.length === 0
     ? []
-    : ["💙 感谢新加入大航海的观众：", ...snapshotGuardNames.map((guardName) => `- ${guardName}`), ""];
-  const activationThanks = activationNames.length === 0
+    : ["⚓ 本场加入大航海的观众：", ...joinedEntries.slice(0, 10).map(formatGuardContributionName), ""];
+  const renewalThanks = renewalEntries.length === 0
     ? []
-    : [
-        "⚓ 感谢本场加入大航海的观众：",
-        ...activationNames.slice(0, 10).map((name) => `- ${name}`),
-        "",
-      ];
-  const renewalThanks = renewalNames.length === 0
-    ? []
-    : ["🔁 感谢续费大航海的观众：", ...renewalNames.slice(0, 10).map((name) => `- ${name}`), ""];
+    : ["🔁 感谢续费大航海的观众：", ...renewalEntries.slice(0, 10).map(formatGuardContributionName), ""];
   const giftThanks = contributionSummary.topGifts.length === 0
     ? []
     : [
@@ -1938,19 +1937,18 @@ export const formatOfflineMessage = (
         "",
       ];
   return [
-    `🌙 ${name} 下播啦，今天辛苦了！`,
+    `${name} 今天收工啦`,
     "",
-    `本场直播陪伴了 ${formatLiveDuration(durationMinutes)}`,
-    `⏰ ${dayjs(endedAt).format("MM月DD日 HH:mm")} 下播`,
+    `这次和大家一起度过了 ${formatLiveDuration(durationMinutes)}`,
+    `⏰ ${dayjs(endedAt).format("MM月DD日 HH:mm")} 结束`,
     ...(fanChange === undefined ? [] : [`✨ 新增关注 +${fanChange.toLocaleString("zh-CN")}`]),
     ...(fanClubChange === undefined ? [] : [`💖 粉丝团 +${fanClubChange.toLocaleString("zh-CN")}`]),
     ...(guardChange === undefined ? [] : [`⚓ 大航海 +${guardChange.toLocaleString("zh-CN")}`]),
     "",
-    ...guardThanks,
-    ...activationThanks,
+    ...joinedThanks,
     ...renewalThanks,
     ...giftThanks,
-    "今天的直播到这里，感谢大家一路陪伴！下次开播见～",
+    "辛苦啦，也谢谢大家一路陪到下播。充好电，我们下次见！",
   ].join("\n");
 };
 
@@ -1958,12 +1956,22 @@ export const getVtbNewGuardNames = (
   start: VtbGuardSnapshot | undefined,
   end: VtbGuardSnapshot | undefined,
 ) => {
+  return getVtbNewGuardContributions(start, end).map(({ userName }) => userName);
+};
+
+export const getVtbNewGuardContributions = (
+  start: VtbGuardSnapshot | undefined,
+  end: VtbGuardSnapshot | undefined,
+) => {
   if (!start?.captured || !end?.captured) return [];
   const startIds = new Set(start.ids);
   const namesById = new Map(end.ids.map((id, index) => [id, end.names[index] || id]));
+  const rolesById = new Map(end.ids.map((id, index) => [id, end.roles?.[index]]));
   const newIds = end.ids.filter((id) => !startIds.has(id));
   if (newIds.length === 0 || newIds.length > 5) return [];
-  return newIds.map((id) => namesById.get(id) || id).filter(Boolean);
+  return newIds
+    .map((id) => ({ userName: namesById.get(id) || id, roleName: rolesById.get(id) }))
+    .filter(({ userName }) => Boolean(userName));
 };
 
 const positiveCountChange = (start: number | undefined, end: number | undefined) => {
@@ -1973,15 +1981,21 @@ const positiveCountChange = (start: number | undefined, end: number | undefined)
   return end - start;
 };
 
-const uniqueContributionNames = (names: readonly string[]) => {
+const uniqueGuardContributions = (entries: readonly (string | VtbGuardContribution)[]) => {
   const seen = new Set<string>();
-  return names.filter((name) => {
-    const key = name.trim();
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const unique: VtbGuardContribution[] = [];
+  for (const entry of entries) {
+    const contribution = typeof entry === "string" ? { userName: entry } : entry;
+    const userName = contribution.userName.trim();
+    if (!userName || seen.has(userName)) continue;
+    seen.add(userName);
+    unique.push({ userName, roleName: contribution.roleName?.trim() || undefined });
+  }
+  return unique;
 };
+
+const formatGuardContributionName = ({ userName, roleName }: VtbGuardContribution) =>
+  `- ${userName}${roleName ? `（${roleName}）` : ""}`;
 
 const normalizeContributionInteger = (value: number, fallback = 0) => {
   if (!Number.isFinite(value)) return fallback;
@@ -2616,6 +2630,7 @@ export const getVtbGuardSnapshot = async (
 ): Promise<VtbGuardSnapshot> => {
   const ids: string[] = [];
   const names: string[] = [];
+  const roles: Array<string | undefined> = [];
   const seen = new Set<string>();
   let total = 0;
   let newCount = 0;
@@ -2650,6 +2665,7 @@ export const getVtbGuardSnapshot = async (
         seen.add(id);
         ids.push(id);
         names.push(name || id);
+        roles.push(getVtbGuardRoleName(entry));
         if (options.knownIds && !options.knownIds.has(id)) {
           newCount += 1;
         }
@@ -2658,7 +2674,20 @@ export const getVtbGuardSnapshot = async (
     if (options.stopAfterNew !== undefined && newCount >= options.stopAfterNew) break;
     if (entries.length === 0 || (total > 0 && ids.length >= total) || entries.length < 30) break;
   }
-  return { ids, names, captured: total === 0 || ids.length >= total };
+  return {
+    ids,
+    names,
+    ...(roles.some(Boolean) ? { roles } : {}),
+    captured: total === 0 || ids.length >= total,
+  };
+};
+
+const getVtbGuardRoleName = (entry: Record<string, unknown>) => {
+  const level = findCount(entry, ["guard_level", "guardLevel"]);
+  if (level === 1) return "总督";
+  if (level === 2) return "提督";
+  if (level === 3) return "舰长";
+  return firstText(entry.role_name, entry.roleName);
 };
 
 const isDocumentedLiveRoomInfoUrl = (apiUrl: string) => {

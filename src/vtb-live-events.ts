@@ -21,6 +21,7 @@ const HEARTBEAT_INTERVAL_MS = 25_000;
 const SOCKET_OPEN_TIMEOUT_MS = 15_000;
 const MAX_PENDING_EVENT_HANDLERS = 128;
 const BACKLOG_WARNING_INTERVAL_MS = 60_000;
+const GUARD_DEDUP_BUCKET_MS = 10_000;
 // A live packet is normally a few KB. Keep malformed frames and compressed
 // payloads from allocating unbounded memory before they reach the parser.
 const MAX_PACKET_BYTES = 16 * 1024 * 1024;
@@ -348,15 +349,18 @@ export const createVtbLiveEventManager = (
         count = finiteNumber(data.total_num ?? data.totalNum ?? data.num, 1) || 1;
       } else if (commandName === "USER_TOAST_MSG" || commandName === "USER_TOAST_MSG_V2" || isGuardBuy) {
         const operation = Number(data.op_type ?? data.group_op_type);
+        const renewalByText = /续费|renew/i.test(text(data.toast_msg ?? data.toastMsg));
         // GUARD_BUY denotes a new purchase. For toast messages op_type=1 is
         // activation and op_type=2 is renewal; unknown values are treated as
         // activation so the contribution is not silently lost.
         kind = isGuardBuy || commandName === "USER_TOAST_MSG_V2"
-          ? operation === 2 || data.__vtbRenewal === true ? "guard-renewal" : "guard-activation"
-          : operation === 2 || data.__vtbRenewal === true ? "guard-renewal" : operation === 1 ? "guard-activation" : undefined;
+          ? operation === 2 || data.__vtbRenewal === true || renewalByText ? "guard-renewal" : "guard-activation"
+          : operation === 2 || data.__vtbRenewal === true || renewalByText ? "guard-renewal" : operation === 1 ? "guard-activation" : undefined;
         amount = finiteNumber(data.price ?? data.total_coin);
         count = finiteNumber(data.num, 1) || 1;
-        roleName = text(data.role_name ?? data.roleName ?? data.gift_name ?? data.giftName) || undefined;
+        roleName = normalizeGuardRoleName(data.role_name ?? data.roleName)
+          ?? normalizeGuardRoleName(data.guard_level ?? data.guardLevel)
+          ?? normalizeGuardRoleName(data.gift_name ?? data.giftName);
       } else if (commandName === "SEND_GIFT" || commandName === "SEND_GIFT_V2" || commandName === "COMBO_SEND") {
         kind = "gift";
         count = finiteNumber(data.num ?? data.combo_num ?? data.combo_num_total, 1) || 1;
@@ -370,10 +374,16 @@ export const createVtbLiveEventManager = (
       amount = Math.max(0, finiteNumber(amount));
       count = Math.max(1, Math.round(finiteNumber(count, 1)));
       const explicitEventId = text(data.payflow_id ?? data.tid ?? data.rpid ?? data.id ?? data.lottery_id ?? data.lotteryId ?? data.message_id ?? data.msg_id);
-      // GUARD_BUY and USER_TOAST_MSG can both be emitted for one purchase;
-      // use a shared fallback key so the repository de-duplicates them.
-      const eventId = (isGuardBuy || commandName === "USER_TOAST_MSG" || commandName === "USER_TOAST_MSG_V2")
-        ? `guard:${kind}:${uid}:${text(data.start_time ?? data.ts) || Date.now()}:${amount}:${count}`
+      const guardTimestamp = text(data.start_time ?? data.startTime ?? data.ts ?? data.timestamp ?? data.end_time ?? data.endTime);
+      // A few gateway variants omit both transaction and start-time fields.
+      // Bucket the arrival time so their paired command frames still share an
+      // id without making separate purchases permanent duplicates.
+      const guardIdentity = guardTimestamp || explicitEventId || `${amount}:${count}:${Math.floor(Date.now() / GUARD_DEDUP_BUCKET_MS)}`;
+      const isGuardEvent = isGuardBuy || commandName === "USER_TOAST_MSG" || commandName === "USER_TOAST_MSG_V2";
+      // GUARD_BUY and USER_TOAST_MSG may both represent one purchase. Keep
+      // the de-duplication key independent of the inferred activation/renewal kind.
+      const eventId = isGuardEvent
+        ? `guard:${connection.mid}:${connection.sessionStart.getTime()}:${uid}:${guardIdentity}`
         : explicitEventId || `${commandName}:${uid}:${text(data.start_time ?? data.ts) || Date.now()}:${amount}:${count}`;
       const recorded = await repository.recordLiveContributionEvent({
         eventId,
@@ -472,6 +482,17 @@ const finiteNumber = (value: unknown, fallback = 0) => {
   return Number.isFinite(number) ? number : fallback;
 };
 const normalize = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+export const normalizeGuardRoleName = (value: unknown): string | undefined => {
+  const role = text(value).trim();
+  if (!role) return undefined;
+  const level = Number(role);
+  if (level === 1) return "总督";
+  if (level === 2) return "提督";
+  if (level === 3) return "舰长";
+  if (Number.isFinite(level)) return undefined;
+  return role;
+};
 
 export const normalizeUserToastV2 = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object") return {};

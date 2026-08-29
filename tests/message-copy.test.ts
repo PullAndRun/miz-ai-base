@@ -56,10 +56,11 @@ describe("user-facing copy", () => {
       link: "https://t.bilibili.com/123",
     }, "https://www.example.test");
 
-    expect(offline).toContain("🌙 示例主播 下播啦，今天辛苦了！");
-    expect(offline).toContain("本场直播陪伴了 1 小时");
-    expect(offline).toContain("今天的直播到这里，感谢大家一路陪伴");
-    expect(offline).not.toContain("🔗");
+    expect(offline).toContain("示例主播 今天收工啦");
+    expect(offline).toContain("这次和大家一起度过了 1 小时");
+    expect(offline).toMatch(/⏰ 08月01日 \d{2}:\d{2} 结束/);
+    expect(offline).toContain("✨ 新增关注 +10");
+    expect(offline).toContain("辛苦啦，也谢谢大家一路陪到下播。充好电，我们下次见！");
     expect(dynamic).toContain("📮 示例主播 发动态啦");
     expect(dynamic).toContain("「新的安排」");
     expect(dynamic).toContain("🔗 https://www.example.test/opus/123");
@@ -202,10 +203,10 @@ describe("user-facing copy", () => {
       "主播", new Date("2030-08-01T20:00:00+08:00"), new Date("2030-08-01T21:00:00+08:00"),
       undefined, undefined, undefined, "", {}, {}, ["甲", "乙"],
     );
-    expect(offline).toContain("💙 感谢新加入大航海的观众：\n- 甲\n- 乙");
-    expect(offline).not.toContain("感谢本场上舰的观众：");
-    expect(offline.indexOf("💙 感谢新加入大航海的观众：")).toBeGreaterThan(offline.indexOf("⏰ 08月01日 21:00 下播"));
-    expect(offline.indexOf("💙 感谢新加入大航海的观众：")).toBeLessThan(offline.indexOf("今天的直播到这里，感谢大家一路陪伴"));
+    expect(offline).toContain("⚓ 本场加入大航海的观众：\n- 甲\n- 乙");
+    expect(offline).not.toContain("感谢新加入大航海的观众：");
+    expect(offline.indexOf("⚓ 本场加入大航海的观众：")).toBeGreaterThan(offline.indexOf("⏰ 08月01日 21:00 结束"));
+    expect(offline.indexOf("⚓ 本场加入大航海的观众：")).toBeLessThan(offline.indexOf("辛苦啦，也谢谢大家一路陪到下播"));
     expect(getVtbNewGuardNames(start, {
       ids: ["1", "2", "3", "4", "5", "6", "7"],
       names: ["续舰", "甲", "乙", "丙", "丁", "戊", "己"], captured: true,
@@ -242,16 +243,16 @@ describe("user-facing copy", () => {
       {},
       [],
       {
-        guardRenewals: ["续舰观众"],
-        guardActivations: ["上舰观众"],
+        guardRenewals: [{ userName: "续舰观众", roleName: "舰长" }],
+        guardActivations: [{ userName: "上舰观众", roleName: "提督" }],
         topGifts: [
           { userName: "甲", amount: 500, count: 2 },
           { userName: "乙", amount: 100, count: 1 },
         ],
       },
     );
-    expect(message).toContain("⚓ 感谢本场加入大航海的观众：\n- 上舰观众");
-    expect(message).toContain("🔁 感谢续费大航海的观众：\n- 续舰观众");
+    expect(message).toContain("⚓ 本场加入大航海的观众：\n- 上舰观众（提督）");
+    expect(message).toContain("🔁 感谢续费大航海的观众：\n- 续舰观众（舰长）");
     expect(message).toContain("🏆 本场打赏 Top 5：\n- 1. 甲（0.5 电池）\n- 2. 乙（0.1 电池）");
   });
 
@@ -274,10 +275,11 @@ describe("user-facing copy", () => {
       },
     );
     expect(message).toContain("🔁 感谢续费大航海的观众：\n- 同一观众");
-    expect(message).toContain("⚓ 感谢本场加入大航海的观众：\n- 加入观众");
-    expect(message).toContain("💙 感谢新加入大航海的观众：\n- 快照观众");
+    expect(message).toContain("⚓ 本场加入大航海的观众：\n- 加入观众\n- 快照观众");
+    const joinedSection = message.split("⚓ 本场加入大航海的观众：")[1]?.split("\n\n", 1)[0] || "";
+    expect(joinedSection).not.toContain("同一观众");
     expect(message.match(/- 同一观众/g)).toHaveLength(1);
-    expect(message).not.toContain("⚓ 感谢本场加入大航海的观众：\n- 同一观众");
+    expect(message).not.toContain("⚓ 本场加入大航海的观众：\n- 同一观众");
   });
 
   test("contribution batches merge repeated gifts by viewer and item", () => {

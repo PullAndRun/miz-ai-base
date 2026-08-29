@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { VtbConfig } from "@/config";
-import { decodeSendGiftV2Payload, normalizeUserToastV2 } from "@/vtb-live-events";
+import { decodeSendGiftV2Payload, normalizeGuardRoleName, normalizeUserToastV2 } from "@/vtb-live-events";
+import { formatContributionMessage } from "@/tasks";
 import {
   createVtbNotificationMessage,
   findVtbNameChanges,
@@ -99,6 +100,31 @@ test("normalizes USER_TOAST_MSG_V2 guard purchases", () => {
     role_name: "舰长",
     __vtbRenewal: true,
   });
+});
+
+test("normalizes all Bilibili guard levels for notification copy", () => {
+  expect([1, 2, 3].map(normalizeGuardRoleName)).toEqual(["总督", "提督", "舰长"]);
+  expect(normalizeGuardRoleName(0)).toBeUndefined();
+});
+
+test("uses the purchased guard role in activation copy", () => {
+  const message = formatContributionMessage({
+    eventId: "guard:test",
+    streamerMid: "123",
+    sessionStart: new Date("2030-01-01T00:00:00Z"),
+    userId: "456",
+    userName: "观众",
+    kind: "guard-activation",
+    amount: 19800,
+    count: 1,
+    roleName: "提督",
+    occurredAt: new Date("2030-01-01T00:00:01Z"),
+    groupIds: [1],
+    streamerName: "示例主播",
+    roomId: "789",
+  }, "https://live.example.test");
+  expect(message).toContain("直播间迎来新提督！");
+  expect(message).not.toContain("迎来新舰长");
 });
 
 describe("Bilibili live lookup", () => {
@@ -537,6 +563,26 @@ describe("Bilibili live lookup", () => {
     });
     expect(new URL(urls[0]).searchParams.get("roomid")).toBe("456");
     expect(new URL(urls[0]).searchParams.get("ruid")).toBe("123");
+  });
+
+  test("keeps guard roles when reading the guard snapshot", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      code: 0,
+      data: {
+        info: { num: 2 },
+        list: [
+          { uid: 1, uname: "舰长用户", guard_level: 3 },
+          { uid: 2, uname: "提督用户", guard_level: 2 },
+        ],
+      },
+    }))) as unknown as typeof fetch;
+
+    await expect(getVtbGuardSnapshot("456", "123", config)).resolves.toEqual({
+      ids: ["1", "2"],
+      names: ["舰长用户", "提督用户"],
+      roles: ["舰长", "提督"],
+      captured: true,
+    });
   });
 
   test("accepts the documented single-mid web card response", async () => {

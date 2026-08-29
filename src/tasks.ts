@@ -31,7 +31,7 @@ import {
   formatLiveMessage,
   formatOfflineMessage,
   getVtbGuardSnapshot,
-  getVtbNewGuardNames,
+  getVtbNewGuardContributions,
   findVtbNameChanges,
   getVtbRepository,
   getVtbCardInfos,
@@ -1075,7 +1075,7 @@ const pollVtbSubscriptions = async (
                 config.vtb.liveWebUrl,
                 { fanClub: session.startFanClub, guards: session.startGuards },
                 { fanClub: endFanClub, guards: endGuards },
-                getVtbNewGuardNames(session.startGuardSnapshot, endGuardSnapshot),
+                getVtbNewGuardContributions(session.startGuardSnapshot, endGuardSnapshot),
                 contributionSummary,
               ),
             );
@@ -1311,7 +1311,7 @@ const resolveVtbNotificationImage = async (
   }
 };
 
-const formatContributionMessage = (event: VtbLiveEventNotification, liveWebUrl: string) => {
+export const formatContributionMessage = (event: VtbLiveEventNotification, liveWebUrl: string) => {
   const room = `【${event.streamerName}】直播间`;
   const roomUrl = formatVtbEventRoomUrl(event.roomId, liveWebUrl);
   const link = roomUrl ? `\n🔗 ${roomUrl}` : "";
@@ -1323,10 +1323,12 @@ const formatContributionMessage = (event: VtbLiveEventNotification, liveWebUrl: 
     return `🧧 ${room}掉红包啦！\n${event.userName === "red-packet" ? "直播间红包" : `${event.userName} 发起的红包`}${details ? `（${details}）` : ""}来啦！\n手速快一点，进直播间抢：${event.itemName || "直播间红包"}${link}`;
   }
   if (event.kind === "guard-activation" || event.kind === "guard-renewal") {
+    const role = event.roleName || "大航海成员";
     if (event.kind === "guard-renewal") {
-      return `🔁 ${room}收到续费啦！\n${event.userName} 续费${event.roleName ? `成为${event.roleName}` : "大航海成员"}，感谢继续陪伴！${link}`;
+      const renewal = event.roleName ? `续费成为${role}` : "续费大航海成员";
+      return `🔁 ${room}收到续费啦！\n${event.userName} ${renewal}，感谢继续陪伴！${link}`;
     }
-    return `⚓ ${room}迎来新舰长！\n${event.userName} 加入${event.streamerName}的大航海${event.roleName ? `，成为${event.roleName}` : ""}，感谢支持！${link}`;
+    return `⚓ ${room}迎来新${role}！\n${event.userName} 加入${event.streamerName}的大航海，成为${role}，感谢支持！${link}`;
   }
   const gift = event.itemName || "礼物";
   return `🎁 ${room}礼物来啦！\n${event.userName} 送来：${gift} ×${event.count}\n这波投喂折合：${formatVtbBattery(event.amount)}\n哇！老板大气，主播我收到啦～能量条继续充能中！${link}`;
