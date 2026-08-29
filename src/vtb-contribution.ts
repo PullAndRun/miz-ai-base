@@ -11,17 +11,21 @@ export type VtbContributionMessageContext = {
   liveRoomUrl?: string;
 };
 
-/** Bilibili contribution amounts are stored in milli-batteries; 10 batteries equal 1 RMB. */
+const RAW_UNITS_PER_BATTERY = 100;
+const BATTERIES_PER_RMB = 10;
+const RAW_UNITS_PER_RMB = RAW_UNITS_PER_BATTERY * BATTERIES_PER_RMB;
+
+/** Bilibili contribution amounts use 1/100-battery units; 10 batteries equal 1 RMB. */
 export const getVtbContributionAmount = (events: readonly VtbContributionDisplayEvent[]) =>
   events.reduce((sum, event) => sum + Math.max(0, event.amount), 0);
 
 export const meetsVtbContributionThreshold = (
   events: readonly VtbContributionDisplayEvent[],
   thresholdRmb: number,
-) => getVtbContributionAmount(events) >= Math.max(0, thresholdRmb) * 10_000;
+) => getVtbContributionAmount(events) >= Math.max(0, thresholdRmb) * RAW_UNITS_PER_RMB;
 
 export const formatVtbBattery = (amount: number) =>
-  `${(amount / 1_000).toFixed(2).replace(/\.?0+$/, "")} 电池`;
+  `${(amount / RAW_UNITS_PER_BATTERY).toFixed(2).replace(/\.?0+$/, "")} 电池`;
 
 const formatBattery = (amount: number) => formatVtbBattery(amount);
 

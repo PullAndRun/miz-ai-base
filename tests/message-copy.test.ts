@@ -253,7 +253,7 @@ describe("user-facing copy", () => {
     );
     expect(message).toContain("⚓ 本场加入大航海的观众：\n- 上舰观众（提督）");
     expect(message).toContain("🔁 感谢续费大航海的观众：\n- 续舰观众（舰长）");
-    expect(message).toContain("🏆 本场打赏 Top 5：\n- 1. 甲（0.5 电池）\n- 2. 乙（0.1 电池）");
+    expect(message).toContain("🏆 本场打赏 Top 5：\n- 1. 甲（5 电池）\n- 2. 乙（1 电池）");
   });
 
   test("offline guard thanks prefers renewals and removes duplicate names", () => {
@@ -284,10 +284,10 @@ describe("user-facing copy", () => {
 
   test("contribution batches merge repeated gifts by viewer and item", () => {
     const message = formatVtbContributionBatchMessage([
-      { userName: "甲", kind: "gift", itemName: "小心心", amount: 20_000, count: 2 },
-      { userName: "甲", kind: "gift", itemName: "小心心", amount: 30_000, count: 3 },
-      { userName: "甲", kind: "super-chat", amount: 50_000, count: 1 },
-      { userName: "乙", kind: "gift", itemName: "辣条", amount: 80_000, count: 1 },
+      { userName: "甲", kind: "gift", itemName: "小心心", amount: 2_000, count: 2 },
+      { userName: "甲", kind: "gift", itemName: "小心心", amount: 3_000, count: 3 },
+      { userName: "甲", kind: "super-chat", amount: 5_000, count: 1 },
+      { userName: "乙", kind: "gift", itemName: "辣条", amount: 8_000, count: 1 },
     ], {
       streamerName: "示例主播",
       liveRoomUrl: "https://live.bilibili.com/123",
@@ -303,7 +303,7 @@ describe("user-facing copy", () => {
       userName: "甲",
       kind: "gift",
       itemName: "小心心",
-      amount: 50_000,
+      amount: 5_000,
       count: 5,
     }, {
       streamerName: "示例主播",
@@ -315,15 +315,16 @@ describe("user-facing copy", () => {
   });
 
   test("contribution battery amounts omit trailing zeroes", () => {
-    expect(formatVtbBattery(100)).toBe("0.1 电池");
-    expect(formatVtbBattery(110)).toBe("0.11 电池");
-    expect(formatVtbBattery(1_000)).toBe("1 电池");
+    expect(formatVtbBattery(100)).toBe("1 电池");
+    expect(formatVtbBattery(110)).toBe("1.1 电池");
+    expect(formatVtbBattery(600)).toBe("6 电池");
+    expect(formatVtbBattery(1_000)).toBe("10 电池");
   });
 
   test("contribution threshold uses accumulated RMB with ten batteries per yuan", () => {
     const events = [
-      { userName: "甲", kind: "gift" as const, itemName: "小心心", amount: 60_000, count: 6 },
-      { userName: "乙", kind: "gift" as const, itemName: "辣条", amount: 40_000, count: 4 },
+      { userName: "甲", kind: "gift" as const, itemName: "小心心", amount: 6_000, count: 6 },
+      { userName: "乙", kind: "gift" as const, itemName: "辣条", amount: 4_000, count: 4 },
     ];
     expect(meetsVtbContributionThreshold(events, 10)).toBe(true);
     expect(meetsVtbContributionThreshold(events, 10.01)).toBe(false);
