@@ -1363,7 +1363,7 @@ export const formatContributionMessage = (event: VtbLiveEventNotification, liveW
         "",
         `${event.userName} ${renewal}，感谢继续陪伴！`,
         "",
-        "哇！老板大气，主播我收到啦～能量条继续充能中！",
+        "续费成功！大航海继续续航～感谢陪我一路整活，接着玩！",
         ...(roomUrl ? ["", `🔗 ${roomUrl}`] : []),
       ].join("\n");
     }
@@ -1372,7 +1372,7 @@ export const formatContributionMessage = (event: VtbLiveEventNotification, liveW
       "",
       `${event.userName} 加入${event.streamerName}的大航海，成为${role}，感谢支持！`,
       "",
-      "哇！老板大气，主播我收到啦～能量条继续充能中！",
+      "欢迎加入大航海！从今天起就是自己人啦～陪我继续把直播间玩起来！",
       ...(roomUrl ? ["", `🔗 ${roomUrl}`] : []),
     ].join("\n");
   }

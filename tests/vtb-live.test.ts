@@ -151,6 +151,30 @@ test("uses the purchased guard role in activation copy", () => {
   }, "https://live.example.test");
   expect(message).toContain("直播间迎来新提督！");
   expect(message).not.toContain("迎来新舰长");
+  expect(message).toContain("欢迎加入大航海！从今天起就是自己人啦～陪我继续把直播间玩起来！");
+  expect(message).not.toContain("上舰");
+  expect(message).not.toContain("主播我收到啦");
+});
+
+test("uses a companionship-focused closing for guard renewals", () => {
+  const message = formatContributionMessage({
+    eventId: "guard:renewal",
+    streamerMid: "123",
+    sessionStart: new Date("2030-01-01T00:00:00Z"),
+    userId: "456",
+    userName: "观众",
+    kind: "guard-renewal",
+    amount: 19800,
+    count: 1,
+    roleName: "舰长",
+    occurredAt: new Date("2030-01-01T00:00:01Z"),
+    groupIds: [1],
+    streamerName: "示例主播",
+    roomId: "789",
+  }, "https://live.example.test");
+  expect(message).toContain("观众 续费成为舰长，感谢继续陪伴！");
+  expect(message).toContain("续费成功！大航海继续续航～感谢陪我一路整活，接着玩！");
+  expect(message).not.toContain("主播我收到啦");
 });
 
 describe("Bilibili live lookup", () => {
