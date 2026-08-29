@@ -29,7 +29,7 @@ export const formatVtbContributionMessage = (event: VtbContributionDisplayEvent,
   const itemName = event.itemName || (event.kind === "super-chat" ? "醒目留言" : "礼物");
   const room = context.streamerName ? `【${context.streamerName}】直播间` : "";
   const link = context.liveRoomUrl ? `\n🔗 ${context.liveRoomUrl}` : "";
-  return `🎁 ${room}收到投喂！\n${event.userName} 送来 ${itemName} ×${event.count} · ${formatBattery(event.amount)}\n感谢支持，直播间继续玩起来！${link}`;
+  return `🎁 ${room}收到高能投喂！\n${event.userName} 送来 ${itemName} ×${event.count} · 价值 ${formatBattery(event.amount)}\n感谢老板的投喂，直播间直接起飞！${link}`;
 };
 
 export const formatVtbContributionBatchMessage = (events: readonly VtbContributionDisplayEvent[], context: VtbContributionMessageContext = {}) => {
@@ -56,8 +56,8 @@ export const formatVtbContributionBatchMessage = (events: readonly VtbContributi
   const room = context.streamerName ? `【${context.streamerName}】直播间` : "直播间";
   const link = context.liveRoomUrl ? `\n🔗 ${context.liveRoomUrl}` : "";
   return [
-    `🎁 这一波打赏感谢名单：${room ? ` ${room}` : ""}`,
+    `🎁 ${room}高能投喂战报（达标礼物）`,
     ...lines,
-    `本轮共收到 ${formatBattery(totalAmount)}，感谢大家的投喂！${link}`,
+    `本轮合计 ${formatBattery(totalAmount)}，感谢各位老板，直播间热度拉满！${link}`,
   ].join("\n");
 };
