@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import dayjs from "dayjs";
-import { updateVtbSubscriptionNames, type MizConfig } from "@/config";
+import { updateVtbSubscriptionNames, type MizConfig, type VtbConfig } from "@/config";
 import { isGroupMessageUnavailableError, type Gateway } from "@/gateway";
 import type { Logger } from "@/logger";
 import {
@@ -34,6 +34,7 @@ import {
   getVtbNewGuardContributions,
   findVtbNameChanges,
   getVtbRepository,
+  getVtbCardInfo,
   getVtbCardInfos,
   getVtbDynamics,
   getVtbImageFile,
@@ -607,12 +608,13 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
     const groupIds = getCurrentContributionGroupIds(event);
     if (groupIds.length === 0) return;
     const currentEvent = groupIds.length === event.groupIds.length ? event : { ...event, groupIds };
-    if (event.kind === "gift" || event.kind === "super-chat") {
-      queueContributionBatch(currentEvent);
+    const displayEvent = await resolveVtbContributionUserName(currentEvent, pollingConfig.vtb, logger);
+    if (displayEvent.kind === "gift" || displayEvent.kind === "super-chat") {
+      queueContributionBatch(displayEvent);
       return;
     }
-    const message = createVtbNotificationMessage(formatContributionMessage(event, pollingConfig.vtb.liveWebUrl));
-    await sendVtbGroupMessage(groupIds, message, gateway, logger, "contribution", event.userName);
+    const message = createVtbNotificationMessage(formatContributionMessage(displayEvent, pollingConfig.vtb.liveWebUrl));
+    await sendVtbGroupMessage(displayEvent.groupIds, message, gateway, logger, "contribution", displayEvent.userName);
   });
   const runTask = () => pollingConfig.vtb.subscriptions.length === 0
     ? Promise.resolve()
@@ -1308,6 +1310,30 @@ const resolveVtbNotificationImage = async (
       error: normalizeError(error),
     });
     return undefined;
+  }
+};
+
+/** Enrich live contribution events whose protocol payload only contains a UID. */
+export const resolveVtbContributionUserName = async (
+  event: VtbLiveEventNotification,
+  config: VtbConfig,
+  logger: Logger,
+): Promise<VtbLiveEventNotification> => {
+  if (event.kind !== "red-packet" || event.userName === "red-packet" ||
+    event.userName !== event.userId || !/^\d+$/.test(event.userId)) {
+    return event;
+  }
+
+  try {
+    const card = await getVtbCardInfo(event.userId, config);
+    const userName = card.name?.trim();
+    return userName ? { ...event, userName } : event;
+  } catch (error) {
+    logger.debug("plugin", "vtb contribution user-name lookup failed; using UID", {
+      userId: event.userId,
+      error: normalizeError(error),
+    });
+    return event;
   }
 };
 

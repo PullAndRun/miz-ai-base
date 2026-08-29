@@ -334,7 +334,13 @@ export const createVtbLiveEventManager = (
       // GUARD_BUY is the canonical purchase event. USER_TOAST_MSG is a
       // presentation event emitted by some rooms and may be absent.
       const isGuardBuy = commandName === "GUARD_BUY";
-      const uid = text(data.uid ?? data.mid ?? data.sender_uid ?? data.senderUid ?? (isRedPacket ? "red-packet" : ""));
+      const sender = data.sender_uinfo ?? data.senderUinfo ?? data.user_info ?? data.userInfo ?? data.user ?? {};
+      const senderBase = sender && typeof sender === "object" ? (sender.base ?? {}) : {};
+      if (!data.uname) {
+        data.uname = sender?.uname ?? sender?.username ?? sender?.user_name ?? sender?.name ?? senderBase?.name;
+      }
+      const uid = text(data.uid ?? data.mid ?? data.sender_uid ?? data.senderUid ??
+        sender?.uid ?? sender?.mid ?? (isRedPacket ? "red-packet" : ""));
       const userName = text(data.uname ?? data.username ?? data.user_name ?? data.userName) || uid || "观众";
       if (!uid) continue;
       let kind: VtbContributionEvent["kind"] | undefined;

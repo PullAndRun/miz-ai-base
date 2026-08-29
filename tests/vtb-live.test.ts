@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { VtbConfig } from "@/config";
 import { decodeSendGiftV2Payload, normalizeGuardRoleName, normalizeUserToastV2 } from "@/vtb-live-events";
-import { formatContributionMessage } from "@/tasks";
+import { formatContributionMessage, resolveVtbContributionUserName } from "@/tasks";
 import {
   createVtbNotificationMessage,
   findVtbNameChanges,
@@ -105,6 +105,32 @@ test("normalizes USER_TOAST_MSG_V2 guard purchases", () => {
 test("normalizes all Bilibili guard levels for notification copy", () => {
   expect([1, 2, 3].map(normalizeGuardRoleName)).toEqual(["总督", "提督", "舰长"]);
   expect(normalizeGuardRoleName(0)).toBeUndefined();
+});
+
+test("looks up a nickname when a red-packet event only contains the UID", async () => {
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    code: 0,
+    data: { card: { mid: "392394274", name: "红包用户" } },
+  }))) as unknown as typeof fetch;
+  const event = {
+    eventId: "red-packet:test",
+    streamerMid: "123",
+    sessionStart: new Date("2030-01-01T00:00:00Z"),
+    userId: "392394274",
+    userName: "392394274",
+    kind: "red-packet" as const,
+    amount: 0,
+    count: 1,
+    occurredAt: new Date("2030-01-01T00:00:01Z"),
+    groupIds: [1],
+    streamerName: "主播",
+    roomId: "789",
+  };
+
+  await expect(resolveVtbContributionUserName(event, {
+    ...config,
+    cardApiUrl: "https://viewer-card.example.test/x/web-interface/card?mid=",
+  }, { debug() {}, info() {}, warn() {}, error() {} })).resolves.toMatchObject({ userName: "红包用户" });
 });
 
 test("uses the purchased guard role in activation copy", () => {
