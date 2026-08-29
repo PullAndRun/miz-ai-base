@@ -1329,7 +1329,7 @@ const formatContributionMessage = (event: VtbLiveEventNotification, liveWebUrl: 
     return `⚓ ${room}迎来新舰长！\n${event.userName} 加入${event.streamerName}的大航海${event.roleName ? `，成为${event.roleName}` : ""}，感谢支持！${link}`;
   }
   const gift = event.itemName || "礼物";
-  return `🎁 ${room}收到高能投喂！\n${event.userName} 送来 ${gift} ×${event.count} · 价值 ${formatVtbBattery(event.amount)}\n感谢老板的投喂，直播间直接起飞！${link}`;
+  return `🎁 ${room}礼物来啦！\n${event.userName} 送来：${gift} ×${event.count}\n这波投喂折合：${formatVtbBattery(event.amount)}\n哇！老板大气，主播我收到啦～能量条继续充能中！${link}`;
 };
 
 const formatVtbEventRoomUrl = (roomId: string | undefined, liveWebUrl: string) =>

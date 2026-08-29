@@ -290,10 +290,10 @@ describe("user-facing copy", () => {
       streamerName: "示例主播",
       liveRoomUrl: "https://live.bilibili.com/123",
     });
-    expect(message).toContain("🎁 【示例主播】直播间高能投喂战报（达标礼物）");
-    expect(message).toContain("- 甲：小心心 ×5（50 电池）、醒目留言 ×1（50 电池）");
-    expect(message).toContain("- 乙：辣条 ×1（80 电池）");
-    expect(message).toContain("本轮合计 180 电池，感谢各位老板，直播间热度拉满！\n🔗 https://live.bilibili.com/123");
+    expect(message).toContain("🎁 【示例主播】直播间礼物雨来啦！\n老板们的爱，主播都收到啦！");
+    expect(message).toContain("· 甲：小心心 ×5（50 电池） + 醒目留言 ×1（50 电池）");
+    expect(message).toContain("· 乙：辣条 ×1（80 电池）");
+    expect(message).toContain("这一波共收到：180 电池\n老板大气！有你们在，直播间就不会冷场～\n🔗 https://live.bilibili.com/123");
   });
 
   test("single contribution thanks sound like a live-room moment", () => {
@@ -307,8 +307,9 @@ describe("user-facing copy", () => {
       streamerName: "示例主播",
       liveRoomUrl: "https://live.bilibili.com/123",
     });
-    expect(message).toContain("🎁 【示例主播】直播间收到高能投喂！");
-    expect(message).toContain("感谢老板的投喂，直播间直接起飞！");
+    expect(message).toContain("🎁 【示例主播】直播间礼物来啦！");
+    expect(message).toContain("这波投喂折合：50 电池");
+    expect(message).toContain("哇！老板大气，主播我收到啦～能量条继续充能中！");
   });
 
   test("contribution battery amounts omit trailing zeroes", () => {
