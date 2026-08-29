@@ -1340,24 +1340,52 @@ export const resolveVtbContributionUserName = async (
 export const formatContributionMessage = (event: VtbLiveEventNotification, liveWebUrl: string) => {
   const room = `【${event.streamerName}】直播间`;
   const roomUrl = formatVtbEventRoomUrl(event.roomId, liveWebUrl);
-  const link = roomUrl ? `\n🔗 ${roomUrl}` : "";
   if (event.kind === "red-packet") {
     const details = [
       event.amount > 0 ? `价值 ${formatVtbBattery(event.amount)}` : "",
       event.count > 1 ? `${event.count} 份` : "",
     ].filter(Boolean).join(" · ");
-    return `🧧 ${room}掉红包啦！\n${event.userName === "red-packet" ? "直播间红包" : `${event.userName} 发起的红包`}${details ? `（${details}）` : ""}来啦！\n手速快一点，进直播间抢：${event.itemName || "直播间红包"}${link}`;
+    return [
+      `🧧 ${room}掉红包啦！`,
+      "",
+      `${event.userName === "red-packet" ? "直播间红包" : `${event.userName} 发起的红包`}${details ? `（${details}）` : ""}来啦！`,
+      "",
+      `手速快一点，进直播间抢：${event.itemName || "直播间红包"}`,
+      ...(roomUrl ? ["", `🔗 ${roomUrl}`] : []),
+    ].join("\n");
   }
   if (event.kind === "guard-activation" || event.kind === "guard-renewal") {
     const role = event.roleName || "大航海成员";
     if (event.kind === "guard-renewal") {
       const renewal = event.roleName ? `续费成为${role}` : "续费大航海成员";
-      return `🔁 ${room}收到续费啦！\n${event.userName} ${renewal}，感谢继续陪伴！${link}`;
+      return [
+        `🔁 ${room}收到续费啦！`,
+        "",
+        `${event.userName} ${renewal}，感谢继续陪伴！`,
+        "",
+        "哇！老板大气，主播我收到啦～能量条继续充能中！",
+        ...(roomUrl ? ["", `🔗 ${roomUrl}`] : []),
+      ].join("\n");
     }
-    return `⚓ ${room}迎来新${role}！\n${event.userName} 加入${event.streamerName}的大航海，成为${role}，感谢支持！${link}`;
+    return [
+      `⚓ ${room}迎来新${role}！`,
+      "",
+      `${event.userName} 加入${event.streamerName}的大航海，成为${role}，感谢支持！`,
+      "",
+      "哇！老板大气，主播我收到啦～能量条继续充能中！",
+      ...(roomUrl ? ["", `🔗 ${roomUrl}`] : []),
+    ].join("\n");
   }
   const gift = event.itemName || "礼物";
-  return `🎁 ${room}礼物来啦！\n${event.userName} 送来：${gift} ×${event.count}\n这波投喂折合：${formatVtbBattery(event.amount)}\n哇！老板大气，主播我收到啦～能量条继续充能中！${link}`;
+  return [
+    `🎁 ${room}礼物来啦！`,
+    "",
+    `${event.userName} 送来：${gift} ×${event.count}`,
+    `这波投喂折合：${formatVtbBattery(event.amount)}`,
+    "",
+    "哇！老板大气，主播我收到啦～能量条继续充能中！",
+    ...(roomUrl ? ["", `🔗 ${roomUrl}`] : []),
+  ].join("\n");
 };
 
 const formatVtbEventRoomUrl = (roomId: string | undefined, liveWebUrl: string) =>

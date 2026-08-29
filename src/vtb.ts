@@ -2008,9 +2008,12 @@ export const formatDynamicMessage = (dynamic: VtbDynamic, webUrl: string) => {
     dynamic.containsDynamicUrl ||
     dynamic.description.includes(dynamic.link) ||
     dynamic.description.includes(dynamicUrl);
+  const isVideoDynamic = dynamic.isVideo || dynamic.type === "DYNAMIC_TYPE_AV";
+  const cleanedTitle = cleanBilibiliEmoteText(dynamic.title);
+  const cleanedDescription = cleanBilibiliEmoteText(dynamic.description);
   const display = selectDynamicDisplayText(
-    cleanBilibiliEmoteText(dynamic.title),
-    cleanBilibiliEmoteText(dynamic.description),
+    cleanedTitle,
+    isVideoDynamic && cleanedDescription.trim() === "-" ? "" : cleanedDescription,
   );
   const content = display.title
     ? [`「${display.title}」`, ...(display.description ? ["", ...display.description.split("\n")] : [])]

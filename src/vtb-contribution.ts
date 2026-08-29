@@ -32,8 +32,16 @@ const formatBattery = (amount: number) => formatVtbBattery(amount);
 export const formatVtbContributionMessage = (event: VtbContributionDisplayEvent, context: VtbContributionMessageContext = {}) => {
   const itemName = event.itemName || (event.kind === "super-chat" ? "醒目留言" : "礼物");
   const room = context.streamerName ? `【${context.streamerName}】直播间` : "";
-  const link = context.liveRoomUrl ? `\n🔗 ${context.liveRoomUrl}` : "";
-  return `🎁 ${room}礼物来啦！\n${event.userName} 送来：${itemName} ×${event.count}\n这波投喂折合：${formatBattery(event.amount)}\n哇！老板大气，主播我收到啦～能量条继续充能中！${link}`;
+  return [
+    `🎁 ${room}礼物来啦！`,
+    "",
+    `${event.userName} 送来：${itemName} ×${event.count}`,
+    "",
+    `这波投喂折合：${formatBattery(event.amount)}`,
+    "",
+    "哇！老板大气，主播我收到啦～能量条继续充能中！",
+    ...(context.liveRoomUrl ? ["", `🔗 ${context.liveRoomUrl}`] : []),
+  ].join("\n");
 };
 
 export const formatVtbContributionBatchMessage = (events: readonly VtbContributionDisplayEvent[], context: VtbContributionMessageContext = {}) => {
@@ -54,16 +62,18 @@ export const formatVtbContributionBatchMessage = (events: readonly VtbContributi
   const lines = entries.slice(0, 30).map((entry) => {
     const items = [...entry.items.entries()].map(([itemName, item]) =>
       `${itemName} ×${item.count}（${formatBattery(item.amount)}）`);
-    return `· ${entry.userName}：${items.join(" + ")}`;
+    return [`· ${entry.userName}：`, ...items.map((item) => `  ${item}`)].join("\n");
   });
   if (entries.length > 30) lines.push(`· 还有 ${entries.length - 30} 位观众的礼物，已合并统计`);
   const room = context.streamerName ? `【${context.streamerName}】直播间` : "直播间";
-  const link = context.liveRoomUrl ? `\n🔗 ${context.liveRoomUrl}` : "";
   return [
     `🎁 ${room}礼物雨来啦！`,
-    "老板们的爱，主播都收到啦！",
-    ...lines,
+    "",
+    lines.join("\n\n"),
+    "",
     `这一波共收到：${formatBattery(totalAmount)}`,
-    `老板大气！有你们在，直播间就不会冷场～${link}`,
+    "",
+    `老板大气！有你们在，直播间就不会冷场～`,
+    ...(context.liveRoomUrl ? ["", `🔗 ${context.liveRoomUrl}`] : []),
   ].join("\n");
 };

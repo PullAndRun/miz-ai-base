@@ -84,6 +84,18 @@ describe("user-facing copy", () => {
     expect(message).toContain("⏰ 08月01日 11:00 发布");
     expect(message).toContain("🔗 https://www.bilibili.com/video/BV1test");
     expect(message).not.toContain("发动态啦");
+
+    const placeholderDescription = formatDynamicMessage({
+      author: "示例主播",
+      title: "新视频",
+      description: " - ",
+      containsDynamicUrl: false,
+      publishedAt: new Date("2030-08-01T19:00:00Z"),
+      link: "https://www.bilibili.com/video/BV1kT426MEKe/",
+      isVideo: true,
+    }, "https://www.example.test");
+    expect(placeholderDescription).not.toContain("\n-\n");
+    expect(placeholderDescription).toContain("「新视频」");
   });
 
   test("dynamic links show the URL directly for every dynamic type", () => {
@@ -292,10 +304,11 @@ describe("user-facing copy", () => {
       streamerName: "示例主播",
       liveRoomUrl: "https://live.bilibili.com/123",
     });
-    expect(message).toContain("🎁 【示例主播】直播间礼物雨来啦！\n老板们的爱，主播都收到啦！");
-    expect(message).toContain("· 甲：小心心 ×5（50 电池） + 醒目留言 ×1（50 电池）");
-    expect(message).toContain("· 乙：辣条 ×1（80 电池）");
-    expect(message).toContain("这一波共收到：180 电池\n老板大气！有你们在，直播间就不会冷场～\n🔗 https://live.bilibili.com/123");
+    expect(message).toContain("🎁 【示例主播】直播间礼物雨来啦！\n\n· 甲");
+    expect(message).not.toContain("老板们的爱，主播都收到啦！");
+    expect(message).toContain("· 甲：\n  小心心 ×5（50 电池）\n  醒目留言 ×1（50 电池）");
+    expect(message).toContain("· 乙：\n  辣条 ×1（80 电池）");
+    expect(message).toContain("这一波共收到：180 电池\n\n老板大气！有你们在，直播间就不会冷场～\n\n🔗 https://live.bilibili.com/123");
   });
 
   test("single contribution thanks sound like a live-room moment", () => {
