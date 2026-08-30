@@ -6,6 +6,9 @@ import { signBilibiliUrl } from "@/vtb";
 import { fetchWithRiskControlProxy, fetchWithRetry, readResponseJson } from "@/http";
 import { getBilibiliCredential, getBilibiliCredentialHeader } from "@/bilibili-credential";
 
+// One target (and therefore one connection) is maintained per streamer MID.
+// Group IDs are only used to fan out real-time notifications; all parsed
+// contribution events are persisted before notification filtering.
 type Target = { mid: string; streamerName: string; roomId: string; sessionStart: Date; contributionGroupIds: Array<string | number> };
 type Connection = Target & { socket: any; heartbeat?: ReturnType<typeof setInterval>; reconnectAttempt: number };
 export type VtbLiveEventNotification = VtbContributionEvent & {

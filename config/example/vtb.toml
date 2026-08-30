@@ -16,6 +16,9 @@
 # dynamicAtAllStreamers：主播发布动态时 @全体成员，必须同时存在于 dynamicStreamers。
 # contributionStreamers：实时推送加入大航海/续费及汇总价值达到配置阈值（人民币）的打赏，必须同时存在于 streamers。
 # Subscription commands: subscribe/unsubscribe live|dynamic <streamer>.
-# contribution 可用 miz vtb subscribe/unsubscribe contribution <streamer> 开关。
+# contribution controls real-time contribution notifications; contribution events
+# are still collected for live-end Top 5 and guard thanks whenever the streamer
+# is in streamers.
+# 可用 miz vtb subscribe/unsubscribe contribution <streamer> 开关。
 # Live and dynamic @all settings can be changed independently.
 # A subscription block may contain only streamers (live) or only dynamicStreamers (dynamic).

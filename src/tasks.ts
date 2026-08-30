@@ -733,7 +733,10 @@ const pollVtbSubscriptions = async (
     const uniqueStreamerSubscriptions = mergeVtbSubscriptionsByMid(resolvedSubscriptions);
     logger.info("plugin", "vtb poll streamers resolved", {
       count: uniqueStreamerSubscriptions.length,
-      contributions: uniqueStreamerSubscriptions.filter((subscription) =>
+      liveEventListeners: uniqueStreamerSubscriptions.filter((subscription) =>
+        [...subscription.groups.values()].some((group) => group.live),
+      ).map((subscription) => subscription.streamer.mid),
+      contributionNotifications: uniqueStreamerSubscriptions.filter((subscription) =>
         [...subscription.groups.values()].some((group) => group.contribution),
       ).map((subscription) => subscription.streamer.mid),
     });
@@ -905,7 +908,11 @@ const pollVtbSubscriptions = async (
         const session = await repository.getLiveSession(streamer.mid);
         const activeSession = session?.endedAt ? undefined : session;
         if (live.isLive && activeSession) {
-          if (contributionGroupIds.length > 0) {
+          // Collect contribution events for every live-subscribed streamer.
+          // contributionGroupIds only controls real-time fan-out; it must not
+          // determine whether the listener runs, otherwise live-end Top 5 data
+          // would depend on a per-group notification switch.
+          if (groupIds.length > 0) {
             liveEventManager.start(streamer.mid, streamer.name, live.roomId ?? activeSession.roomId, activeSession.startedAt, contributionGroupIds);
           } else {
             liveEventManager.stop(streamer.mid);
@@ -992,9 +999,13 @@ const pollVtbSubscriptions = async (
             }
             // Store an empty list as a pending delivery as well, so a failed
             // first send is retried even after the freshness window closes.
-            await repository.startLiveSession(streamer, live, currentFans, deliveredGroupIds, stats, startGuardSnapshot);
-            if (contributionGroupIds.length > 0) {
-              liveEventManager.start(streamer.mid, streamer.name, live.roomId, live.liveStartedAt ?? new Date(), contributionGroupIds);
+            // Reuse the same fallback timestamp for the session row and event
+            // listener so contribution events always join this live session.
+            const sessionStart = live.liveStartedAt ?? new Date();
+            const sessionLive = live.liveStartedAt ? live : { ...live, liveStartedAt: sessionStart };
+            await repository.startLiveSession(streamer, sessionLive, currentFans, deliveredGroupIds, stats, startGuardSnapshot);
+            if (groupIds.length > 0) {
+              liveEventManager.start(streamer.mid, streamer.name, sessionLive.roomId, sessionStart, contributionGroupIds);
             }
           }
           if (deliveredGroups.length > 0) {
