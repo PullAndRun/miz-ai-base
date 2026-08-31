@@ -30,6 +30,7 @@ import {
   formatDynamicMessage,
   formatLiveMessage,
   formatOfflineMessage,
+  getVtbDynamicKey,
   getVtbGuardSnapshot,
   getVtbNewGuardContributions,
   findVtbNameChanges,
@@ -908,10 +909,9 @@ const pollVtbSubscriptions = async (
         const session = await repository.getLiveSession(streamer.mid);
         const activeSession = session?.endedAt ? undefined : session;
         if (live.isLive && activeSession) {
-          // Collect contribution events for every live-subscribed streamer.
-          // contributionGroupIds only controls real-time fan-out; it must not
-          // determine whether the listener runs, otherwise live-end Top 5 data
-          // would depend on a per-group notification switch.
+          // Keep collecting events for the non-real-time live-end summary, but
+          // pass an empty fan-out list when contribution notifications are
+          // disabled for every group.
           if (groupIds.length > 0) {
             liveEventManager.start(streamer.mid, streamer.name, live.roomId ?? activeSession.roomId, activeSession.startedAt, contributionGroupIds);
           } else {
@@ -1126,70 +1126,127 @@ const pollVtbSubscriptions = async (
           });
           continue;
         }
-        const dynamicState = await repository.getDynamicDeliveryState(streamer.mid);
-        const isNewDynamic = !dynamicState || latestDynamic.publishedAt > dynamicState.publishedAt;
-        const isCurrentDynamic = dynamicState?.publishedAt.getTime() === latestDynamic.publishedAt.getTime();
+        const latestDynamicKey = getVtbDynamicKey(latestDynamic);
+        let dynamicState = await repository.getDynamicDeliveryState(streamer.mid);
+
+        const deliverDynamicItem = async (
+          dynamic: typeof latestDynamic,
+          dynamicKey: string,
+          alreadyDeliveredGroupIds: readonly string[] = [],
+        ) => {
+          await repository.prepareDynamicDeliveries(
+            streamer.mid,
+            dynamicKey,
+            dynamic.publishedAt,
+            dynamicGroupIds,
+            alreadyDeliveredGroupIds,
+          );
+          // Persist the queue before any network/media work. If that work
+          // fails, the next poll still knows exactly which dynamic is pending.
+          await repository.syncDynamicDeliveryState(streamer.mid, dynamicKey, dynamic.publishedAt);
+          const pendingGroupIds = await repository.getUndeliveredDynamicGroups(
+            streamer.mid,
+            dynamicKey,
+            dynamicGroupIds,
+          );
+          const claimedGroupIds = await repository.claimDynamicDeliveries(
+            streamer.mid,
+            dynamicKey,
+            pendingGroupIds,
+          );
+          if (claimedGroupIds.length === 0) return [] as string[];
+          const dynamicImageFiles = await resolveVtbNotificationImages(
+            dynamic.imageUrls ?? [],
+            config,
+            logger,
+            "dynamic",
+            streamer.name,
+          );
+          const imageFiles = dynamicImageFiles.length > 0
+            ? dynamicImageFiles
+            : [await resolveVtbNotificationImage(
+                feed.avatarUrl,
+                config,
+                logger,
+                "dynamic",
+                streamer.name,
+              )].filter((file): file is string => file !== undefined);
+          const message = createVtbNotificationMessage(
+            formatDynamicMessage(dynamic, config.vtb.webUrl),
+            imageFiles,
+          );
+          const deliveredGroups = await sendVtbGroupMessage(
+            claimedGroupIds,
+            message,
+            gateway,
+            logger,
+            "dynamic",
+            streamer.name,
+            new Set(
+              [...dynamicAtAllGroupIds].filter((groupId) =>
+                claimedGroupIds.some((id) => String(id) === groupId),
+              ),
+            ),
+          );
+          await repository.recordDynamicDeliveryForKey(streamer.mid, dynamicKey, deliveredGroups.map(String));
+          await repository.syncDynamicDeliveryState(streamer.mid, dynamicKey, dynamic.publishedAt);
+          logger.info("plugin", "vtb dynamic notification sent", {
+            streamer: streamer.name,
+            groupIds: deliveredGroups,
+            pendingGroupIds: claimedGroupIds.filter((groupId) => !deliveredGroups.map(String).includes(String(groupId))),
+            dynamics: 1,
+          });
+          return deliveredGroups.map(String);
+        };
+
+        // If a newer item has already replaced a partially delivered one,
+        // finish the older item first while it is still present in the feed.
+        // This prevents a failed group from being forgotten when the streamer
+        // posts again before the next successful poll.
+        if (dynamicState?.dynamicKey && dynamicState.dynamicKey !== latestDynamicKey) {
+          const previousDynamic = feed.items.find((item) => getVtbDynamicKey(item) === dynamicState!.dynamicKey);
+          if (previousDynamic) {
+            await repository.prepareDynamicDeliveries(
+              streamer.mid,
+              dynamicState.dynamicKey,
+              previousDynamic.publishedAt,
+              dynamicGroupIds,
+              dynamicState.deliveredGroupIds,
+            );
+            const previousPending = await repository.getUndeliveredDynamicGroups(
+              streamer.mid,
+              dynamicState.dynamicKey,
+              dynamicGroupIds,
+            );
+            if (previousPending.length > 0) {
+              await deliverDynamicItem(previousDynamic, dynamicState.dynamicKey, dynamicState.deliveredGroupIds);
+              dynamicState = await repository.getDynamicDeliveryState(streamer.mid);
+              if (dynamicState?.dynamicKey !== latestDynamicKey) continue;
+            }
+          }
+        }
+
+        const isNewDynamic = !dynamicState ||
+          (dynamicState.dynamicKey ? dynamicState.dynamicKey !== latestDynamicKey : latestDynamic.publishedAt > dynamicState.publishedAt);
+        const isCurrentDynamic = dynamicState?.dynamicKey === latestDynamicKey ||
+          (!dynamicState?.dynamicKey && dynamicState?.publishedAt.getTime() === latestDynamic.publishedAt.getTime());
         const isRecent = now - latestDynamic.publishedAt.getTime() <
           config.vtb.dynamicPollMinutes * 60_000 + getVtbPollingIntervalMs(config.vtb.cron);
         const isInitialDynamicRecent = dynamicState !== undefined || isVtbInitialDynamicRecent(latestDynamic.publishedAt, now);
         const isLivePromotion = isVtbLivePromotion(latestDynamic, config.vtb.liveWebUrl);
         const recoveredAfterDynamicRetry = recoveredDynamicMids.has(streamer.mid);
-        const deliveredGroupIds = isCurrentDynamic ? dynamicState.deliveredGroupIds : [];
-        const undeliveredDynamicGroupIds = deliveredGroupIds.includes(ALL_GROUPS_DELIVERED_MARKER)
-          ? []
-          : dynamicGroupIds.filter((groupId) => !deliveredGroupIds.includes(String(groupId)));
-        const hasPendingDynamicDelivery = isCurrentDynamic && undeliveredDynamicGroupIds.length > 0;
+        const deliveredGroupIds = isCurrentDynamic ? dynamicState!.deliveredGroupIds : [];
+        const hasPendingDynamicDelivery = isCurrentDynamic &&
+          !deliveredGroupIds.includes(ALL_GROUPS_DELIVERED_MARKER);
 
         if (((isNewDynamic && (isRecent || recoveredAfterDynamicRetry) && isInitialDynamicRecent) || hasPendingDynamicDelivery) && !isLivePromotion) {
-            if (undeliveredDynamicGroupIds.length === 0) {
-              continue;
-            }
-            const dynamicImageFiles = await resolveVtbNotificationImages(
-              latestDynamic.imageUrls ?? [],
-              config,
-              logger,
-              "dynamic",
-              streamer.name,
-            );
-            const imageFiles = dynamicImageFiles.length > 0
-              ? dynamicImageFiles
-              : [await resolveVtbNotificationImage(
-                  feed.avatarUrl,
-                  config,
-                  logger,
-                  "dynamic",
-                  streamer.name,
-                )].filter((file): file is string => file !== undefined);
-            const message = createVtbNotificationMessage(
-              formatDynamicMessage(latestDynamic, config.vtb.webUrl),
-              imageFiles,
-            );
-            const deliveredGroups = await sendVtbGroupMessage(
-              undeliveredDynamicGroupIds,
-              message,
-              gateway,
-              logger,
-              "dynamic",
-              streamer.name,
-              new Set(
-                [...dynamicAtAllGroupIds].filter((groupId) =>
-                  undeliveredDynamicGroupIds.some((id) => String(id) === groupId),
-                ),
-              ),
-            );
+            const deliveredGroups = await deliverDynamicItem(latestDynamic, latestDynamicKey, deliveredGroupIds);
             if (isNewDynamic) {
-              await repository.startDynamicDelivery(streamer.mid, latestDynamic.publishedAt, deliveredGroups.map(String));
-            } else {
-              await repository.recordDynamicDelivery(streamer.mid, deliveredGroups.map(String));
+              await repository.syncDynamicDeliveryState(streamer.mid, latestDynamicKey, latestDynamic.publishedAt);
             }
-            logger.info("plugin", "vtb dynamic notification sent", {
-              streamer: streamer.name,
-              groupIds: deliveredGroups,
-              dynamics: 1,
-            });
           } else if (isNewDynamic) {
             // Mark stale and live-promotion dynamics as seen so they are never retried.
-            await repository.startDynamicDelivery(streamer.mid, latestDynamic.publishedAt);
+            await repository.startDynamicDelivery(streamer.mid, latestDynamic.publishedAt, [ALL_GROUPS_DELIVERED_MARKER], latestDynamicKey);
             if (isLivePromotion) {
               logger.info("plugin", "vtb dynamic notification skipped: live promotion", {
                 streamer: streamer.name,

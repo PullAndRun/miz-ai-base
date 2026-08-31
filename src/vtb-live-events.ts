@@ -31,6 +31,9 @@ const MAX_PACKET_BYTES = 16 * 1024 * 1024;
 const MAX_PACKET_NESTING = 4;
 const MAX_TOKEN_RESPONSE_BYTES = 1 * 1024 * 1024;
 
+/** A contribution subscription is the sole opt-in for real-time event pushes. */
+export const shouldNotifyVtbContribution = (groupIds: readonly (string | number)[]) => groupIds.length > 0;
+
 /** Maintains a small, rate-limited set of live-room event connections. */
 export const createVtbLiveEventManager = (
   config: VtbConfig,
@@ -409,7 +412,10 @@ export const createVtbLiveEventManager = (
       });
       // Gifts and Super Chats are queued so the task layer can aggregate them
       // across the quiet window before applying the RMB threshold.
-      if (recorded && notify) {
+      // contributionGroupIds is the complete real-time notification opt-in.
+      // Keep persisting events for live-end summaries, but never invoke the
+      // notification callback when the current subscription has no groups.
+      if (recorded && notify && shouldNotifyVtbContribution(connection.contributionGroupIds)) {
         await notify({
           eventId,
           streamerMid: connection.mid,

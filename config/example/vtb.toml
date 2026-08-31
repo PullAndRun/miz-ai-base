@@ -14,7 +14,7 @@
 # dynamicStreamers：需要轮询并推送动态的主播，必须同时存在于 streamers。
 # atAllStreamers：主播开播时 @全体成员，必须同时存在于 streamers。
 # dynamicAtAllStreamers：主播发布动态时 @全体成员，必须同时存在于 dynamicStreamers。
-# contributionStreamers：实时推送加入大航海/续费及汇总价值达到配置阈值（人民币）的打赏，必须同时存在于 streamers。
+# contributionStreamers：实时推送打赏、加入/续费大航海和直播间红包，必须同时存在于 streamers。
 # Subscription commands: subscribe/unsubscribe live|dynamic <streamer>.
 # contribution controls real-time contribution notifications; contribution events
 # are still collected for live-end Top 5 and guard thanks whenever the streamer

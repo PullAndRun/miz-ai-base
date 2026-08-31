@@ -1,7 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { parseBilibiliDynamicFeed } from "@/vtb";
+import { getVtbDynamicKey, parseBilibiliDynamicFeed } from "@/vtb";
 
 describe("Bilibili dynamic response parsing", () => {
+  test("uses the canonical dynamic URL as a stable delivery identity", () => {
+    expect(getVtbDynamicKey({ link: "https://t.bilibili.com/12345" })).toBe(
+      "https://www.bilibili.com/opus/12345",
+    );
+    expect(getVtbDynamicKey({ link: "https://www.bilibili.com/opus/12345?from=share" })).toBe(
+      "https://www.bilibili.com/opus/12345",
+    );
+  });
+
   test("converts authenticated API items into the VTB feed shape", () => {
     const feed = parseBilibiliDynamicFeed([
       {

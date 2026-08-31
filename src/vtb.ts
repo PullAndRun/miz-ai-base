@@ -195,6 +195,7 @@ export type LiveSession = {
 };
 export type VtbDynamicDeliveryState = {
   publishedAt: Date;
+  dynamicKey?: string;
   deliveredGroupIds: string[];
 };
 export type VtbCardInfo = VtbLiveStats & { name?: string; avatarUrl?: string; roomId?: string };
@@ -1277,14 +1278,32 @@ const createVtbRepository = (prisma: PrismaClient) => {
 
   const getDynamicDeliveryState = async (mid: string): Promise<VtbDynamicDeliveryState | undefined> => {
     const state = await prisma.vtbDynamicState.findUnique({ where: { streamerMid: toMid(mid) } });
-    return state ? { publishedAt: state.lastPublishedAt, deliveredGroupIds: state.deliveredGroupIds } : undefined;
+    return state ? {
+      publishedAt: state.lastPublishedAt,
+      dynamicKey: state.lastDynamicKey ?? undefined,
+      deliveredGroupIds: state.deliveredGroupIds,
+    } : undefined;
   };
 
-  const startDynamicDelivery = async (mid: string, publishedAt: Date, deliveredGroupIds: readonly string[] = []) => {
+  const startDynamicDelivery = async (
+    mid: string,
+    publishedAt: Date,
+    deliveredGroupIds: readonly string[] = [],
+    dynamicKey?: string,
+  ) => {
     await prisma.vtbDynamicState.upsert({
       where: { streamerMid: toMid(mid) },
-      create: { streamerMid: toMid(mid), lastPublishedAt: publishedAt, deliveredGroupIds: [...deliveredGroupIds] },
-      update: { lastPublishedAt: publishedAt, deliveredGroupIds: [...deliveredGroupIds] },
+      create: {
+        streamerMid: toMid(mid),
+        lastDynamicKey: dynamicKey,
+        lastPublishedAt: publishedAt,
+        deliveredGroupIds: [...deliveredGroupIds],
+      },
+      update: {
+        lastDynamicKey: dynamicKey,
+        lastPublishedAt: publishedAt,
+        deliveredGroupIds: [...deliveredGroupIds],
+      },
     });
   };
 
@@ -1294,6 +1313,108 @@ const createVtbRepository = (prisma: PrismaClient) => {
       where: { streamerMid: toMid(mid) },
       data: { deliveredGroupIds: { push: [...groupIds] } },
     });
+  };
+
+  const prepareDynamicDeliveries = async (
+    mid: string,
+    dynamicKey: string,
+    publishedAt: Date,
+    groupIds: readonly (string | number)[],
+    alreadyDeliveredGroupIds: readonly string[] = [],
+  ) => {
+    const uniqueGroupIds = [...new Set(groupIds.map(String))];
+    if (uniqueGroupIds.length === 0) return;
+    await prisma.vtbDynamicDelivery.createMany({
+      data: uniqueGroupIds.map((groupId) => ({
+        streamerMid: toMid(mid),
+        dynamicKey,
+        groupId,
+        publishedAt,
+        deliveredAt: alreadyDeliveredGroupIds.includes(groupId) ? new Date() : null,
+      })),
+      skipDuplicates: true,
+    });
+    const delivered = uniqueGroupIds.filter((groupId) => alreadyDeliveredGroupIds.includes(groupId));
+    if (delivered.length > 0) {
+      await prisma.vtbDynamicDelivery.updateMany({
+        where: {
+          streamerMid: toMid(mid),
+          dynamicKey,
+          groupId: { in: delivered },
+          deliveredAt: null,
+        },
+        data: { deliveredAt: new Date(), claimedUntil: null },
+      });
+    }
+  };
+
+  const getUndeliveredDynamicGroups = async (
+    mid: string,
+    dynamicKey: string,
+    groupIds: readonly (string | number)[],
+  ) => {
+    if (groupIds.length === 0) return [];
+    const rows = await prisma.vtbDynamicDelivery.findMany({
+      where: {
+        streamerMid: toMid(mid),
+        dynamicKey,
+        groupId: { in: [...new Set(groupIds.map(String))] },
+        deliveredAt: null,
+      },
+      select: { groupId: true },
+    });
+    return rows.map((row) => row.groupId);
+  };
+
+  // Claim each group independently so two bot processes cannot send the same
+  // dynamic concurrently. A stale claim is recyclable after a crash/timeout.
+  const claimDynamicDeliveries = async (
+    mid: string,
+    dynamicKey: string,
+    groupIds: readonly (string | number)[],
+    now = new Date(),
+    claimDurationMs = 5 * 60_000,
+  ) => {
+    const claimed: string[] = [];
+    const claimedUntil = new Date(now.getTime() + claimDurationMs);
+    for (const groupId of [...new Set(groupIds.map(String))]) {
+      const result = await prisma.vtbDynamicDelivery.updateMany({
+        where: {
+          streamerMid: toMid(mid),
+          dynamicKey,
+          groupId,
+          deliveredAt: null,
+          OR: [{ claimedUntil: null }, { claimedUntil: { lt: now } }],
+        },
+        data: { claimedUntil, lastAttemptAt: now, attempts: { increment: 1 } },
+      });
+      if (result.count > 0) claimed.push(groupId);
+    }
+    return claimed;
+  };
+
+  const recordDynamicDeliveryForKey = async (
+    mid: string,
+    dynamicKey: string,
+    groupIds: readonly (string | number)[],
+  ) => {
+    if (groupIds.length === 0) return;
+    await prisma.vtbDynamicDelivery.updateMany({
+      where: {
+        streamerMid: toMid(mid),
+        dynamicKey,
+        groupId: { in: [...new Set(groupIds.map(String))] },
+      },
+      data: { deliveredAt: new Date(), claimedUntil: null },
+    });
+  };
+
+  const syncDynamicDeliveryState = async (mid: string, dynamicKey: string, publishedAt: Date) => {
+    const rows = await prisma.vtbDynamicDelivery.findMany({
+      where: { streamerMid: toMid(mid), dynamicKey, deliveredAt: { not: null } },
+      select: { groupId: true },
+    });
+    await startDynamicDelivery(mid, publishedAt, rows.map((row) => row.groupId), dynamicKey);
   };
 
   const getDeliveredNewsIds = async (targetKey: string, maximumCount: number) => {
@@ -1838,6 +1959,8 @@ const createVtbRepository = (prisma: PrismaClient) => {
     recordLiveDelivery, markLiveSessionEnded, recordLiveContributionEvent, getLiveContributionSummary,
     recordLiveEndDelivery,
     getDynamicDeliveryState, startDynamicDelivery, recordDynamicDelivery,
+    prepareDynamicDeliveries, getUndeliveredDynamicGroups, claimDynamicDeliveries,
+    recordDynamicDeliveryForKey, syncDynamicDeliveryState,
     getDeliveredNewsIds, recordNewsDeliveries, ensureReminderStorage, createReminder, claimDueReminders,
     releaseReminderClaim, listPendingReminders, findPendingReminder, cancelPendingReminder, editPendingReminder,
     ensureScheduleStorage, createScheduleEvent, listUpcomingScheduleEvents, cancelUpcomingScheduleEvent,
@@ -2085,6 +2208,11 @@ export const formatDynamicUrl = (link: string, webUrl: string) => {
   const dynamicId = /(?:opus|dynamic)\/(\d+)/.exec(link)?.[1] ?? /\/(\d+)(?:\?.*)?$/.exec(link)?.[1];
   return dynamicId ? `${webUrl.replace(/\/+$/, "")}/opus/${dynamicId}` : link;
 };
+
+/** Stable identity used by the delivery ledger; the link is independent of
+ * mutable copy, images, and the timestamp returned by the feed. */
+export const getVtbDynamicKey = (dynamic: Pick<VtbDynamic, "link">) =>
+  formatDynamicUrl(dynamic.link, "https://www.bilibili.com");
 
 const createConfiguredVtbRepository = async (config: MizConfig) => {
   const prisma = createDatabaseClient(getDatabaseUrl(config));

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { VtbConfig } from "@/config";
-import { decodeSendGiftV2Payload, normalizeGuardRoleName, normalizeUserToastV2 } from "@/vtb-live-events";
+import { decodeSendGiftV2Payload, normalizeGuardRoleName, normalizeUserToastV2, shouldNotifyVtbContribution } from "@/vtb-live-events";
 import { formatContributionMessage, resolveVtbContributionUserName } from "@/tasks";
 import {
   createVtbNotificationMessage,
@@ -53,6 +53,11 @@ const protoText = (number: number, value: string) => {
   return concatBytes(encodeVarint(number * 8 + 2), encodeVarint(bytes.length), bytes);
 };
 const protoBytes = (number: number, value: Uint8Array) => concatBytes(encodeVarint(number * 8 + 2), encodeVarint(value.length), value);
+
+test("contribution unsubscribe disables every real-time event category", () => {
+  expect(shouldNotifyVtbContribution([])).toBeFalse();
+  expect(shouldNotifyVtbContribution([100])).toBeTrue();
+});
 
 test("decodes SEND_GIFT_V2 protobuf gift payloads", () => {
   const gift = concatBytes(

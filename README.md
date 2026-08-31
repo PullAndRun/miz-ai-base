@@ -158,7 +158,7 @@ Docker 模式最后再合并：
 
 VTB 实时事件默认只连接当前正在直播的房间；`liveEventMaxConnections`（默认 12）、`liveEventConnectIntervalMs`、`liveEventReconnectBaseMs` 和 `liveEventReconnectMaxMs` 控制并发、错峰及退避。`contributionMinAmount`（默认 50，单位为人民币）控制普通礼物/醒目留言的最低实时感谢金额；加入大航海、续费大航海和红包不受此项限制。连续打赏会进入可配置的防刷屏汇总窗口：`contributionBatchWindowMs`（默认 10000 毫秒）控制静默等待时间，每次新打赏都会刷新计时；`contributionBatchMaxWaitMs`（默认 120000 毫秒）限制单批最长等待时间。加入大航海、续费和红包仍即时提醒。相关事件写入 PostgreSQL，下播时感谢加入大航海和续费观众，并展示打赏金额前 5 名。若 WebSocket 或事件令牌接口不可用，原有 HTTP 轮询和新增大航海感谢仍会继续工作。
 
-在 `config/vtb.toml` 的订阅块中设置 `contributionStreamers = ["主播昵称"]`，即可为该群开启实时打赏感谢；该主播必须同时存在于 `streamers`。舰长、提督、总督加入大航海和续费都会推送，普通礼物累计价值达到 `miz.vtb.contributionMinAmount` 元才推送，直播间红包开始时也会提醒群员进入直播间抢红包。
+在 `config/vtb.toml` 的订阅块中设置 `contributionStreamers = ["主播昵称"]`，即可为该群开启实时事件感谢；该主播必须同时存在于 `streamers`。舰长、提督、总督加入大航海和续费都会推送，普通礼物累计价值达到 `miz.vtb.contributionMinAmount` 元才推送，直播间红包开始时也会提醒群员进入直播间抢红包。执行 `miz vtb unsubscribe contribution <主播昵称>` 后，该群的打赏、舰长、续费和红包等所有实时事件都会关闭；事件仍会保留用于下播汇总。
 
 未填写对应接口地址时，依赖该接口的命令会提示尚未配置，相关定时任务会自动停用并记录原因。示例配置已填写 Bing 官方地址。
 

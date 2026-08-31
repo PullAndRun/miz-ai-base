@@ -69,10 +69,27 @@ model VtbLiveContributionEvent {
 
 model VtbDynamicState {
   streamerMid      BigInt    @id @map("streamer_mid")
+  lastDynamicKey   String?   @map("last_dynamic_key")
   lastPublishedAt  DateTime  @map("last_published_at")
   deliveredGroupIds String[] @default([]) @map("delivered_group_ids")
 
   @@map("vtb_dynamic_status")
+}
+
+model VtbDynamicDelivery {
+  streamerMid BigInt    @map("streamer_mid")
+  dynamicKey  String    @map("dynamic_key")
+  groupId     String    @map("group_id")
+  publishedAt DateTime  @map("published_at")
+  deliveredAt DateTime? @map("delivered_at")
+  claimedUntil DateTime? @map("claimed_until")
+  attempts    Int       @default(0)
+  lastAttemptAt DateTime? @map("last_attempt_at")
+
+  @@id([streamerMid, dynamicKey, groupId])
+  @@index([streamerMid, publishedAt])
+  @@index([claimedUntil])
+  @@map("vtb_dynamic_deliveries")
 }
 
 model NewsDelivery {

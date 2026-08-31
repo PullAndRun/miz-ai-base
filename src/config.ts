@@ -480,7 +480,7 @@ export type VtbConfig = {
     readonly dynamicStreamers?: readonly string[];
     /** Streamers whose dynamic notifications should mention every group member. */
     readonly dynamicAtAllStreamers?: readonly string[];
-    /** Streamers whose guard and high-value contribution events should be pushed in real time. */
+    /** Streamers whose contribution events (gifts, guards, and red packets) should be pushed in real time. */
     readonly contributionStreamers?: readonly string[];
   }>;
 };
