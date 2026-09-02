@@ -670,6 +670,20 @@ const startVtbTask = async (config: MizConfig, gateway: Gateway, logger: Logger)
 export const isVtbInitialDynamicRecent = (publishedAt: Date, now = Date.now()) =>
   now - publishedAt.getTime() < VTB_INITIAL_DYNAMIC_MAX_AGE_MS;
 
+/**
+ * Once a streamer has a persisted delivery state, a different dynamic key is
+ * known to be unseen even if the bot was offline longer than one polling
+ * window. Do not turn that exact, recoverable case into a permanent skip.
+ */
+export const shouldDeliverVtbDynamic = (options: {
+  isNewDynamic: boolean;
+  hasPersistedState: boolean;
+  isRecent: boolean;
+  recoveredAfterRetry: boolean;
+}) => options.isNewDynamic && (
+  options.hasPersistedState || options.isRecent || options.recoveredAfterRetry
+);
+
 const pollVtbSubscriptions = async (
   config: MizConfig,
   gateway: Gateway,
@@ -1119,18 +1133,19 @@ const pollVtbSubscriptions = async (
             .filter(([, group]) => group.dynamicAtAll)
             .map(([groupId]) => groupId),
         );
-        const latestDynamic = feed.items[0];
-        if (!latestDynamic) {
+        const dynamicItems = [...feed.items].sort(
+          (left, right) => left.publishedAt.getTime() - right.publishedAt.getTime(),
+        );
+        if (dynamicItems.length === 0) {
           logger.debug("plugin", "vtb dynamic poll skipped: feed contains no deliverable item", {
             streamer: streamer.name,
           });
           continue;
         }
-        const latestDynamicKey = getVtbDynamicKey(latestDynamic);
         let dynamicState = await repository.getDynamicDeliveryState(streamer.mid);
 
         const deliverDynamicItem = async (
-          dynamic: typeof latestDynamic,
+          dynamic: typeof dynamicItems[number],
           dynamicKey: string,
           alreadyDeliveredGroupIds: readonly string[] = [],
         ) => {
@@ -1199,60 +1214,65 @@ const pollVtbSubscriptions = async (
           return deliveredGroups.map(String);
         };
 
-        // If a newer item has already replaced a partially delivered one,
-        // finish the older item first while it is still present in the feed.
-        // This prevents a failed group from being forgotten when the streamer
-        // posts again before the next successful poll.
-        if (dynamicState?.dynamicKey && dynamicState.dynamicKey !== latestDynamicKey) {
-          const previousDynamic = feed.items.find((item) => getVtbDynamicKey(item) === dynamicState!.dynamicKey);
-          if (previousDynamic) {
-            await repository.prepareDynamicDeliveries(
-              streamer.mid,
-              dynamicState.dynamicKey,
-              previousDynamic.publishedAt,
-              dynamicGroupIds,
-              dynamicState.deliveredGroupIds,
-            );
-            const previousPending = await repository.getUndeliveredDynamicGroups(
-              streamer.mid,
-              dynamicState.dynamicKey,
-              dynamicGroupIds,
-            );
-            if (previousPending.length > 0) {
-              await deliverDynamicItem(previousDynamic, dynamicState.dynamicKey, dynamicState.deliveredGroupIds);
-              dynamicState = await repository.getDynamicDeliveryState(streamer.mid);
-              if (dynamicState?.dynamicKey !== latestDynamicKey) continue;
-            }
-          }
-        }
-
-        const isNewDynamic = !dynamicState ||
-          (dynamicState.dynamicKey ? dynamicState.dynamicKey !== latestDynamicKey : latestDynamic.publishedAt > dynamicState.publishedAt);
-        const isCurrentDynamic = dynamicState?.dynamicKey === latestDynamicKey ||
-          (!dynamicState?.dynamicKey && dynamicState?.publishedAt.getTime() === latestDynamic.publishedAt.getTime());
-        const isRecent = now - latestDynamic.publishedAt.getTime() <
-          config.vtb.dynamicPollMinutes * 60_000 + getVtbPollingIntervalMs(config.vtb.cron);
-        const isInitialDynamicRecent = dynamicState !== undefined || isVtbInitialDynamicRecent(latestDynamic.publishedAt, now);
-        const isLivePromotion = isVtbLivePromotion(latestDynamic, config.vtb.liveWebUrl);
         const recoveredAfterDynamicRetry = recoveredDynamicMids.has(streamer.mid);
-        const deliveredGroupIds = isCurrentDynamic ? dynamicState!.deliveredGroupIds : [];
-        const hasPendingDynamicDelivery = isCurrentDynamic &&
-          !deliveredGroupIds.includes(ALL_GROUPS_DELIVERED_MARKER);
+        const statePublishedAt = dynamicState?.publishedAt.getTime();
+        const candidateDynamics = dynamicItems.filter((dynamic) => {
+          const dynamicKey = getVtbDynamicKey(dynamic);
+          if (!dynamicState) {
+            return isVtbInitialDynamicRecent(dynamic.publishedAt, now);
+          }
+          if (dynamicState.dynamicKey === dynamicKey) {
+            return true;
+          }
+          return dynamic.publishedAt.getTime() > (statePublishedAt ?? -Infinity);
+        });
 
-        if (((isNewDynamic && (isRecent || recoveredAfterDynamicRetry) && isInitialDynamicRecent) || hasPendingDynamicDelivery) && !isLivePromotion) {
-            const deliveredGroups = await deliverDynamicItem(latestDynamic, latestDynamicKey, deliveredGroupIds);
-            if (isNewDynamic) {
-              await repository.syncDynamicDeliveryState(streamer.mid, latestDynamicKey, latestDynamic.publishedAt);
+        // Deliver oldest first so a burst of posts cannot hide intermediate
+        // dynamics behind the newest feed item. A partial send stops the queue
+        // at that item and is retried on the next poll.
+        for (const dynamic of candidateDynamics) {
+          const dynamicKey = getVtbDynamicKey(dynamic);
+          const isCurrentDynamic = dynamicState?.dynamicKey === dynamicKey ||
+            (!dynamicState?.dynamicKey && dynamicState?.publishedAt.getTime() === dynamic.publishedAt.getTime());
+          const isNewDynamic = !isCurrentDynamic;
+          const isRecent = now - dynamic.publishedAt.getTime() <
+            config.vtb.dynamicPollMinutes * 60_000 + getVtbPollingIntervalMs(config.vtb.cron);
+          const isInitialDynamicRecent = dynamicState !== undefined || isVtbInitialDynamicRecent(dynamic.publishedAt, now);
+          const isLivePromotion = isVtbLivePromotion(dynamic, config.vtb.liveWebUrl);
+          const deliveredGroupIds = isCurrentDynamic ? dynamicState!.deliveredGroupIds : [];
+          const hasPendingDynamicDelivery = isCurrentDynamic &&
+            !deliveredGroupIds.includes(ALL_GROUPS_DELIVERED_MARKER);
+
+          if ((
+            (shouldDeliverVtbDynamic({
+              isNewDynamic,
+              hasPersistedState: dynamicState !== undefined,
+              isRecent,
+              recoveredAfterRetry: recoveredAfterDynamicRetry,
+            }) && isInitialDynamicRecent) ||
+            hasPendingDynamicDelivery
+          ) && !isLivePromotion) {
+            await deliverDynamicItem(dynamic, dynamicKey, deliveredGroupIds);
+            dynamicState = await repository.getDynamicDeliveryState(streamer.mid);
+            const pendingGroupIds = await repository.getUndeliveredDynamicGroups(
+              streamer.mid,
+              dynamicKey,
+              dynamicGroupIds,
+            );
+            if (pendingGroupIds.length > 0) {
+              break;
             }
           } else if (isNewDynamic) {
             // Mark stale and live-promotion dynamics as seen so they are never retried.
-            await repository.startDynamicDelivery(streamer.mid, latestDynamic.publishedAt, [ALL_GROUPS_DELIVERED_MARKER], latestDynamicKey);
+            await repository.startDynamicDelivery(streamer.mid, dynamic.publishedAt, [ALL_GROUPS_DELIVERED_MARKER], dynamicKey);
+            dynamicState = await repository.getDynamicDeliveryState(streamer.mid);
             if (isLivePromotion) {
               logger.info("plugin", "vtb dynamic notification skipped: live promotion", {
                 streamer: streamer.name,
               });
             }
           }
+        }
       } catch (error) {
         logger.error("plugin", "vtb subscription poll failed", { streamerName, error: normalizeError(error) });
       }

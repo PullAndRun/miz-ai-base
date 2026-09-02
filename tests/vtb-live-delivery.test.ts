@@ -5,6 +5,7 @@ import {
   isVtbLivePromotion,
   isVtbLiveStartRecent,
   selectVtbDynamicPollBatch,
+  shouldDeliverVtbDynamic,
 } from "@/tasks";
 
 describe("VTB live-end delivery", () => {
@@ -105,5 +106,20 @@ describe("VTB dynamic filtering", () => {
       15 * 60_000,
       new Set(["3"]),
     ).map((subscription) => subscription.streamer.mid)).toEqual(["3"]);
+  });
+
+  test("recovers an unseen dynamic after a long polling gap when state exists", () => {
+    expect(shouldDeliverVtbDynamic({
+      isNewDynamic: true,
+      hasPersistedState: true,
+      isRecent: false,
+      recoveredAfterRetry: false,
+    })).toBeTrue();
+    expect(shouldDeliverVtbDynamic({
+      isNewDynamic: true,
+      hasPersistedState: false,
+      isRecent: false,
+      recoveredAfterRetry: false,
+    })).toBeFalse();
   });
 });
