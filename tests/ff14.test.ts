@@ -74,6 +74,38 @@ describe("FF14 Universalis lookup", () => {
     ]);
   });
 
+  test("falls back to the known ID when the search index misses a current item", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.startsWith("https://search.example.test/items")) {
+        return new Response(JSON.stringify({ total: 0, items: [] }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({
+        itemID: 52440,
+        listings: [],
+        hasData: false,
+      }), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const result = await queryFf14Market({
+      regionKey: "猫",
+      itemName: "发型样式：麻花辫丸子头",
+      itemSearchApiUrl: "https://search.example.test/items",
+      marketApiUrl: "https://universalis.example.test/api/v2",
+      itemStore: {
+        findFf14Item: async () => undefined,
+        upsertFf14Item: async () => undefined,
+      },
+    });
+
+    expect(result?.item).toEqual({ ID: 52440, Name: "发型样式：麻花辫丸子头" });
+    expect(calls[1]).toContain("/%E7%8C%AB%E5%B0%8F%E8%83%96/52440?");
+  });
+
   test("uses the database item mapping without repeating the item search request", async () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: string | URL | Request) => {

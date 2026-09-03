@@ -19,3 +19,4 @@ temp/
 .agents/
 github/
 package-lock.json
+AGENTS.md

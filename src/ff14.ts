@@ -267,7 +267,13 @@ const searchItem = async (itemName: string, itemSearchApiUrl: string, proxyUrl: 
   const normalizedItemName = normalizeFf14ItemQueryName(itemName);
   const item = data.items.find((candidate) => normalizeFf14ItemQueryName(candidate.name) === normalizedItemName)
     ?? data.items[0];
-  return item ? { ID: item.id, Name: item.name } : undefined;
+  if (item) {
+    return { ID: item.id, Name: item.name };
+  }
+
+  // The public search index can lag behind the CN game data for newly added
+  // items. Keep known official names usable until that index catches up.
+  return KNOWN_FF14_ITEMS.get(normalizedItemName);
 };
 
 // NFKC makes full-width punctuation searchable, but it also changes the
@@ -276,6 +282,13 @@ const searchItem = async (itemName: string, itemSearchApiUrl: string, proxyUrl: 
 // the same item for lookup and alert management.
 export const normalizeFf14ItemQueryName = (itemName: string) =>
   itemName.trim().normalize("NFKC").replace(/:/g, "：");
+
+const KNOWN_FF14_ITEMS = new Map<string, ItemSearchResult>([
+  [normalizeFf14ItemQueryName("发型样式：麻花辫丸子头"), {
+    ID: 52440,
+    Name: "发型样式：麻花辫丸子头",
+  }],
+]);
 
 export const createFf14PriceAlertKey = (groupId: string | number, itemName: string) =>
   `${String(groupId)}\0${normalizeFf14ItemQueryName(itemName)}`;
