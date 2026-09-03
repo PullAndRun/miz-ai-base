@@ -16,6 +16,14 @@ const adminMessage = {
 };
 
 describe("FF14 price alert commands", () => {
+  test("keeps Chinese punctuation in item names", () => {
+    expect(parseFf14Action("猫 发型样式：麻花辫丸子头")).toEqual({
+      type: "query",
+      regionKey: "猫",
+      itemName: "发型样式：麻花辫丸子头",
+    });
+  });
+
   test("parses an add command with deduplicated at targets", () => {
     expect(parseFf14Action("add 猫 1000 水之碎晶 @123 @456 @123")).toEqual({
       type: "add",

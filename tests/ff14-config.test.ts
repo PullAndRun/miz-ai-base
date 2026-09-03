@@ -13,6 +13,22 @@ const alert = {
 };
 
 describe("FF14 price alert config updates", () => {
+  test("keeps the Chinese colon in an item name while writing config", () => {
+    const itemName = "发型样式：麻花辫丸子头";
+    const result = addFf14PriceAlertToSource("", { ...alert, itemName });
+
+    expect(result.alert.itemName).toBe(itemName);
+    expect(Bun.TOML.parse(result.source)).toMatchObject({
+      miz: { ff14: { priceAlerts: [{ ...alert, itemName }] } },
+    });
+
+    const duplicate = addFf14PriceAlertToSource(result.source, {
+      ...alert,
+      itemName: "发型样式:麻花辫丸子头",
+    });
+    expect(duplicate.changed).toBeFalse();
+  });
+
   test("appends a complete alert block and detects a duplicate", () => {
     const added = addFf14PriceAlertToSource("", alert);
     expect(added.changed).toBeTrue();

@@ -264,13 +264,18 @@ const searchItem = async (itemName: string, itemSearchApiUrl: string, proxyUrl: 
       Referer: "https://universalis.app/",
     },
   });
-  const normalizedItemName = itemName.trim().normalize();
-  const item = data.items.find((candidate) => candidate.name.trim().normalize() === normalizedItemName)
+  const normalizedItemName = normalizeFf14ItemQueryName(itemName);
+  const item = data.items.find((candidate) => normalizeFf14ItemQueryName(candidate.name) === normalizedItemName)
     ?? data.items[0];
   return item ? { ID: item.id, Name: item.name } : undefined;
 };
 
-export const normalizeFf14ItemQueryName = (itemName: string) => itemName.trim().normalize("NFKC");
+// NFKC makes full-width punctuation searchable, but it also changes the
+// Chinese colon used by some official item names into an ASCII colon. Keep
+// the canonical item name's punctuation while treating both input forms as
+// the same item for lookup and alert management.
+export const normalizeFf14ItemQueryName = (itemName: string) =>
+  itemName.trim().normalize("NFKC").replace(/:/g, "：");
 
 export const createFf14PriceAlertKey = (groupId: string | number, itemName: string) =>
   `${String(groupId)}\0${normalizeFf14ItemQueryName(itemName)}`;

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { rename, rm } from "node:fs/promises";
+import { normalizeFf14ItemQueryName } from "@/ff14";
 
 const logLevelSchema = z.enum(["debug", "info", "warn", "error", "off"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
@@ -956,7 +957,7 @@ const findFf14PriceAlertBlocks = (source: string): Ff14PriceAlertBlock[] => {
   return blocks;
 };
 
-const normalizeFf14ItemName = (itemName: string) => itemName.trim().normalize("NFKC");
+const normalizeFf14ItemName = normalizeFf14ItemQueryName;
 
 const findVtbSubscriptionBlock = (source: string, groupId: string | number): VtbSubscriptionBlock | undefined => {
   const marker = "[[miz.vtb.subscriptions]]";

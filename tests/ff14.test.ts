@@ -3,6 +3,7 @@ import {
   createFf14PriceAlertMentionMessage,
   formatFf14MarketMessages,
   getFf14LowPriceListingKeys,
+  normalizeFf14ItemQueryName,
   queryFf14Market,
 } from "@/ff14";
 
@@ -13,6 +14,13 @@ afterEach(() => {
 });
 
 describe("FF14 Universalis lookup", () => {
+  test("preserves Chinese colons in canonical item names", () => {
+    const itemName = "发型样式：麻花辫丸子头";
+
+    expect(normalizeFf14ItemQueryName(itemName)).toBe(itemName);
+    expect(normalizeFf14ItemQueryName("发型样式:麻花辫丸子头")).toBe(itemName);
+  });
+
   test("uses the item search service integrated by Universalis and its market API", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const storedItems: Array<{ queryName: string; item: { id: number; name: string } }> = [];
