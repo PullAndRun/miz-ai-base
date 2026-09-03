@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { fetchWithRetry, readResponseJson } from "@/http";
+import { fetchWithRetry, readResponseJson, readResponseText } from "@/http";
 
 const itemSearchResultSchema = z.looseObject({
   ID: z.number().int().positive(),
@@ -107,6 +107,10 @@ export const createFf14PriceAlertMentionMessage = (
 const DEFAULT_MAX_LISTING_COUNT = 10;
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_FF14_RESPONSE_BYTES = 5 * 1024 * 1024;
+const MAX_FF14_CN_ITEM_INDEX_BYTES = 32 * 1024 * 1024;
+const FF14_CN_ITEM_INDEX_URL =
+  "https://raw.githubusercontent.com/thewakingsands/ffxiv-datamining-cn/master/Item.csv";
+const FF14_CN_ITEM_INDEX_TIMEOUT_MS = 60_000;
 // A proxy that accepts a connection but never completes a request should not
 // hold up the whole alert poll through the shared, long HTTP backoff policy.
 // Probe it once, then give the direct route a small number of retries.
@@ -272,8 +276,8 @@ const searchItem = async (itemName: string, itemSearchApiUrl: string, proxyUrl: 
   }
 
   // The public search index can lag behind the CN game data for newly added
-  // items. Keep known official names usable until that index catches up.
-  return KNOWN_FF14_ITEMS.get(normalizedItemName);
+  // items. Resolve misses against the current CN game-data export instead.
+  return findFf14ItemInCnIndex(normalizedItemName, proxyUrl);
 };
 
 // NFKC makes full-width punctuation searchable, but it also changes the
@@ -283,12 +287,57 @@ const searchItem = async (itemName: string, itemSearchApiUrl: string, proxyUrl: 
 export const normalizeFf14ItemQueryName = (itemName: string) =>
   itemName.trim().normalize("NFKC").replace(/:/g, "：");
 
-const KNOWN_FF14_ITEMS = new Map<string, ItemSearchResult>([
-  [normalizeFf14ItemQueryName("发型样式：麻花辫丸子头"), {
-    ID: 52440,
-    Name: "发型样式：麻花辫丸子头",
-  }],
-]);
+let ff14CnItemIndexPromise: Promise<ReadonlyMap<string, ItemSearchResult>> | undefined;
+
+const findFf14ItemInCnIndex = async (itemName: string, proxyUrl: string) => {
+  const index = await loadFf14CnItemIndex(proxyUrl);
+  return index.get(normalizeFf14ItemQueryName(itemName));
+};
+
+const loadFf14CnItemIndex = async (proxyUrl: string) => {
+  const current = ff14CnItemIndexPromise ??= downloadFf14CnItemIndex(proxyUrl);
+  try {
+    return await current;
+  } catch (error) {
+    if (ff14CnItemIndexPromise === current) {
+      ff14CnItemIndexPromise = undefined;
+    }
+    throw error;
+  }
+};
+
+const downloadFf14CnItemIndex = async (proxyUrl: string) => {
+  const request = (proxy?: string) => fetchWithRetry(FF14_CN_ITEM_INDEX_URL, {
+    ...(proxy ? { proxy } : {}),
+    timeoutMs: FF14_CN_ITEM_INDEX_TIMEOUT_MS,
+    retryCount: proxy ? FF14_PROXY_RETRY_COUNT : FF14_DIRECT_RETRY_COUNT,
+    retryDelayMs: FF14_RETRY_DELAY_MS,
+  });
+  let response: Response;
+  try {
+    response = await request(proxyUrl || undefined);
+  } catch (error) {
+    if (!proxyUrl || isHttpResponseError(error)) {
+      throw error;
+    }
+    response = await request();
+  }
+
+  return parseFf14CnItemIndex(await readResponseText(response, MAX_FF14_CN_ITEM_INDEX_BYTES));
+};
+
+const parseFf14CnItemIndex = (csv: string) => {
+  const items = new Map<string, ItemSearchResult>();
+  const itemRow = /(?:^|\n)(\d+),(?:"((?:[^"]|"")*)"|([^,\r\n]*)),/g;
+  for (const match of csv.matchAll(itemRow)) {
+    const id = Number(match[1]);
+    const name = (match[2] ?? match[3] ?? "").replace(/""/g, "\"").trim();
+    if (Number.isSafeInteger(id) && id > 0 && name) {
+      items.set(normalizeFf14ItemQueryName(name), { ID: id, Name: name });
+    }
+  }
+  return items;
+};
 
 export const createFf14PriceAlertKey = (groupId: string | number, itemName: string) =>
   `${String(groupId)}\0${normalizeFf14ItemQueryName(itemName)}`;

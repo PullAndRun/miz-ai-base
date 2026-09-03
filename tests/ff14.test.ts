@@ -74,7 +74,7 @@ describe("FF14 Universalis lookup", () => {
     ]);
   });
 
-  test("falls back to the known ID when the search index misses a current item", async () => {
+  test("resolves current CN items when the search index has not caught up", async () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: string | URL | Request) => {
       const url = String(input);
@@ -84,8 +84,18 @@ describe("FF14 Universalis lookup", () => {
           headers: { "content-type": "application/json" },
         });
       }
+      if (url.includes("thewakingsands/ffxiv-datamining-cn")) {
+        return new Response([
+          "key,0,1",
+          "#,Singular,Adjective",
+          "int32,str,bool",
+          "50327,\"发型样式：盖乌斯\",0",
+          "52440,\"发型样式：麻花辫丸子头\",0",
+        ].join("\n"), { headers: { "content-type": "text/csv" } });
+      }
+      const itemID = url.includes("/50327?") ? 50327 : 52440;
       return new Response(JSON.stringify({
-        itemID: 52440,
+        itemID,
         listings: [],
         hasData: false,
       }), { headers: { "content-type": "application/json" } });
@@ -103,7 +113,17 @@ describe("FF14 Universalis lookup", () => {
     });
 
     expect(result?.item).toEqual({ ID: 52440, Name: "发型样式：麻花辫丸子头" });
-    expect(calls[1]).toContain("/%E7%8C%AB%E5%B0%8F%E8%83%96/52440?");
+    const gaiusResult = await queryFf14Market({
+      regionKey: "猫",
+      itemName: "发型样式：盖乌斯",
+      itemSearchApiUrl: "https://search.example.test/items",
+      marketApiUrl: "https://universalis.example.test/api/v2",
+    });
+
+    expect(gaiusResult?.item).toEqual({ ID: 50327, Name: "发型样式：盖乌斯" });
+    expect(calls.filter((url) => url.includes("thewakingsands/ffxiv-datamining-cn"))).toHaveLength(1);
+    expect(calls).toContainEqual(expect.stringContaining("/52440?"));
+    expect(calls).toContainEqual(expect.stringContaining("/50327?"));
   });
 
   test("uses the database item mapping without repeating the item search request", async () => {
