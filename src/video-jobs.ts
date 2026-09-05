@@ -32,10 +32,11 @@ export const tryAcquireVideoJob = (
   jobKey: string,
   maxConcurrentJobs: number,
 ): VideoJobAdmission => {
+  const limit = normalizeConcurrencyLimit(maxConcurrentJobs);
   if (activeJobKeys.has(jobKey)) {
     return { acquired: false, reason: "duplicate" };
   }
-  if (activeJobCount >= maxConcurrentJobs) {
+  if (activeJobCount >= limit) {
     return { acquired: false, reason: "busy" };
   }
 
@@ -51,7 +52,7 @@ export const tryAcquireVideoJob = (
       released = true;
       activeJobCount -= 1;
       activeJobKeys.delete(jobKey);
-      drainVideoQueue(maxConcurrentJobs);
+      drainVideoQueue(limit);
     },
   };
 };
@@ -63,18 +64,19 @@ export const tryAcquireVideoJob = (
 export const enqueueVideoJob = (
   maxConcurrentJobs: number,
 ): QueuedVideoJob => {
+  const limit = normalizeConcurrencyLimit(maxConcurrentJobs);
   const position = activeJobCount + queuedJobs.length;
   let resolveReady!: (handle: VideoJobHandle) => void;
   const ready = new Promise<VideoJobHandle>((resolve) => {
     resolveReady = resolve;
   });
   queuedJobs.push({ resolve: resolveReady });
-  drainVideoQueue(maxConcurrentJobs);
+  drainVideoQueue(limit);
   return { position, ready };
 };
 
 const drainVideoQueue = (maxConcurrentJobs: number) => {
-  const limit = Math.max(1, Math.floor(maxConcurrentJobs) || 1);
+  const limit = normalizeConcurrencyLimit(maxConcurrentJobs);
   while (activeJobCount < limit && queuedJobs.length > 0) {
     const pending = queuedJobs.shift();
     if (!pending) {
@@ -94,3 +96,6 @@ const drainVideoQueue = (maxConcurrentJobs: number) => {
     });
   }
 };
+
+const normalizeConcurrencyLimit = (value: number) =>
+  Number.isFinite(value) && value > 0 ? Math.max(1, Math.floor(value)) : 1;

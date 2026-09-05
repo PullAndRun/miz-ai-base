@@ -97,9 +97,10 @@ export const getUndeliveredVtbLiveEndGroupIds = (
   }
 
   const liveDeliveredGroups = new Set(liveDeliveredGroupIds);
+  const endDeliveredGroups = new Set(endDeliveredGroupIds);
   return currentGroupIds.filter((groupId) => {
     const groupKey = String(groupId);
-    return liveDeliveredGroups.has(groupKey) && !endDeliveredGroupIds.includes(groupKey);
+    return liveDeliveredGroups.has(groupKey) && !endDeliveredGroups.has(groupKey);
   });
 };
 

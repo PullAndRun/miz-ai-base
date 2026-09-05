@@ -42,6 +42,20 @@ describe("video job admission", () => {
     }
   });
 
+  test("normalizes invalid concurrency limits instead of bypassing the cap", () => {
+    const admission = tryAcquireVideoJob("group-invalid:user", Number.NaN);
+    expect(admission.acquired).toBeTrue();
+    if (!admission.acquired) return;
+    try {
+      expect(tryAcquireVideoJob("group-invalid:second", Number.NaN)).toEqual({
+        acquired: false,
+        reason: "busy",
+      });
+    } finally {
+      admission.release();
+    }
+  });
+
   test("queues jobs in FIFO order when all slots are occupied", async () => {
     const first = enqueueVideoJob(1);
     const second = enqueueVideoJob(1);

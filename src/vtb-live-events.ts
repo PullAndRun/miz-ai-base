@@ -335,19 +335,21 @@ export const createVtbLiveEventManager = (
         logger.warn("plugin", "vtb SEND_GIFT_V2 payload could not be decoded", { streamerMid: connection.mid });
       }
       for (const eventData of eventPayloads) {
-      const data = commandName === "USER_TOAST_MSG_V2" ? normalizeUserToastV2(eventData) : eventData;
+      const normalizedData = commandName === "USER_TOAST_MSG_V2" ? normalizeUserToastV2(eventData) : eventData;
+      // Upstream gateways occasionally emit null or scalar data for a known
+      // command. Ignore that event without aborting the rest of the packet.
+      if (!normalizedData || typeof normalizedData !== "object" || Array.isArray(normalizedData)) continue;
+      const data = normalizedData as Record<string, any>;
       const isRedPacket = commandName === "POPULARITY_RED_POCKET_START" || commandName === "POPULARITY_RED_POCKET_NEW" || commandName === "RED_POCKET_START";
       // GUARD_BUY is the canonical purchase event. USER_TOAST_MSG is a
       // presentation event emitted by some rooms and may be absent.
       const isGuardBuy = commandName === "GUARD_BUY";
       const sender = data.sender_uinfo ?? data.senderUinfo ?? data.user_info ?? data.userInfo ?? data.user ?? {};
       const senderBase = sender && typeof sender === "object" ? (sender.base ?? {}) : {};
-      if (!data.uname) {
-        data.uname = sender?.uname ?? sender?.username ?? sender?.user_name ?? sender?.name ?? senderBase?.name;
-      }
+      const senderName = sender?.uname ?? sender?.username ?? sender?.user_name ?? sender?.name ?? senderBase?.name;
       const uid = text(data.uid ?? data.mid ?? data.sender_uid ?? data.senderUid ??
         sender?.uid ?? sender?.mid ?? (isRedPacket ? "red-packet" : ""));
-      const userName = text(data.uname ?? data.username ?? data.user_name ?? data.userName) || uid || "观众";
+      const userName = text(data.uname ?? data.username ?? data.user_name ?? data.userName) || text(senderName) || uid || "观众";
       if (!uid) continue;
       let kind: VtbContributionEvent["kind"] | undefined;
       let amount = 0;
