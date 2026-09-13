@@ -10,6 +10,7 @@ import {
   createBiliGiftLotteryForwardMessages,
   drawBiliGiftLottery,
   formatBiliGiftLotteryCard,
+  formatBiliGiftLotteryStars,
   formatBiliGiftLotteryValue,
 } from "@/bili-gift-lottery";
 import {
@@ -39,9 +40,9 @@ export type BiliGiftLotteryCommandOptions = Readonly<{
 }>;
 
 export const createBiliGiftLotteryUsage = (commandPrefix: string) => [
-  "🎰 想抽礼物的话，发这条就行：",
+  "🎰 迷子的小游戏，每天可以抽一次：",
   `用法：${commandPrefix} 抽奖`,
-  "每人每天只能抽一次。",
+  "从 B 站直播礼物里随机抽一款，抽中什么全看运气～",
 ].join("\n");
 
 export const handleBiliGiftLotteryCommand = async ({
@@ -158,9 +159,9 @@ export const handleBiliGiftLotteryCommand = async ({
         `base64://${mediaBase64}`,
       ),
       {
-        title: `${draw.rarity.emoji} ${draw.rarity.label} · ${draw.gift.name}`,
+        title: `${formatBiliGiftLotteryStars(draw.rarity)} · ${draw.gift.name}`,
         source: `${commandPrefix} 抽奖`,
-        summary: `礼物 #${draw.gift.id} · ${formatBiliGiftLotteryValue(draw.gift)}`,
+        summary: `抽到「${draw.gift.name}」· ${formatBiliGiftLotteryValue(draw.gift)}`,
         timeoutMs: BILI_GIFT_MEDIA_SEND_TIMEOUT_MS,
       },
     );
@@ -185,7 +186,7 @@ const lotteryPlugin: MizPlugin = {
   name: "lottery",
   commands: ["lottery", "抽奖"],
   description: [
-    "从 B 站直播礼物里抽一款，连礼物特效一起发出来。",
+    "迷子的小游戏：从 B 站直播礼物里抽一款，连展示效果一起发出来。",
     "用法：miz 抽奖",
     "每人每天只能抽一次。",
     "礼物按价值分五档：🌱 普通 / ⭐ 稀有 / ✨ 史诗 / 💎 传说 / 👑 神话，越贵越难抽到。",

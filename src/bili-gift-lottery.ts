@@ -2,7 +2,6 @@ import type { ForwardMessageContent } from "@/plugins";
 import {
   createBiliGiftMediaSegment,
   formatBiliGiftAmount,
-  formatBiliGiftDetails,
   getBiliGiftBatteryValue,
   groupBiliGiftsByName,
   resolveBiliGiftMedia,
@@ -12,6 +11,8 @@ import {
 
 export type BiliGiftRarity = Readonly<{
   key: "common" | "rare" | "epic" | "legendary" | "mythic";
+  /** 1 最低、5 最高，决定揭晓时的 emoji 个数。 */
+  level: number;
   label: string;
   emoji: string;
   /** 抽中该档的概率，五档之和为 1。 */
@@ -24,6 +25,7 @@ export type BiliGiftRarity = Readonly<{
 export const BILI_GIFT_RARITIES: readonly BiliGiftRarity[] = [
   {
     key: "common",
+    level: 1,
     label: "普通",
     emoji: "🌱",
     probability: 0.3,
@@ -31,6 +33,7 @@ export const BILI_GIFT_RARITIES: readonly BiliGiftRarity[] = [
   },
   {
     key: "rare",
+    level: 2,
     label: "稀有",
     emoji: "⭐",
     probability: 0.3,
@@ -38,6 +41,7 @@ export const BILI_GIFT_RARITIES: readonly BiliGiftRarity[] = [
   },
   {
     key: "epic",
+    level: 3,
     label: "史诗",
     emoji: "✨",
     probability: 0.22,
@@ -45,6 +49,7 @@ export const BILI_GIFT_RARITIES: readonly BiliGiftRarity[] = [
   },
   {
     key: "legendary",
+    level: 4,
     label: "传说",
     emoji: "💎",
     probability: 0.12,
@@ -52,6 +57,7 @@ export const BILI_GIFT_RARITIES: readonly BiliGiftRarity[] = [
   },
   {
     key: "mythic",
+    level: 5,
     label: "神话",
     emoji: "👑",
     probability: 0.06,
@@ -134,17 +140,31 @@ export const formatBiliGiftLotteryValue = (gift: BiliGift) => {
   return batteries === undefined ? "免费" : `${formatBiliGiftAmount(batteries)} 电池`;
 };
 
-/** 抽奖结果卡片：档位、礼物台账数据和气氛文案。 */
+/** 稀有度星级：emoji 个数就是档位。 */
+export const formatBiliGiftLotteryStars = (rarity: BiliGiftRarity) =>
+  `${rarity.emoji.repeat(rarity.level)} ${rarity.label}`;
+
+/** 揭晓文案：稀有度越高，emoji 越多。 */
+export const formatBiliGiftLotteryReveal = (rarity: BiliGiftRarity) =>
+  `${formatBiliGiftLotteryStars(rarity)}！`;
+
+/** 抽到的礼物值多少电池，作为小游戏的分数。 */
+export const formatBiliGiftLotteryValueLine = (gift: BiliGift) => {
+  const batteries = getBiliGiftBatteryValue(gift);
+  return batteries === undefined ? "💰 免费礼物" : `💰 价值 ${formatBiliGiftAmount(batteries)} 电池`;
+};
+
+/** 抽奖结果卡片：独立小游戏的揭晓文案，不展示礼物台账数据。 */
 export const formatBiliGiftLotteryCard = (draw: BiliGiftLotteryDraw) => {
-  const { gift, rarity, media } = draw;
+  const { gift, rarity } = draw;
   return [
     BILI_GIFT_LOTTERY_TITLE,
     "",
-    `${rarity.emoji} ${rarity.label} · ${gift.name}`,
-    ...(media ? formatBiliGiftDetails(gift, media) : []),
-    ...(gift.description ? [`「${gift.description}」`] : []),
+    formatBiliGiftLotteryReveal(rarity),
+    `你抽到了「${gift.name}」`,
     "",
-    rarity.flavor,
+    formatBiliGiftLotteryValueLine(gift),
+    `🎉 ${rarity.flavor}`,
   ].join("\n");
 };
 

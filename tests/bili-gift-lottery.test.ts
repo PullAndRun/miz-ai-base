@@ -199,28 +199,36 @@ describe("Bilibili gift lottery", () => {
     expect(formatBiliGiftLotteryValue(freeGift)).toBe("免费");
   });
 
-  test("writes a result card with the gift data and flavour text", () => {
+  test("writes a game-style reveal card instead of a gift data card", () => {
     const draw = drawBiliGiftLottery(gifts, { random: createSequenceRandom([0.95, 0]) })!;
     const card = formatBiliGiftLotteryCard(draw);
 
     expect(card).toContain("🎰 迷子的礼物抽奖");
-    expect(card).toContain("👑 神话 · 为你摘星");
-    expect(card).toContain("· 礼物 ID：#5");
-    expect(card).toContain("· 价格：10000 电池（1000 元）");
-    expect(card).toContain("· 特效 ID：#14");
-    expect(card).toContain("「心中有日月，手可摘星辰」");
-    expect(card).toContain("神话降临，全群都该看看它！");
+    expect(card).toContain("👑👑👑👑👑 神话！");
+    expect(card).toContain("你抽到了「为你摘星」");
+    expect(card).toContain("💰 价值 10000 电池");
+    expect(card).toContain("🎉 神话降临，全群都该看看它！");
+    // 抽奖是独立小游戏，不展示礼物台账里的字段和官方介绍。
+    expect(card).not.toContain("· 礼物 ID：");
+    expect(card).not.toContain("· 价格：");
+    expect(card).not.toContain("· 特效 ID：");
+    expect(card).not.toContain("· 展示素材：");
+    expect(card).not.toContain("心中有日月");
   });
 
-  test("omits the price line for free gifts", () => {
+  test("shows free gifts as free instead of a value", () => {
     const draw = drawBiliGiftLottery([freeGift], { random: createSequenceRandom([0, 0]) })!;
+    const card = formatBiliGiftLotteryCard(draw);
 
-    expect(formatBiliGiftLotteryCard(draw)).not.toContain("· 价格：");
+    expect(card).toContain("🌱 普通！");
+    expect(card).toContain("💰 免费礼物");
+    expect(card).not.toContain("电池");
   });
 
-  test("describes the command and the daily limit in the help menu", () => {
+  test("describes the mini game and the daily limit in the help menu", () => {
     expect(lotteryPlugin.name).toBe("lottery");
     expect(lotteryPlugin.commands).toEqual(["lottery", "抽奖"]);
+    expect(lotteryPlugin.description).toContain("迷子的小游戏");
     expect(lotteryPlugin.description).toContain("miz 抽奖");
     expect(lotteryPlugin.description).toContain("每人每天只能抽一次");
   });
@@ -311,15 +319,16 @@ describe("lottery plugin", () => {
     const mediaNode = forward!.messages[1] as Array<{ type: string; data: { file?: string } }>;
 
     expect(forward!.messages).toHaveLength(2);
-    expect(card).toContain("👑 神话 · 为你摘星");
+    expect(card).toContain("👑👑👑👑👑 神话！");
+    expect(card).toContain("你抽到了「为你摘星」");
     expect(mediaNode).toEqual([{
       type: "video",
       data: { file: `base64://${Buffer.from("bytes-5").toString("base64")}` },
     }]);
     expect(forward!.options).toEqual({
-      title: "👑 神话 · 为你摘星",
+      title: "👑👑👑👑👑 神话 · 为你摘星",
       source: "miz 抽奖",
-      summary: "礼物 #5 · 10000 电池",
+      summary: "抽到「为你摘星」· 10000 电池",
       timeoutMs: 300_000,
     });
     expect(records.get("1:2026-09-14")).toEqual({ giftId: 5, giftName: "为你摘星" });
