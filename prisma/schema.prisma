@@ -231,13 +231,14 @@ model GroupTodo {
 }
 
 model GiftLotteryDailyDraw {
-  userId   String   @map("user_id")
+  groupId  String   @map("group_id")
   drawDate String   @map("draw_date")
   giftId   Int      @map("gift_id")
   giftName String   @map("gift_name")
+  userId   String?  @map("user_id")
   drawnAt  DateTime @default(now()) @map("drawn_at")
 
-  @@id([userId, drawDate])
+  @@id([groupId, drawDate])
   @@index([drawDate])
   @@map("gift_lottery_daily_draws")
 }

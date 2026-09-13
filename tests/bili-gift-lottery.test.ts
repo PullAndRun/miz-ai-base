@@ -129,7 +129,7 @@ const createLogger = () => {
 const createMemoryStore = () => {
   const records = new Map<string, GiftLotteryDailyDraw>();
   const released: string[] = [];
-  const keyOf = (key: { userId: string; drawDate: string }) => `${key.userId}:${key.drawDate}`;
+  const keyOf = (key: { groupId: string; drawDate: string }) => `${key.groupId}:${key.drawDate}`;
   const store: GiftLotteryDrawStore = {
     find: async (key) => records.get(keyOf(key)),
     claim: async (draw) => {
@@ -250,6 +250,8 @@ describe("lottery plugin", () => {
       random?: () => number;
       now?: Date;
       userId?: string;
+      groupId?: number;
+      privateChat?: boolean;
       store?: GiftLotteryDrawStore;
     } = {},
   ) => {
@@ -258,7 +260,12 @@ describe("lottery plugin", () => {
       args,
       commandPrefix: "miz",
       logger,
-      message: { text: "miz 抽奖", groupId: 100, userId: options.userId ?? "1", raw: {} },
+      message: {
+        text: "miz 抽奖",
+        ...(options.privateChat ? {} : { groupId: options.groupId ?? 100 }),
+        userId: options.userId ?? "1",
+        raw: {},
+      },
       reply: async (message: unknown) => {
         replies.push(message);
       },
@@ -331,17 +338,18 @@ describe("lottery plugin", () => {
       summary: "抽到「为你摘星」· 10000 电池",
       timeoutMs: 300_000,
     });
-    expect(records.get("1:2026-09-14")).toEqual({ giftId: 5, giftName: "为你摘星" });
+    expect(records.get("100:2026-09-14")).toEqual({ giftId: 5, giftName: "为你摘星" });
   });
 
-  test("refuses a second draw on the same day and allows the next day", async () => {
+  test("refuses a second draw in the same group on the same day and allows the next day", async () => {
     const { store } = createMemoryStore();
     const now = new Date(2026, 8, 14, 10, 0);
     await runLottery("", { random: createSequenceRandom([0.95, 0]), now, store });
-    await runLottery("", { random: createSequenceRandom([0.95, 0]), now, store });
+    // 同群换个人来抽也不行：名额属于群。
+    await runLottery("", { random: createSequenceRandom([0.95, 0]), now, userId: "2", store });
 
     expect(forwards).toHaveLength(1);
-    expect(String(replies[0])).toContain("今天已经抽过啦");
+    expect(String(replies[0])).toContain("本群今天已经抽过啦");
     expect(String(replies[0])).toContain("为你摘星");
 
     await runLottery("", {
@@ -350,6 +358,35 @@ describe("lottery plugin", () => {
       store,
     });
     expect(forwards).toHaveLength(2);
+  });
+
+  test("gives every group its own daily draw", async () => {
+    const { store } = createMemoryStore();
+    const now = new Date(2026, 8, 14, 10, 0);
+    await runLottery("", { random: createSequenceRandom([0.95, 0]), now, store });
+    await runLottery("", { random: createSequenceRandom([0.95, 0]), now, groupId: 200, store });
+    await runLottery("", { random: createSequenceRandom([0.95, 0]), now, groupId: 300, store });
+
+    expect(forwards).toHaveLength(3);
+    expect(replies).toEqual([]);
+  });
+
+  test("treats a private chat as its own daily slot", async () => {
+    const { store } = createMemoryStore();
+    const now = new Date(2026, 8, 14, 10, 0);
+    await runLottery("", { random: createSequenceRandom([0.95, 0]), now, privateChat: true, store });
+    await runLottery("", { random: createSequenceRandom([0.95, 0]), now, privateChat: true, store });
+    await runLottery("", {
+      random: createSequenceRandom([0.95, 0]),
+      now,
+      privateChat: true,
+      userId: "2",
+      store,
+    });
+
+    expect(forwards).toHaveLength(2);
+    expect(String(replies[0])).toContain("今天已经抽过啦");
+    expect(String(replies[0])).not.toContain("本群");
   });
 
   test("reports an already claimed day when the claim loses a race", async () => {
@@ -399,7 +436,7 @@ describe("lottery plugin", () => {
 
     expect(String(replies[0])).toContain("素材读不出来");
     expect(records.size).toBe(0);
-    expect(released).toEqual(["1:2026-09-14"]);
+    expect(released).toEqual(["100:2026-09-14"]);
   });
 
   test("gives the daily chance back when the forward fails", async () => {

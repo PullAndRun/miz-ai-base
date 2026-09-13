@@ -3,7 +3,8 @@ import { createDatabaseClient } from "@/database";
 import type { PrismaClient } from "@/generated/prisma/client";
 
 export type GiftLotteryDailyDrawKey = Readonly<{
-  userId: string;
+  /** 群号；私聊用 `private:<用户号>`，这样每个群各有一次机会。 */
+  groupId: string;
   /** 本地日期，格式 YYYY-MM-DD。 */
   drawDate: string;
 }>;
@@ -16,7 +17,9 @@ export type GiftLotteryDailyDraw = Readonly<{
 /** 每日一次的限制依赖这层存储；测试可以注入内存实现。 */
 export type GiftLotteryDrawStore = Readonly<{
   find: (key: GiftLotteryDailyDrawKey) => Promise<GiftLotteryDailyDraw | undefined>;
-  claim: (draw: GiftLotteryDailyDrawKey & GiftLotteryDailyDraw) => Promise<"claimed" | "taken">;
+  claim: (
+    draw: GiftLotteryDailyDrawKey & GiftLotteryDailyDraw & Readonly<{ userId: string }>,
+  ) => Promise<"claimed" | "taken">;
   release: (key: GiftLotteryDailyDrawKey) => Promise<void>;
 }>;
 
@@ -48,20 +51,21 @@ export const findGiftLotteryDailyDraw = async (
   key: GiftLotteryDailyDrawKey,
 ): Promise<GiftLotteryDailyDraw | undefined> => {
   const record = await requireDrawDatabase().giftLotteryDailyDraw.findUnique({
-    where: { userId_drawDate: { userId: key.userId, drawDate: key.drawDate } },
+    where: { groupId_drawDate: { groupId: key.groupId, drawDate: key.drawDate } },
   });
   return record ? { giftId: record.giftId, giftName: record.giftName } : undefined;
 };
 
-/** 先占位再发奖：唯一键冲突说明当天已经抽过了。 */
+/** 先占位再发奖：唯一键冲突说明这个群当天已经抽过了。 */
 export const claimGiftLotteryDailyDraw = async (
-  draw: GiftLotteryDailyDrawKey & GiftLotteryDailyDraw,
+  draw: GiftLotteryDailyDrawKey & GiftLotteryDailyDraw & Readonly<{ userId: string }>,
 ): Promise<"claimed" | "taken"> => {
   try {
     await requireDrawDatabase().giftLotteryDailyDraw.create({
       data: {
-        userId: draw.userId,
+        groupId: draw.groupId,
         drawDate: draw.drawDate,
+        userId: draw.userId,
         giftId: draw.giftId,
         giftName: draw.giftName,
       },
@@ -75,10 +79,10 @@ export const claimGiftLotteryDailyDraw = async (
   }
 };
 
-/** 发送失败时退回当天的抽奖资格。 */
+/** 发送失败时退回这个群当天的抽奖资格。 */
 export const releaseGiftLotteryDailyDraw = async (key: GiftLotteryDailyDrawKey) => {
   await requireDrawDatabase().giftLotteryDailyDraw.deleteMany({
-    where: { userId: key.userId, drawDate: key.drawDate },
+    where: { groupId: key.groupId, drawDate: key.drawDate },
   });
 };
 

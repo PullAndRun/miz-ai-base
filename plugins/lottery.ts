@@ -39,6 +39,13 @@ export type BiliGiftLotteryCommandOptions = Readonly<{
   store?: GiftLotteryDrawStore;
 }>;
 
+/** 同一天再次抽奖的提示；群里明确说「本群」，私聊就按用户算。 */
+export const createAlreadyDrawnMessage = (isGroupChat: boolean, giftName?: string) => {
+  const scope = isGroupChat ? "本群" : "";
+  const detail = giftName ? `，抽到的是「${giftName}」` : "";
+  return [`${scope}今天已经抽过啦${detail}。`, "明天再来试试手气吧～"].join("\n");
+};
+
 export const createBiliGiftLotteryUsage = (commandPrefix: string) => [
   "🎰 迷子的小游戏，每天可以抽一次：",
   `用法：${commandPrefix} 抽奖`,
@@ -64,24 +71,25 @@ export const handleBiliGiftLotteryCommand = async ({
     return;
   }
 
+  const isGroupChat = message.groupId !== undefined;
+  // 每个群各有一份每日名额；私聊按用户算一份。
+  const groupId = isGroupChat ? String(message.groupId) : `private:${userId}`;
   const now = options.now ?? new Date();
   const drawDate = formatGiftLotteryDrawDate(now);
+  const drawKey = { groupId, drawDate };
   const store = options.store ?? giftLotteryDrawStore;
 
   // 读记录失败时放行：数据库抖动不该把娱乐功能整个挡在门外。
   let existing: GiftLotteryDailyDraw | undefined;
   try {
-    existing = await store.find({ userId, drawDate });
+    existing = await store.find(drawKey);
   } catch (error) {
     logger.warn("plugin", "bilibili gift lottery daily lookup failed", {
       error: summarizeError(error),
     });
   }
   if (existing) {
-    await reply([
-      `今天已经抽过啦，抽到的是「${existing.giftName}」。`,
-      "明天再来试试手气吧～",
-    ].join("\n"));
+    await reply(createAlreadyDrawnMessage(isGroupChat, existing.giftName));
     return;
   }
 
@@ -104,17 +112,17 @@ export const handleBiliGiftLotteryCommand = async ({
     return;
   }
 
-  // 先占住今天的名额，避免两条消息同时抽两次。
+  // 先占住这个群今天的名额，避免两条消息同时抽两次。
   let claimed = false;
   try {
     const result = await store.claim({
+      ...drawKey,
       userId,
-      drawDate,
       giftId: draw.gift.id,
       giftName: draw.gift.name,
     });
     if (result === "taken") {
-      await reply("今天已经抽过啦，明天再来试试手气吧～");
+      await reply(createAlreadyDrawnMessage(isGroupChat));
       return;
     }
     claimed = true;
@@ -124,13 +132,13 @@ export const handleBiliGiftLotteryCommand = async ({
     });
   }
 
-  // 没能把结果发出去时退回名额，让人可以再试一次。
+  // 没能把结果发出去时退回名额，让大家可以再试一次。
   const releaseClaim = async () => {
     if (!claimed) {
       return;
     }
     try {
-      await store.release({ userId, drawDate });
+      await store.release(drawKey);
     } catch (error) {
       logger.warn("plugin", "bilibili gift lottery claim release failed", {
         error: summarizeError(error),
