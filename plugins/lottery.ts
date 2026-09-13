@@ -7,11 +7,13 @@ import {
   readBiliGiftMedia,
 } from "@/bili-gift";
 import {
+  BILI_GIFT_LOTTERY_LEADERBOARD_SIZE,
   createBiliGiftLotteryForwardMessages,
+  createBiliGiftLotteryLeaderboardMessage,
   drawBiliGiftLottery,
   formatBiliGiftLotteryCard,
   formatBiliGiftLotteryStars,
-  formatBiliGiftLotteryValue,
+  getBiliGiftLotteryCoins,
 } from "@/bili-gift-lottery";
 import {
   formatGiftLotteryDrawDate,
@@ -40,18 +42,88 @@ export type BiliGiftLotteryCommandOptions = Readonly<{
 }>;
 
 /** 同一天再次抽奖的提示；群里明确说「本群」，私聊就按用户算。 */
-export const createAlreadyDrawnMessage = (isGroupChat: boolean, giftName?: string) => {
+export const createAlreadyDrawnMessage = (
+  isGroupChat: boolean,
+  giftName?: string,
+  coins?: number,
+) => {
   const scope = isGroupChat ? "本群" : "";
-  const detail = giftName ? `，抽到的是「${giftName}」` : "";
+  const detail = giftName
+    ? `，抽到的是「${giftName}」${coins ? `（+${coins} 迷币）` : ""}`
+    : "";
   return [`${scope}今天已经抽过啦${detail}。`, "明天再来试试手气吧～"].join("\n");
 };
 
 export const createBiliGiftLotteryUsage = (commandPrefix: string) => [
   "🎰 迷子的小游戏，每天可以抽一次：",
   `用法：${commandPrefix} 抽奖`,
+  `看榜：${commandPrefix} 抽奖 榜单`,
   "从 B 站直播礼物里随机抽一款，抽中什么全看运气～",
 ].join("\n");
 
+/** 抽奖参数：空是抽一次，「榜单」或 leaderboard 是看迷币榜。 */
+export const parseBiliGiftLotteryArguments = (
+  args: string,
+): "draw" | "leaderboard" | undefined => {
+  const normalized = args.trim().toLowerCase();
+  if (normalized === "") {
+    return "draw";
+  }
+  return normalized === "榜单" || normalized === "leaderboard" ? "leaderboard" : undefined;
+};
+
+/** 榜单只读，不消耗每天的抽奖名额。 */
+export const handleBiliGiftLotteryLeaderboard = async ({
+  commandPrefix,
+  groupId,
+  isGroupChat,
+  logger,
+  reply,
+  store,
+  userId,
+}: {
+  commandPrefix: string;
+  groupId: string;
+  isGroupChat: boolean;
+  logger: BiliGiftLotteryContext["logger"];
+  reply: BiliGiftLotteryContext["reply"];
+  store: GiftLotteryDrawStore;
+  userId: string;
+}) => {
+  if (!isGroupChat) {
+    await reply("迷币榜是按群统计的，回群里发 " + commandPrefix + " 抽奖 榜单 就能看到啦～");
+    return;
+  }
+
+  let entries;
+  let viewer;
+  try {
+    entries = await store.listTopCoins(groupId, BILI_GIFT_LOTTERY_LEADERBOARD_SIZE);
+    viewer = await store.readCoinRank({ groupId, userId });
+  } catch (error) {
+    logger.warn("plugin", "bilibili gift lottery leaderboard failed", {
+      error: summarizeError(error),
+    });
+    await reply("迷币榜暂时读不到，稍后再试一次吧～");
+    return;
+  }
+
+  const segments = createBiliGiftLotteryLeaderboardMessage(entries, { commandPrefix });
+  if (entries.length > 0) {
+    if (!viewer) {
+      segments.push({
+        type: "text",
+        data: { text: "\n你还没有迷币，发一次 " + commandPrefix + " 抽奖 就能上榜～" },
+      });
+    } else if (!entries.some((entry) => entry.userId === userId)) {
+      segments.push({
+        type: "text",
+        data: { text: "\n你的排名：第 " + viewer.rank + " 名 · " + viewer.coins + " 迷币" },
+      });
+    }
+  }
+  await reply(segments);
+};
 export const handleBiliGiftLotteryCommand = async ({
   args,
   commandPrefix,
@@ -60,8 +132,9 @@ export const handleBiliGiftLotteryCommand = async ({
   reply,
   replyForwardWithoutRetry,
 }: BiliGiftLotteryContext, options: BiliGiftLotteryCommandOptions = {}) => {
-  if (args.trim() !== "") {
-    await reply(`${createBiliGiftLotteryUsage(commandPrefix)}\n抽奖指令后面不用再加参数。`);
+  const request = parseBiliGiftLotteryArguments(args);
+  if (request === undefined) {
+    await reply(`${createBiliGiftLotteryUsage(commandPrefix)}\n抽奖指令后面只支持「榜单」。`);
     return;
   }
 
@@ -79,6 +152,19 @@ export const handleBiliGiftLotteryCommand = async ({
   const drawKey = { groupId, drawDate };
   const store = options.store ?? giftLotteryDrawStore;
 
+  if (request === "leaderboard") {
+    await handleBiliGiftLotteryLeaderboard({
+      commandPrefix,
+      groupId,
+      isGroupChat,
+      logger,
+      reply,
+      store,
+      userId,
+    });
+    return;
+  }
+
   // 读记录失败时放行：数据库抖动不该把娱乐功能整个挡在门外。
   let existing: GiftLotteryDailyDraw | undefined;
   try {
@@ -89,7 +175,7 @@ export const handleBiliGiftLotteryCommand = async ({
     });
   }
   if (existing) {
-    await reply(createAlreadyDrawnMessage(isGroupChat, existing.giftName));
+    await reply(createAlreadyDrawnMessage(isGroupChat, existing.giftName, existing.coins));
     return;
   }
 
@@ -112,6 +198,8 @@ export const handleBiliGiftLotteryCommand = async ({
     return;
   }
 
+  const coins = getBiliGiftLotteryCoins(draw.gift);
+
   // 先占住这个群今天的名额，避免两条消息同时抽两次。
   let claimed = false;
   try {
@@ -120,14 +208,26 @@ export const handleBiliGiftLotteryCommand = async ({
       userId,
       giftId: draw.gift.id,
       giftName: draw.gift.name,
+      coins,
     });
     if (result === "taken") {
-      await reply(createAlreadyDrawnMessage(isGroupChat));
+      const taken = await store.find(drawKey).catch(() => undefined);
+      await reply(createAlreadyDrawnMessage(isGroupChat, taken?.giftName, taken?.coins));
       return;
     }
     claimed = true;
   } catch (error) {
     logger.warn("plugin", "bilibili gift lottery claim failed", {
+      error: summarizeError(error),
+    });
+  }
+
+  // 迷币总量按群按人记录，读不到就只显示本次获得的部分。
+  let totalCoins = coins;
+  try {
+    totalCoins = (await store.readCoins({ groupId, userId })) + coins;
+  } catch (error) {
+    logger.warn("plugin", "bilibili gift lottery coin lookup failed", {
       error: summarizeError(error),
     });
   }
@@ -162,14 +262,14 @@ export const handleBiliGiftLotteryCommand = async ({
   try {
     await replyForwardWithoutRetry(
       createBiliGiftLotteryForwardMessages(
-        formatBiliGiftLotteryCard(draw),
+        formatBiliGiftLotteryCard(draw, { totalCoins }),
         media,
         `base64://${mediaBase64}`,
       ),
       {
         title: `${formatBiliGiftLotteryStars(draw.rarity)} · ${draw.gift.name}`,
         source: `${commandPrefix} 抽奖`,
-        summary: `抽到「${draw.gift.name}」· ${formatBiliGiftLotteryValue(draw.gift)}`,
+        summary: `抽到「${draw.gift.name}」· +${coins} 迷币`,
         timeoutMs: BILI_GIFT_MEDIA_SEND_TIMEOUT_MS,
       },
     );
@@ -187,6 +287,16 @@ export const handleBiliGiftLotteryCommand = async ({
       error: summarizeError(error),
     });
     await reply("抽奖结果没能发出去，稍后再试一次吧。");
+    return;
+  }
+
+  // 发出去之后才入账，避免发送失败白拿迷币。
+  try {
+    await store.addCoins({ groupId, userId }, coins);
+  } catch (error) {
+    logger.warn("plugin", "bilibili gift lottery coin credit failed", {
+      error: summarizeError(error),
+    });
   }
 };
 
@@ -195,8 +305,8 @@ const lotteryPlugin: MizPlugin = {
   commands: ["lottery", "抽奖"],
   description: [
     "迷子的小游戏：从 B 站直播礼物里抽一款，连展示效果一起发出来。",
-    "用法：miz 抽奖",
-    "每人每天只能抽一次。",
+    "用法：miz 抽奖，看榜：miz 抽奖 榜单",
+    "每个群每天只能抽一次，抽到的礼物按价值折算成迷币，入账到抽奖人头上。",
     "礼物按价值分五档：🌱 普通 / ⭐ 稀有 / ✨ 史诗 / 💎 传说 / 👑 神话，越贵越难抽到。",
   ].join("\n"),
   async handle({

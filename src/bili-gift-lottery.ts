@@ -1,7 +1,6 @@
 import type { ForwardMessageContent } from "@/plugins";
 import {
   createBiliGiftMediaSegment,
-  formatBiliGiftAmount,
   getBiliGiftBatteryValue,
   groupBiliGiftsByName,
   resolveBiliGiftMedia,
@@ -135,9 +134,15 @@ export const drawBiliGiftLottery = (
   return gift ? { gift, rarity: getBiliGiftRarity(gift), media: resolveBiliGiftMedia(gift) } : undefined;
 };
 
-export const formatBiliGiftLotteryValue = (gift: BiliGift) => {
+/** 免费礼物也有保底迷币，抽奖不会空手而归。 */
+export const BILI_GIFT_LOTTERY_MIN_COINS = 1;
+
+/** 迷币：按礼物的电池价值折算，免费礼物保底 1 迷币。 */
+export const getBiliGiftLotteryCoins = (gift: BiliGift) => {
   const batteries = getBiliGiftBatteryValue(gift);
-  return batteries === undefined ? "免费" : `${formatBiliGiftAmount(batteries)} 电池`;
+  return batteries === undefined
+    ? BILI_GIFT_LOTTERY_MIN_COINS
+    : Math.max(BILI_GIFT_LOTTERY_MIN_COINS, Math.round(batteries));
 };
 
 /** 稀有度星级：emoji 个数就是档位。 */
@@ -148,14 +153,20 @@ export const formatBiliGiftLotteryStars = (rarity: BiliGiftRarity) =>
 export const formatBiliGiftLotteryReveal = (rarity: BiliGiftRarity) =>
   `${formatBiliGiftLotteryStars(rarity)}！`;
 
-/** 抽到的礼物值多少电池，作为小游戏的分数。 */
-export const formatBiliGiftLotteryValueLine = (gift: BiliGift) => {
-  const batteries = getBiliGiftBatteryValue(gift);
-  return batteries === undefined ? "💰 免费礼物" : `💰 价值 ${formatBiliGiftAmount(batteries)} 电池`;
-};
+/** 奖品行：这次拿到多少迷币，以及在这个群累计多少。 */
+export const formatBiliGiftLotteryPrizeLine = (gift: BiliGift, totalCoins: number) =>
+  `💰 获得 ${getBiliGiftLotteryCoins(gift)} 迷币 · 累计 ${totalCoins}`;
+
+export type BiliGiftLotteryCardOptions = Readonly<{
+  /** 抽奖人这个群的迷币总量（已包含本次获得）。 */
+  totalCoins: number;
+}>;
 
 /** 抽奖结果卡片：独立小游戏的揭晓文案，不展示礼物台账数据。 */
-export const formatBiliGiftLotteryCard = (draw: BiliGiftLotteryDraw) => {
+export const formatBiliGiftLotteryCard = (
+  draw: BiliGiftLotteryDraw,
+  options: BiliGiftLotteryCardOptions,
+) => {
   const { gift, rarity } = draw;
   return [
     BILI_GIFT_LOTTERY_TITLE,
@@ -163,11 +174,54 @@ export const formatBiliGiftLotteryCard = (draw: BiliGiftLotteryDraw) => {
     formatBiliGiftLotteryReveal(rarity),
     `你抽到了「${gift.name}」`,
     "",
-    formatBiliGiftLotteryValueLine(gift),
+    formatBiliGiftLotteryPrizeLine(gift, options.totalCoins),
     `🎉 ${rarity.flavor}`,
   ].join("\n");
 };
 
+export const BILI_GIFT_LOTTERY_LEADERBOARD_SIZE = 10;
+const LEADERBOARD_MEDALS = ["🥇", "🥈", "🥉"];
+
+export type BiliGiftLotteryLeaderboardEntry = Readonly<{
+  userId: string;
+  coins: number;
+}>;
+
+export type BiliGiftLotteryLeaderboardOptions = Readonly<{
+  /** 空榜单提示里用的命令前缀。 */
+  commandPrefix?: string;
+}>;
+
+/** 迷币榜消息段：用 at 段点名，群里直接认得出是谁。 */
+export const createBiliGiftLotteryLeaderboardMessage = (
+  entries: readonly BiliGiftLotteryLeaderboardEntry[],
+  options: BiliGiftLotteryLeaderboardOptions = {},
+) => {
+  const prefix = options.commandPrefix ?? "miz";
+  const top = entries.slice(0, BILI_GIFT_LOTTERY_LEADERBOARD_SIZE);
+  if (top.length === 0) {
+    return [{
+      type: "text",
+      data: {
+        text: "🏆 本群迷币榜\n\n本群还没有人抽过奖，第一个发 " + prefix + " 抽奖 的就是榜一～",
+      },
+    }];
+  }
+
+  const segments: unknown[] = [{
+    type: "text",
+    data: { text: "🏆 本群迷币榜 · 前 " + BILI_GIFT_LOTTERY_LEADERBOARD_SIZE + " 名\n\n" },
+  }];
+  top.forEach((entry, index) => {
+    const medal = LEADERBOARD_MEDALS[index] ?? (index + 1) + ".";
+    segments.push(
+      { type: "text", data: { text: medal + " " } },
+      { type: "at", data: { qq: entry.userId } },
+      { type: "text", data: { text: " · " + entry.coins + " 迷币\n" } },
+    );
+  });
+  return segments;
+};
 /** 抽奖转发消息：结果卡片 + 礼物的展示效果。 */
 export const createBiliGiftLotteryForwardMessages = (
   card: string,

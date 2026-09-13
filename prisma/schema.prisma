@@ -235,10 +235,21 @@ model GiftLotteryDailyDraw {
   drawDate String   @map("draw_date")
   giftId   Int      @map("gift_id")
   giftName String   @map("gift_name")
+  coins    Int      @default(0)
   userId   String?  @map("user_id")
   drawnAt  DateTime @default(now()) @map("drawn_at")
 
   @@id([groupId, drawDate])
   @@index([drawDate])
   @@map("gift_lottery_daily_draws")
+}
+
+model GiftLotteryCoinBalance {
+  groupId   String   @map("group_id")
+  userId    String   @map("user_id")
+  coins     Int      @default(0)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@id([groupId, userId])
+  @@map("gift_lottery_coin_balances")
 }

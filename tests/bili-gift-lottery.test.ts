@@ -5,9 +5,10 @@ import path from "node:path";
 import type { BiliGift } from "@/bili-gift";
 import {
   BILI_GIFT_RARITIES,
+  createBiliGiftLotteryLeaderboardMessage,
   drawBiliGiftLottery,
   formatBiliGiftLotteryCard,
-  formatBiliGiftLotteryValue,
+  getBiliGiftLotteryCoins,
   getBiliGiftRarity,
 } from "@/bili-gift-lottery";
 import {
@@ -15,7 +16,10 @@ import {
   type GiftLotteryDailyDraw,
   type GiftLotteryDrawStore,
 } from "@/gift-lottery-draws";
-import lotteryPlugin, { handleBiliGiftLotteryCommand } from "../plugins/lottery";
+import lotteryPlugin, {
+  handleBiliGiftLotteryCommand,
+  parseBiliGiftLotteryArguments,
+} from "../plugins/lottery";
 
 type GameForwardNode = string | Array<{ type: string; data: { file?: string } }>;
 
@@ -128,23 +132,49 @@ const createLogger = () => {
 
 const createMemoryStore = () => {
   const records = new Map<string, GiftLotteryDailyDraw>();
+  const balances = new Map<string, number>();
   const released: string[] = [];
   const keyOf = (key: { groupId: string; drawDate: string }) => `${key.groupId}:${key.drawDate}`;
+  const coinKeyOf = (key: { groupId: string; userId: string }) => `${key.groupId}:${key.userId}`;
   const store: GiftLotteryDrawStore = {
     find: async (key) => records.get(keyOf(key)),
     claim: async (draw) => {
       if (records.has(keyOf(draw))) {
         return "taken";
       }
-      records.set(keyOf(draw), { giftId: draw.giftId, giftName: draw.giftName });
+      records.set(keyOf(draw), {
+        giftId: draw.giftId,
+        giftName: draw.giftName,
+        coins: draw.coins,
+      });
       return "claimed";
     },
     release: async (key) => {
       records.delete(keyOf(key));
       released.push(keyOf(key));
     },
+    readCoins: async (key) => balances.get(coinKeyOf(key)) ?? 0,
+    addCoins: async (key, amount) => {
+      balances.set(coinKeyOf(key), (balances.get(coinKeyOf(key)) ?? 0) + amount);
+    },
+    listTopCoins: async (groupId, limit) => [...balances.entries()]
+      .filter(([key]) => key.startsWith(groupId + ":"))
+      .map(([key, coins]) => ({ userId: key.slice(groupId.length + 1), coins }))
+      .sort((left, right) => right.coins - left.coins || left.userId.localeCompare(right.userId))
+      .slice(0, limit),
+    readCoinRank: async (key) => {
+      const coins = balances.get(coinKeyOf(key));
+      if (coins === undefined) {
+        return undefined;
+      }
+      const above = [...balances.entries()]
+        .filter(([otherKey, otherCoins]) =>
+          otherKey.startsWith(key.groupId + ":") && otherCoins > coins)
+        .length;
+      return { rank: above + 1, coins };
+    },
   };
-  return { records, released, store };
+  return { records, balances, released, store };
 };
 
 describe("Bilibili gift lottery", () => {
@@ -193,20 +223,21 @@ describe("Bilibili gift lottery", () => {
     expect(drawBiliGiftLottery([])).toBeUndefined();
   });
 
-  test("formats battery values", () => {
-    expect(formatBiliGiftLotteryValue(mythicGift)).toBe("10000 电池");
-    expect(formatBiliGiftLotteryValue(rareGift)).toBe("99.99 电池");
-    expect(formatBiliGiftLotteryValue(freeGift)).toBe("免费");
+  test("converts gift value into mi coins", () => {
+    expect(getBiliGiftLotteryCoins(mythicGift)).toBe(10_000);
+    expect(getBiliGiftLotteryCoins(rareGift)).toBe(100);
+    // 免费礼物也有保底迷币。
+    expect(getBiliGiftLotteryCoins(freeGift)).toBe(1);
   });
 
   test("writes a game-style reveal card instead of a gift data card", () => {
     const draw = drawBiliGiftLottery(gifts, { random: createSequenceRandom([0.95, 0]) })!;
-    const card = formatBiliGiftLotteryCard(draw);
+    const card = formatBiliGiftLotteryCard(draw, { totalCoins: 12_500 });
 
     expect(card).toContain("🎰 迷子的礼物抽奖");
     expect(card).toContain("👑👑👑👑👑 神话！");
     expect(card).toContain("你抽到了「为你摘星」");
-    expect(card).toContain("💰 价值 10000 电池");
+    expect(card).toContain("💰 获得 10000 迷币 · 累计 12500");
     expect(card).toContain("🎉 神话降临，全群都该看看它！");
     // 抽奖是独立小游戏，不展示礼物台账里的字段和官方介绍。
     expect(card).not.toContain("· 礼物 ID：");
@@ -216,21 +247,69 @@ describe("Bilibili gift lottery", () => {
     expect(card).not.toContain("心中有日月");
   });
 
-  test("shows free gifts as free instead of a value", () => {
+  test("gives free gifts the minimum coins", () => {
     const draw = drawBiliGiftLottery([freeGift], { random: createSequenceRandom([0, 0]) })!;
-    const card = formatBiliGiftLotteryCard(draw);
+    const card = formatBiliGiftLotteryCard(draw, { totalCoins: 1 });
 
     expect(card).toContain("🌱 普通！");
-    expect(card).toContain("💰 免费礼物");
+    expect(card).toContain("💰 获得 1 迷币 · 累计 1");
     expect(card).not.toContain("电池");
   });
 
-  test("describes the mini game and the daily limit in the help menu", () => {
+  test("describes the mini game, the leaderboard and the daily limit", () => {
     expect(lotteryPlugin.name).toBe("lottery");
     expect(lotteryPlugin.commands).toEqual(["lottery", "抽奖"]);
     expect(lotteryPlugin.description).toContain("迷子的小游戏");
-    expect(lotteryPlugin.description).toContain("miz 抽奖");
-    expect(lotteryPlugin.description).toContain("每人每天只能抽一次");
+    expect(lotteryPlugin.description).toContain("miz 抽奖 榜单");
+    expect(lotteryPlugin.description).toContain("每个群每天只能抽一次");
+    expect(lotteryPlugin.description).toContain("迷币");
+  });
+
+  test("accepts the English command arguments", () => {
+    expect(parseBiliGiftLotteryArguments("")).toBe("draw");
+    expect(parseBiliGiftLotteryArguments("   ")).toBe("draw");
+    expect(parseBiliGiftLotteryArguments("榜单")).toBe("leaderboard");
+    expect(parseBiliGiftLotteryArguments("leaderboard")).toBe("leaderboard");
+    expect(parseBiliGiftLotteryArguments(" LeaderBoard ")).toBe("leaderboard");
+    expect(parseBiliGiftLotteryArguments("LEADERBOARD")).toBe("leaderboard");
+    expect(parseBiliGiftLotteryArguments("十连")).toBeUndefined();
+    expect(parseBiliGiftLotteryArguments("rank")).toBeUndefined();
+  });
+
+  test("renders the mi coin leaderboard with mentions", () => {
+    const message = createBiliGiftLotteryLeaderboardMessage([
+      { userId: "1001", coins: 12_000 },
+      { userId: "1002", coins: 8_000 },
+      { userId: "1003", coins: 6_000 },
+      { userId: "1004", coins: 500 },
+    ]) as Array<{ type: string; data: Record<string, unknown> }>;
+
+    const texts = message.filter((segment) => segment.type === "text")
+      .map((segment) => String(segment.data.text));
+    expect(texts.join("")).toContain("🏆 本群迷币榜 · 前 10 名");
+    expect(texts.join("")).toContain("🥇 ");
+    expect(texts.join("")).toContain("🥈 ");
+    expect(texts.join("")).toContain("🥉 ");
+    expect(texts.join("")).toContain("4. ");
+    expect(texts.join("")).toContain(" · 12000 迷币");
+    expect(message.filter((segment) => segment.type === "at")).toHaveLength(4);
+    expect(message).toContainEqual({ type: "at", data: { qq: "1002" } });
+  });
+
+  test("keeps the leaderboard to ten entries and handles an empty group", () => {
+    const entries = Array.from({ length: 13 }, (_unused, index) => ({
+      userId: String(2_000 + index),
+      coins: 1_000 - index,
+    }));
+    const message = createBiliGiftLotteryLeaderboardMessage(entries) as Array<{ type: string }>;
+    expect(message.filter((segment) => segment.type === "at")).toHaveLength(10);
+
+    const empty = createBiliGiftLotteryLeaderboardMessage([], { commandPrefix: "迷子" }) as Array<{
+      type: string;
+      data: { text?: string };
+    }>;
+    expect(empty).toHaveLength(1);
+    expect(empty[0]?.data.text).toContain("迷子 抽奖");
   });
 
   test("formats the local draw date", () => {
@@ -312,7 +391,7 @@ describe("lottery plugin", () => {
   });
 
   test("forwards the drawn gift with its effect and records the day", async () => {
-    const { records, store } = createMemoryStore();
+    const { records, balances, store } = createMemoryStore();
     await runLottery("", {
       random: createSequenceRandom([0.95, 0]),
       now: new Date(2026, 8, 14, 10, 0),
@@ -328,6 +407,7 @@ describe("lottery plugin", () => {
     expect(forward!.messages).toHaveLength(2);
     expect(card).toContain("👑👑👑👑👑 神话！");
     expect(card).toContain("你抽到了「为你摘星」");
+    expect(card).toContain("💰 获得 10000 迷币 · 累计 10000");
     expect(mediaNode).toEqual([{
       type: "video",
       data: { file: `base64://${Buffer.from("bytes-5").toString("base64")}` },
@@ -335,10 +415,15 @@ describe("lottery plugin", () => {
     expect(forward!.options).toEqual({
       title: "👑👑👑👑👑 神话 · 为你摘星",
       source: "miz 抽奖",
-      summary: "抽到「为你摘星」· 10000 电池",
+      summary: "抽到「为你摘星」· +10000 迷币",
       timeoutMs: 300_000,
     });
-    expect(records.get("100:2026-09-14")).toEqual({ giftId: 5, giftName: "为你摘星" });
+    expect(records.get("100:2026-09-14")).toEqual({
+      giftId: 5,
+      giftName: "为你摘星",
+      coins: 10_000,
+    });
+    expect(balances.get("100:1")).toBe(10_000);
   });
 
   test("refuses a second draw in the same group on the same day and allows the next day", async () => {
@@ -389,6 +474,26 @@ describe("lottery plugin", () => {
     expect(String(replies[0])).not.toContain("本群");
   });
 
+  test("accumulates mi coins per person in each group", async () => {
+    const { balances, store } = createMemoryStore();
+    await runLottery("", { random: createSequenceRandom([0.95, 0]), now: new Date(2026, 8, 14, 10, 0), store });
+    await runLottery("", { random: createSequenceRandom([0.95, 0]), now: new Date(2026, 8, 15, 10, 0), store });
+    await runLottery("", { random: createSequenceRandom([0.95, 0]), now: new Date(2026, 8, 16, 10, 0), userId: "2", store });
+    await runLottery("", {
+      random: createSequenceRandom([0.95, 0]),
+      now: new Date(2026, 8, 14, 10, 0),
+      groupId: 200,
+      store,
+    });
+
+    expect(balances.get("100:1")).toBe(20_000);
+    expect(balances.get("100:2")).toBe(10_000);
+    expect(balances.get("200:1")).toBe(10_000);
+    const cards = forwards.map((forward) => forward.messages[0]);
+    expect(cards.some((card) => String(card).includes("累计 10000"))).toBe(true);
+    expect(cards.some((card) => String(card).includes("累计 20000"))).toBe(true);
+  });
+
   test("reports an already claimed day when the claim loses a race", async () => {
     const { store } = createMemoryStore();
     const now = new Date(2026, 8, 14, 10, 0);
@@ -397,11 +502,7 @@ describe("lottery plugin", () => {
     await runLottery("", {
       random: createSequenceRandom([0.95, 0]),
       now,
-      store: {
-        find: async () => undefined,
-        claim: store.claim,
-        release: store.release,
-      },
+      store: { ...store, find: async () => undefined },
     });
 
     expect(forwards).toHaveLength(1);
@@ -413,11 +514,10 @@ describe("lottery plugin", () => {
       random: createSequenceRandom([0.95, 0]),
       now: new Date(2026, 8, 14, 10, 0),
       store: {
+        ...createMemoryStore().store,
         find: async () => {
           throw new Error("database down");
         },
-        claim: async () => "claimed",
-        release: async () => {},
       },
     });
 
@@ -440,7 +540,7 @@ describe("lottery plugin", () => {
   });
 
   test("gives the daily chance back when the forward fails", async () => {
-    const { records, store } = createMemoryStore();
+    const { records, balances, store } = createMemoryStore();
     const { logger } = createLogger();
     await handleBiliGiftLotteryCommand({
       args: "",
@@ -462,15 +562,119 @@ describe("lottery plugin", () => {
 
     expect(String(replies[0])).toContain("超时");
     expect(records.size).toBe(0);
+    expect(balances.size).toBe(0);
   });
 
-  test("rejects extra arguments", async () => {
+  test("rejects arguments other than the leaderboard", async () => {
     const { store } = createMemoryStore();
     await runLottery("十连", { store });
 
     expect(String(replies[0])).toContain("用法：miz 抽奖");
-    expect(String(replies[0])).toContain("不用再加参数");
+    expect(String(replies[0])).toContain("只支持「榜单」");
     expect(forwards).toEqual([]);
+  });
+
+  test("shows the group leaderboard with mentions", async () => {
+    const { balances, store } = createMemoryStore();
+    balances.set("100:1", 12_000);
+    balances.set("100:2", 8_000);
+    balances.set("100:3", 500);
+    await runLottery("榜单", { userId: "3", store });
+
+    const message = replies[0] as Array<{ type: string; data: { text?: string; qq?: string } }>;
+    const texts = message
+      .filter((segment) => segment.type === "text")
+      .map((segment) => String(segment.data.text))
+      .join("");
+    expect(texts).toContain("🏆 本群迷币榜 · 前 10 名");
+    expect(texts).toContain("🥇 ");
+    expect(texts).toContain(" · 12000 迷币");
+    expect(message.filter((segment) => segment.type === "at")).toHaveLength(3);
+    // 自己就在榜上，就不再重复报排名。
+    expect(texts).not.toContain("你的排名");
+    expect(forwards).toEqual([]);
+  });
+
+  test("appends the viewer rank when outside the top ten", async () => {
+    const { balances, store } = createMemoryStore();
+    for (let index = 0; index < 12; index += 1) {
+      balances.set("100:" + (100 + index), 1_000 - index);
+    }
+    balances.set("100:999", 5);
+    await runLottery("榜单", { userId: "999", store });
+
+    const texts = (replies[0] as Array<{ type: string; data: { text?: string } }>)
+      .filter((segment) => segment.type === "text")
+      .map((segment) => String(segment.data.text))
+      .join("");
+    expect(texts).toContain("你的排名：第 13 名 · 5 迷币");
+  });
+
+  test("invites members without coins to join the leaderboard", async () => {
+    const { balances, store } = createMemoryStore();
+    balances.set("100:1", 500);
+    await runLottery("榜单", { userId: "77", store });
+
+    const texts = (replies[0] as Array<{ type: string; data: { text?: string } }>)
+      .filter((segment) => segment.type === "text")
+      .map((segment) => String(segment.data.text))
+      .join("");
+    expect(texts).toContain("你还没有迷币");
+  });
+
+  test("explains an empty leaderboard", async () => {
+    const { store } = createMemoryStore();
+    await runLottery("榜单", { store });
+
+    const message = replies[0] as Array<{ data: { text?: string } }>;
+    expect(String(message[0]?.data.text)).toContain("本群还没有人抽过奖");
+    expect(String(message[0]?.data.text)).toContain("miz 抽奖");
+  });
+
+  test("shows the leaderboard through the English command", async () => {
+    const { balances, store } = createMemoryStore();
+    balances.set("100:1", 900);
+    await runLottery("leaderboard", { store });
+
+    const message = replies[0] as Array<{ type: string; data: { text?: string } }>;
+    const texts = message
+      .filter((segment) => segment.type === "text")
+      .map((segment) => String(segment.data.text))
+      .join("");
+    expect(texts).toContain("🏆 本群迷币榜");
+    expect(texts).toContain(" · 900 迷币");
+  });
+
+  test("keeps the leaderboard in groups only", async () => {
+    const { store } = createMemoryStore();
+    await runLottery("榜单", { privateChat: true, store });
+
+    expect(String(replies[0])).toContain("迷币榜是按群统计的");
+  });
+
+  test("does not spend the daily draw on the leaderboard", async () => {
+    const { records, store } = createMemoryStore();
+    await runLottery("榜单", { store });
+    await runLottery("", { random: createSequenceRandom([0.95, 0]), store });
+
+    expect(records.size).toBe(1);
+    expect(forwards).toHaveLength(1);
+  });
+
+  test("reports an unreadable leaderboard", async () => {
+    const { store } = createMemoryStore();
+    const entries = await runLottery("榜单", {
+      userId: "5",
+      store: {
+        ...store,
+        listTopCoins: async () => {
+          throw new Error("database down");
+        },
+      },
+    });
+
+    expect(String(replies[0])).toContain("迷币榜暂时读不到");
+    expect(entries).toContain("warn:bilibili gift lottery leaderboard failed");
   });
 
   test("tells the admin when the material library is unavailable", async () => {
