@@ -152,10 +152,10 @@ describe("Bilibili gift media", () => {
     expect(resolveBiliGiftMedia(createGift({ id: 1, name: "无素材" }))).toBeUndefined();
   });
 
-  test("formats prices with the matching coin unit", () => {
-    expect(formatBiliGiftPrice(spaceShip)).toBe("2999000金瓜子（约 2999 元）");
-    expect(formatBiliGiftPrice(gifts[4]!)).toBe("100金瓜子（约 0.1 元）");
-    expect(formatBiliGiftPrice(gifts[5]!)).toBe("1银瓜子");
+  test("converts paid gift prices into batteries and RMB", () => {
+    expect(formatBiliGiftPrice(spaceShip)).toBe("29990 电池（2999 元）");
+    expect(formatBiliGiftPrice(gifts[4]!)).toBe("1 电池（0.1 元）");
+    expect(formatBiliGiftPrice(gifts[5]!)).toBeUndefined();
     expect(formatBiliGiftPrice(createGift({ id: 2, name: "免费礼物" }))).toBeUndefined();
   });
 
@@ -169,9 +169,9 @@ describe("Bilibili gift media", () => {
 
     expect(card).toContain("🎁 小电视飞船");
     expect(card).toContain("· 礼物 ID：#34998");
-    expect(card).toContain("· 价格：2999000金瓜子（约 2999 元）");
+    expect(card).toContain("· 价格：29990 电池（2999 元）");
     expect(card).toContain("· 特效 ID：#2200");
-    expect(card).toContain("· 同名版本：#34998、#33215、#25（共 3 版，取 ID 最大的一版）");
+    expect(card).not.toContain("同名版本");
     expect(card).toContain("· 展示素材：全屏特效");
     expect(card).toContain("「小电视精心打造的顶级飞船已启航！」");
     expect(mediaNode).toEqual([{ type: "video", data: { file: "base64://AAAA" } }]);
@@ -185,6 +185,25 @@ describe("Bilibili gift media", () => {
     expect(card).toContain("· 展示素材：礼物动图");
     expect(card).not.toContain("· 特效 ID：");
     expect(card).not.toContain("· 同名版本：");
+  });
+
+  test("hides the price line for free silver-coin gifts", () => {
+    const silverGift = createGift({
+      id: 34371,
+      name: "粉丝团灯牌",
+      price: 1,
+      coinType: "silver",
+      gif: "礼物动图/34371_粉丝团灯牌.gif",
+    });
+    const card = formatBiliGiftCard(
+      findBiliGift([silverGift], "粉丝团灯牌")!,
+      resolveBiliGiftMedia(silverGift)!,
+    );
+
+    expect(card).toContain("· 礼物 ID：#34371");
+    expect(card).toContain("· 展示素材：礼物动图");
+    expect(card).not.toContain("· 价格：");
+    expect(card).not.toContain("银瓜子");
   });
 
   test("mentions other matching gifts only for fuzzy matches", () => {
@@ -372,6 +391,8 @@ describe("gift plugin", () => {
         {
           id: 33215,
           name: "小电视飞船",
+          price: 2_999_000,
+          coinType: "gold",
           effectId: 1171,
           gif: "礼物动图/34998_小电视飞船.gif",
           effectMp4: "全屏特效/在用/33215_小电视飞船_1171.mp4",
@@ -380,6 +401,7 @@ describe("gift plugin", () => {
           id: 34998,
           name: "小电视飞船",
           price: 2_999_000,
+          coinType: "gold",
           effectId: 2200,
           desc: "小电视精心打造的顶级飞船已启航！",
           gif: "礼物动图/34998_小电视飞船.gif",
@@ -389,6 +411,7 @@ describe("gift plugin", () => {
           id: 30052,
           name: "冰淇淋",
           price: 100,
+          coinType: "gold",
           gif: "礼物动图/30052_冰淇淋.gif",
         },
       ],
@@ -408,9 +431,9 @@ describe("gift plugin", () => {
 
     expect(card).toContain("🎁 小电视飞船");
     expect(card).toContain("· 礼物 ID：#34998");
-    expect(card).toContain("· 价格：2999000金瓜子（约 2999 元）");
+    expect(card).toContain("· 价格：29990 电池（2999 元）");
     expect(card).toContain("· 特效 ID：#2200");
-    expect(card).toContain("· 同名版本：#34998、#33215（共 2 版，取 ID 最大的一版）");
+    expect(card).not.toContain("同名版本");
     expect(card).toContain("· 展示素材：全屏特效");
     expect(mediaNode).toEqual([{
       type: "video",

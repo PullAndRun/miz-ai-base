@@ -328,38 +328,26 @@ export const readBiliGiftMedia = async (
   };
 };
 
+/** 金瓜子与电池的换算是 100 : 1，10 电池等于 1 元。 */
+const RAW_COINS_PER_BATTERY = 100;
+const BATTERIES_PER_RMB = 10;
+
+const formatBiliGiftAmount = (value: number) => value.toFixed(2).replace(/\.?0+$/, "");
+
+/** 金瓜子礼物换算成电池和人民币；银瓜子免费礼物和无价格礼物不显示价格。 */
 export const formatBiliGiftPrice = (gift: BiliGift) => {
-  if (gift.price <= 0) {
+  if (gift.price <= 0 || gift.coinType.toLowerCase() !== "gold") {
     return undefined;
   }
-  const isSilver = gift.coinType.toLowerCase() === "silver";
-  const unit = isSilver ? "银瓜子" : "金瓜子";
-  if (isSilver) {
-    return `${gift.price}${unit}`;
-  }
-  // B 站金瓜子按 1000 : 1 兑换人民币，换算结果只用于展示，不是结算金额。
-  const yuan = Math.round((gift.price / 1_000) * 100) / 100;
-  return `${gift.price}${unit}（约 ${yuan} 元）`;
+  const batteries = gift.price / RAW_COINS_PER_BATTERY;
+  const yuan = batteries / BATTERIES_PER_RMB;
+  return `${formatBiliGiftAmount(batteries)} 电池（${formatBiliGiftAmount(yuan)} 元）`;
 };
 
-const MAX_BILI_GIFT_VERSION_IDS = 5;
-
-const formatBiliGiftVersionIds = (giftIds: readonly number[]) => {
-  const shown = giftIds
-    .slice(0, MAX_BILI_GIFT_VERSION_IDS)
-    .map((giftId) => `#${giftId}`)
-    .join("、");
-  return giftIds.length > MAX_BILI_GIFT_VERSION_IDS ? `${shown}…` : shown;
-};
-
-/** 转发消息里的礼物介绍：礼物名、ID、价格、特效与同名版本等台账数据。 */
+/** 转发消息里的礼物介绍：礼物名、ID、价格、特效与展示素材等台账数据。 */
 export const formatBiliGiftCard = (match: BiliGiftMatch, media: BiliGiftMedia) => {
   const { gift } = match;
   const price = formatBiliGiftPrice(gift);
-  const sameNameVersions = match.sameNameGiftIds.length > 1
-    ? `${formatBiliGiftVersionIds(match.sameNameGiftIds)}` +
-      `（共 ${match.sameNameGiftIds.length} 版，取 ID 最大的一版）`
-    : undefined;
 
   return [
     `🎁 ${gift.name}`,
@@ -367,7 +355,6 @@ export const formatBiliGiftCard = (match: BiliGiftMatch, media: BiliGiftMedia) =
     `· 礼物 ID：#${gift.id}`,
     ...(price ? [`· 价格：${price}`] : []),
     ...(gift.effectId > 0 ? [`· 特效 ID：#${gift.effectId}`] : []),
-    ...(sameNameVersions ? [`· 同名版本：${sameNameVersions}`] : []),
     `· 展示素材：${media.label}`,
     ...(gift.description ? ["", `「${gift.description}」`] : []),
     ...(!match.exactName && match.alternativeNames.length > 0
