@@ -6,6 +6,7 @@ const pluginDisplayNames: Readonly<Record<string, string>> = {
   divination: "今日小签",
   ff14: "FF14 市场",
   faq: "群问答",
+  gift: "礼物特效",
   help: "功能图鉴",
   joke: "笑话图",
   news: "新闻快讯",

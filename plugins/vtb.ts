@@ -1,6 +1,7 @@
 import type { MizPlugin } from "@/plugins";
 import { isGroupAdministrator, isWhitelistedUser } from "@/group-permissions";
 import { summarizeError } from "@/errors";
+import { handleBiliGiftCommand } from "./gift";
 import {
   createVtbNotificationMessage,
   formatDynamicMessage,
@@ -42,6 +43,7 @@ type VtbPluginDependencies = {
   setDynamicAtAllStreamer?: typeof setVtbDynamicAtAllStreamer;
   setContributionStreamer?: typeof setVtbContributionStreamer;
   getRepository?: typeof getVtbRepository;
+  handleGiftCommand?: typeof handleBiliGiftCommand;
   notifySubscriptionChange?: typeof notifyVtbSubscriptionChange;
 };
 
@@ -56,6 +58,7 @@ export const createVtbPlugin = ({
   setDynamicAtAllStreamer = setVtbDynamicAtAllStreamer,
   setContributionStreamer = setVtbContributionStreamer,
   getRepository = getVtbRepository,
+  handleGiftCommand = handleBiliGiftCommand,
   notifySubscriptionChange = notifyVtbSubscriptionChange,
 }: VtbPluginDependencies = {}): MizPlugin => ({
   name: "vtb",
@@ -67,14 +70,25 @@ export const createVtbPlugin = ({
     "跟踪 B 站主播的直播、动态和打赏感谢，群里一条命令搞定。",
     "查直播：miz vtb live 主播昵称",
     "查动态：miz vtb dynamic 主播昵称",
+    "看礼物特效：miz vtb gift 礼物名",
     "看订阅：miz vtb list",
     "同步资料：miz vtb sync",
     "登录 B 站：miz vtb login",
     "退出登录：miz vtb logout",
     "订阅管理和资料同步需要群管理员或 VTB 管理员白名单；登录和退出登录仅限私聊，并需要同样的白名单权限。",
   ].join("\n"),
-  async handle({ command, config, logger, message, reply }) {
+  async handle({ command, commandPrefix, config, logger, message, reply, replyForwardWithoutRetry }) {
     const [type, ...rawArgumentParts] = command.args.trim().split(/\s+/);
+    if (type === "gift" || type === "礼物") {
+      await handleGiftCommand({
+        args: rawArgumentParts.join(" "),
+        commandPrefix,
+        logger,
+        reply,
+        replyForwardWithoutRetry,
+      });
+      return;
+    }
     const subscriptionType = (type === "subscribe" || type === "unsubscribe") &&
       (rawArgumentParts[0] === "live" || rawArgumentParts[0] === "dynamic" || rawArgumentParts[0] === "contribution")
       ? rawArgumentParts[0]
@@ -104,6 +118,7 @@ export const createVtbPlugin = ({
         "这条命令格式不对，照着下面发：",
         "看看直播：miz vtb live 主播昵称",
         "看看动态：miz vtb dynamic 主播昵称",
+        "看礼物特效：miz vtb gift 礼物名",
         "查看关注：miz vtb list",
         "开启直播提醒：miz vtb subscribe live 主播昵称",
         "开启动态提醒：miz vtb subscribe dynamic 主播昵称",
