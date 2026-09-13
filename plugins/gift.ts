@@ -4,7 +4,8 @@ import { isVideoSendTimeoutError } from "@/video-delivery";
 import {
   BILI_GIFT_MEDIA_SEND_TIMEOUT_MS,
   MAX_BILI_GIFT_QUERY_LENGTH,
-  createBiliGiftForwardMessages,
+  createBiliGiftForwardMessage,
+  formatBiliGiftCard,
   findBiliGift,
   loadBiliGiftLibrary,
   parseBiliGiftCommandArguments,
@@ -99,7 +100,11 @@ export const handleBiliGiftCommand = async ({
 
   try {
     await replyForwardWithoutRetry(
-      createBiliGiftForwardMessages(match, media, `base64://${mediaBase64}`),
+      createBiliGiftForwardMessage(
+        formatBiliGiftCard(match, media),
+        media,
+        `base64://${mediaBase64}`,
+      ),
       {
         title: `🎁 ${match.gift.name}`,
         source: `${commandPrefix} 礼物`,

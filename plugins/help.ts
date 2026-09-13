@@ -9,6 +9,7 @@ const pluginDisplayNames: Readonly<Record<string, string>> = {
   gift: "礼物特效",
   help: "功能图鉴",
   joke: "笑话图",
+  lottery: "礼物抽奖",
   news: "新闻快讯",
   qrcode: "二维码",
   recall: "消息撤回",

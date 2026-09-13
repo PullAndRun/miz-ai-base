@@ -332,30 +332,42 @@ export const readBiliGiftMedia = async (
 const RAW_COINS_PER_BATTERY = 100;
 const BATTERIES_PER_RMB = 10;
 
-const formatBiliGiftAmount = (value: number) => value.toFixed(2).replace(/\.?0+$/, "");
+export const formatBiliGiftAmount = (value: number) => value.toFixed(2).replace(/\.?0+$/, "");
 
-/** 金瓜子礼物换算成电池和人民币；银瓜子免费礼物和无价格礼物不显示价格。 */
+/** 金瓜子礼物的电池价值；银瓜子免费礼物和无价格礼物没有电池价值。 */
+export const getBiliGiftBatteryValue = (gift: BiliGift) =>
+  gift.price > 0 && gift.coinType.toLowerCase() === "gold"
+    ? gift.price / RAW_COINS_PER_BATTERY
+    : undefined;
+
+/** 付费礼物换算成电池和人民币；免费礼物不显示价格。 */
 export const formatBiliGiftPrice = (gift: BiliGift) => {
-  if (gift.price <= 0 || gift.coinType.toLowerCase() !== "gold") {
+  const batteries = getBiliGiftBatteryValue(gift);
+  if (batteries === undefined) {
     return undefined;
   }
-  const batteries = gift.price / RAW_COINS_PER_BATTERY;
-  const yuan = batteries / BATTERIES_PER_RMB;
-  return `${formatBiliGiftAmount(batteries)} 电池（${formatBiliGiftAmount(yuan)} 元）`;
+  return `${formatBiliGiftAmount(batteries)} 电池（${formatBiliGiftAmount(batteries / BATTERIES_PER_RMB)} 元）`;
+};
+
+/** 礼物台账里的数据行，礼物卡片和抽奖结果共用。 */
+export const formatBiliGiftDetails = (gift: BiliGift, media: BiliGiftMedia) => {
+  const price = formatBiliGiftPrice(gift);
+  return [
+    `· 礼物 ID：#${gift.id}`,
+    ...(price ? [`· 价格：${price}`] : []),
+    ...(gift.effectId > 0 ? [`· 特效 ID：#${gift.effectId}`] : []),
+    `· 展示素材：${media.label}`,
+  ];
 };
 
 /** 转发消息里的礼物介绍：礼物名、ID、价格、特效与展示素材等台账数据。 */
 export const formatBiliGiftCard = (match: BiliGiftMatch, media: BiliGiftMedia) => {
   const { gift } = match;
-  const price = formatBiliGiftPrice(gift);
 
   return [
     `🎁 ${gift.name}`,
     "",
-    `· 礼物 ID：#${gift.id}`,
-    ...(price ? [`· 价格：${price}`] : []),
-    ...(gift.effectId > 0 ? [`· 特效 ID：#${gift.effectId}`] : []),
-    `· 展示素材：${media.label}`,
+    ...formatBiliGiftDetails(gift, media),
     ...(gift.description ? ["", `「${gift.description}」`] : []),
     ...(!match.exactName && match.alternativeNames.length > 0
       ? ["", `还有：${match.alternativeNames.join("、")}`]
@@ -369,14 +381,14 @@ export const createBiliGiftMediaSegment = (media: BiliGiftMedia, mediaFile: stri
 });
 
 /**
- * 礼物转发消息：第一条是礼物介绍，第二条是礼物的展示效果（全屏特效或礼物动图）。
+ * 礼物转发消息：第一条是文字内容（礼物介绍或抽奖结果），第二条是礼物的展示效果。
  */
-export const createBiliGiftForwardMessages = (
-  match: BiliGiftMatch,
+export const createBiliGiftForwardMessage = (
+  card: string,
   media: BiliGiftMedia,
   mediaFile: string,
 ): readonly ForwardMessageContent[] => [
-  formatBiliGiftCard(match, media),
+  card,
   [createBiliGiftMediaSegment(media, mediaFile)],
 ];
 

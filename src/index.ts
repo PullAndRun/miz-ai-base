@@ -6,6 +6,7 @@ import { getGroupIds } from "@/group-ids";
 import { createLogger, type Logger } from "@/logger";
 import { createPluginRuntime } from "@/plugins";
 import { configureBilibiliApiUrls, configureBilibiliCredentialStore } from "@/bilibili-credential";
+import { configureGiftLotteryDrawStore } from "@/gift-lottery-draws";
 import { getDatabaseUrl } from "@/database";
 import { requiresGatewayRestart, requiresRuntimeReload } from "@/runtime-config";
 import { replaceRuntimeWithFallback, type RuntimeReplacement } from "@/runtime-reload";
@@ -51,6 +52,7 @@ const main = async (logger: Logger) => {
   const createdDirectories = await ensureProjectDirectories();
   const loadedConfig = await loadConfig();
   configureBilibiliCredentialStore(getDatabaseUrl(loadedConfig));
+  configureGiftLotteryDrawStore(getDatabaseUrl(loadedConfig));
   configureBilibiliApiUrls(loadedConfig.vtb);
   logger.setLevel?.(loadedConfig.naplink.logLevel);
   if (createdDirectories.length > 0) {

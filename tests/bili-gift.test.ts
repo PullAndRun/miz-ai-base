@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-  createBiliGiftForwardMessages,
+  createBiliGiftForwardMessage,
   findBiliGift,
   formatBiliGiftCard,
   formatBiliGiftPrice,
@@ -162,7 +162,11 @@ describe("Bilibili gift media", () => {
   test("builds a gift card with the gift data and the display effect", () => {
     const match = findBiliGift(gifts, "小电视飞船")!;
     const media = resolveBiliGiftMedia(match.gift)!;
-    const [card, mediaNode] = createBiliGiftForwardMessages(match, media, "base64://AAAA") as [
+    const [card, mediaNode] = createBiliGiftForwardMessage(
+      formatBiliGiftCard(match, media),
+      media,
+      "base64://AAAA",
+    ) as [
       string,
       Array<{ type: string; data: { file?: string } }>,
     ];
