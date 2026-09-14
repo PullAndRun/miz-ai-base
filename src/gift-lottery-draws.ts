@@ -14,6 +14,8 @@ export type GiftLotteryDailyDraw = Readonly<{
   giftName: string;
   /** 当天这一抽获得的迷币。 */
   coins: number;
+  /** 谁抽的；老记录可能为空。 */
+  userId?: string;
 }>;
 
 export type GiftLotteryCoinKey = Readonly<{
@@ -80,7 +82,12 @@ export const findGiftLotteryDailyDraw = async (
     where: { groupId_drawDate: { groupId: key.groupId, drawDate: key.drawDate } },
   });
   return record
-    ? { giftId: record.giftId, giftName: record.giftName, coins: record.coins }
+    ? {
+      giftId: record.giftId,
+      giftName: record.giftName,
+      coins: record.coins,
+      userId: record.userId ?? undefined,
+    }
     : undefined;
 };
 

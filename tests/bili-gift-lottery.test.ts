@@ -146,6 +146,7 @@ const createMemoryStore = () => {
         giftId: draw.giftId,
         giftName: draw.giftName,
         coins: draw.coins,
+        userId: draw.userId,
       });
       return "claimed";
     },
@@ -245,6 +246,19 @@ describe("Bilibili gift lottery", () => {
     expect(card).not.toContain("· 特效 ID：");
     expect(card).not.toContain("· 展示素材：");
     expect(card).not.toContain("心中有日月");
+  });
+
+  test("puts the winner nickname in the reveal card", () => {
+    const draw = drawBiliGiftLottery(gifts, { random: createSequenceRandom([0.95, 0]) })!;
+
+    const named = formatBiliGiftLotteryCard(draw, { totalCoins: 100, winnerName: "爱的战士" });
+    // 名字顶到第一行，合并转发的预览里也能看到。
+    expect(named.split("\n")[0]).toBe("🎰 爱的战士 的礼物抽奖");
+    expect(named).toContain("抽到了「为你摘星」");
+    expect(named).not.toContain("你抽到了");
+    // 没有昵称时仍然用「你」称呼。
+    expect(formatBiliGiftLotteryCard(draw, { totalCoins: 100 }))
+      .toContain("你抽到了「为你摘星」");
   });
 
   test("gives free gifts the minimum coins", () => {
@@ -421,15 +435,57 @@ describe("lottery plugin", () => {
     expect(forward!.options).toEqual({
       title: "👑👑👑👑👑 神话 · 为你摘星",
       source: "miz 抽奖",
-      summary: "抽到「为你摘星」· +10000 迷币",
+      summary: "👑👑👑👑👑 神话 · +10000 迷币",
       timeoutMs: 300_000,
     });
     expect(records.get("100:2026-09-14")).toEqual({
       giftId: 5,
       giftName: "为你摘星",
       coins: 10_000,
+      userId: "1",
     });
     expect(balances.get("100:1")).toBe(10_000);
+  });
+
+  test("announces the winner nickname in the draw result", async () => {
+    const { store } = createMemoryStore();
+    await runLottery("", {
+      random: createSequenceRandom([0.95, 0]),
+      now: new Date(2026, 8, 14, 10, 0),
+      store,
+      gateway: {
+        getGroupMemberName: async (_groupId, userId) => (userId === "1" ? "爱的战士" : undefined),
+      },
+    });
+
+    const card = forwards[0]!.messages[0] as string;
+    expect(card.split("\n")[0]).toBe("🎰 爱的战士 的礼物抽奖");
+    expect(card).toContain("抽到了「为你摘星」");
+    expect(card).toContain("💰 获得 10000 迷币 · 累计 10000");
+    expect(forwards[0]!.options).toEqual({
+      title: "爱的战士 抽到了「为你摘星」",
+      source: "miz 抽奖",
+      summary: "👑👑👑👑👑 神话 · +10000 迷币",
+      timeoutMs: 300_000,
+    });
+  });
+
+  test("names the winner when the group already drew today", async () => {
+    const { store } = createMemoryStore();
+    const now = new Date(2026, 8, 14, 10, 0);
+    await runLottery("", { random: createSequenceRandom([0.95, 0]), now, store });
+    await runLottery("", {
+      random: createSequenceRandom([0.95, 0]),
+      now,
+      userId: "2",
+      store,
+      gateway: {
+        getGroupMemberName: async (_groupId, userId) => (userId === "1" ? "爱的战士" : undefined),
+      },
+    });
+
+    expect(String(replies[0])).toContain("本群今天已经抽过啦");
+    expect(String(replies[0])).toContain("爱的战士 抽到的是「为你摘星」");
   });
 
   test("refuses a second draw in the same group on the same day and allows the next day", async () => {

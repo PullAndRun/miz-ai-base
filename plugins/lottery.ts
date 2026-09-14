@@ -48,10 +48,12 @@ export const createAlreadyDrawnMessage = (
   isGroupChat: boolean,
   giftName?: string,
   coins?: number,
+  winnerName?: string,
 ) => {
   const scope = isGroupChat ? "本群" : "";
+  const winner = winnerName?.trim() ? `${winnerName.trim()} ` : "";
   const detail = giftName
-    ? `，抽到的是「${giftName}」${coins ? `（+${coins} 迷币）` : ""}`
+    ? `，${winner}抽到的是「${giftName}」${coins ? `（+${coins} 迷币）` : ""}`
     : "";
   return [`${scope}今天已经抽过啦${detail}。`, "明天再来试试手气吧～"].join("\n");
 };
@@ -95,6 +97,15 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T
   }
 };
 
+/** 取群成员昵称；超时或失败都返回 undefined，由调用方决定退回文案。 */
+const loadMemberName = async (
+  gateway: BiliGiftLotteryContext["gateway"],
+  groupId: string,
+  userId: string,
+): Promise<string | undefined> =>
+  withTimeout(gateway.getGroupMemberName(groupId, userId), LEADERBOARD_NAME_TIMEOUT_MS)
+    .catch(() => undefined);
+
 /** 给榜单条目补上群昵称，失败或超时就退回 QQ 号。 */
 const resolveLeaderboardNames = async (
   entries: readonly GiftLotteryCoinEntry[],
@@ -103,10 +114,7 @@ const resolveLeaderboardNames = async (
 ): Promise<readonly { userId: string; coins: number; name?: string }[]> => {
   const results = await settleWithConcurrency(entries, LEADERBOARD_NAME_CONCURRENCY, async (entry) => ({
     ...entry,
-    name: await withTimeout(
-      gateway.getGroupMemberName(groupId, entry.userId),
-      LEADERBOARD_NAME_TIMEOUT_MS,
-    ).catch(() => undefined),
+    name: await loadMemberName(gateway, groupId, entry.userId),
   }));
   return results.map((result, index) =>
     result.status === "fulfilled" ? result.value : entries[index]!);
@@ -214,7 +222,12 @@ export const handleBiliGiftLotteryCommand = async ({
     });
   }
   if (existing) {
-    await reply(createAlreadyDrawnMessage(isGroupChat, existing.giftName, existing.coins));
+    const winnerName = isGroupChat && existing.userId
+      ? await loadMemberName(gateway, groupId, existing.userId)
+      : undefined;
+    await reply(
+      createAlreadyDrawnMessage(isGroupChat, existing.giftName, existing.coins, winnerName),
+    );
     return;
   }
 
@@ -251,7 +264,12 @@ export const handleBiliGiftLotteryCommand = async ({
     });
     if (result === "taken") {
       const taken = await store.find(drawKey).catch(() => undefined);
-      await reply(createAlreadyDrawnMessage(isGroupChat, taken?.giftName, taken?.coins));
+      const winnerName = isGroupChat && taken?.userId
+        ? await loadMemberName(gateway, groupId, taken.userId)
+        : undefined;
+      await reply(
+        createAlreadyDrawnMessage(isGroupChat, taken?.giftName, taken?.coins, winnerName),
+      );
       return;
     }
     claimed = true;
@@ -260,6 +278,9 @@ export const handleBiliGiftLotteryCommand = async ({
       error: summarizeError(error),
     });
   }
+
+  // 公告里写上中奖群友的昵称，取不到就退回「你」。
+  const winnerName = isGroupChat ? await loadMemberName(gateway, groupId, userId) : undefined;
 
   // 迷币总量按群按人记录，读不到就只显示本次获得的部分。
   let totalCoins = coins;
@@ -301,14 +322,17 @@ export const handleBiliGiftLotteryCommand = async ({
   try {
     await replyForwardWithoutRetry(
       createBiliGiftLotteryForwardMessages(
-        formatBiliGiftLotteryCard(draw, { totalCoins }),
+        formatBiliGiftLotteryCard(draw, { totalCoins, winnerName }),
         media,
         `base64://${mediaBase64}`,
       ),
       {
-        title: `${formatBiliGiftLotteryStars(draw.rarity)} · ${draw.gift.name}`,
+        // 标题带中奖人，卡片预览里直接看出是谁抽的。
+        title: winnerName
+          ? `${winnerName} 抽到了「${draw.gift.name}」`
+          : `${formatBiliGiftLotteryStars(draw.rarity)} · ${draw.gift.name}`,
         source: `${commandPrefix} 抽奖`,
-        summary: `抽到「${draw.gift.name}」· +${coins} 迷币`,
+        summary: `${formatBiliGiftLotteryStars(draw.rarity)} · +${coins} 迷币`,
         timeoutMs: BILI_GIFT_MEDIA_SEND_TIMEOUT_MS,
       },
     );

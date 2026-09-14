@@ -160,6 +160,8 @@ export const formatBiliGiftLotteryPrizeLine = (gift: BiliGift, totalCoins: numbe
 export type BiliGiftLotteryCardOptions = Readonly<{
   /** 抽奖人这个群的迷币总量（已包含本次获得）。 */
   totalCoins: number;
+  /** 中奖群友的昵称；取不到时卡片用「你」称呼。 */
+  winnerName?: string;
 }>;
 
 /** 抽奖结果卡片：独立小游戏的揭晓文案，不展示礼物台账数据。 */
@@ -168,11 +170,13 @@ export const formatBiliGiftLotteryCard = (
   options: BiliGiftLotteryCardOptions,
 ) => {
   const { gift, rarity } = draw;
+  // 中奖人放在最前面，合并转发的卡片预览里就能看见是谁抽的。
+  const winner = options.winnerName?.trim();
   return [
-    BILI_GIFT_LOTTERY_TITLE,
+    winner ? `🎰 ${winner} 的礼物抽奖` : BILI_GIFT_LOTTERY_TITLE,
     "",
     formatBiliGiftLotteryReveal(rarity),
-    `你抽到了「${gift.name}」`,
+    winner ? `抽到了「${gift.name}」` : `你抽到了「${gift.name}」`,
     "",
     formatBiliGiftLotteryPrizeLine(gift, options.totalCoins),
     `🎉 ${rarity.flavor}`,
