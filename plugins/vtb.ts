@@ -1,7 +1,7 @@
 import type { MizPlugin } from "@/plugins";
 import { isGroupAdministrator, isWhitelistedUser } from "@/group-permissions";
 import { summarizeError } from "@/errors";
-import { handleBiliGiftCommand } from "./gift";
+import { handleBiliGiftCommand } from "@/bili-gift-command";
 import {
   createVtbNotificationMessage,
   formatDynamicMessage,

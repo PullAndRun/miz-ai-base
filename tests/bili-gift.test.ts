@@ -14,7 +14,7 @@ import {
   suggestBiliGiftNames,
   type BiliGift,
 } from "@/bili-gift";
-import giftPlugin, { handleBiliGiftCommand } from "../plugins/gift";
+import { handleBiliGiftCommand } from "@/bili-gift-command";
 import { createVtbPlugin } from "../plugins/vtb";
 
 type GiftForwardNode = string | Array<{ type: string; data: { file?: string } }>;
@@ -342,7 +342,7 @@ describe("Bilibili gift library", () => {
   });
 });
 
-describe("gift plugin", () => {
+describe("gift lookup command", () => {
   let directory = "";
   let replies: unknown[] = [];
   let forwards: Array<{ messages: readonly GiftForwardNode[]; options: unknown }> = [];
@@ -484,14 +484,14 @@ describe("gift plugin", () => {
   test("asks for a gift name and explains the usage", async () => {
     await runGiftCommand("");
 
-    expect(String(replies[0])).toContain("用法：miz 礼物 礼物名");
+    expect(String(replies[0])).toContain("用法：miz vtb gift 礼物名");
     expect(forwards).toEqual([]);
   });
 
   test("uses the configured command prefix", async () => {
     await runGiftCommand("", "迷子");
 
-    expect(String(replies[0])).toContain("用法：迷子 礼物 礼物名");
+    expect(String(replies[0])).toContain("用法：迷子 vtb gift 礼物名");
   });
 
   test("rejects names that are too long", async () => {
@@ -545,12 +545,6 @@ describe("gift plugin", () => {
     expect(String(replies[0])).toContain("超时");
   });
 
-  test("describes the command in the help menu", () => {
-    expect(giftPlugin.name).toBe("gift");
-    expect(giftPlugin.commands).toEqual(["gift", "礼物"]);
-    expect(giftPlugin.description).toContain("miz 礼物 礼物名");
-    expect(giftPlugin.description).toContain("ID 最大");
-  });
 });
 
 describe("vtb gift alias", () => {
@@ -591,6 +585,6 @@ describe("vtb gift alias", () => {
       replyForwardWithoutRetry: async () => {},
     } as never);
 
-    expect(replyText).toContain("用法：miz 礼物 礼物名");
+    expect(replyText).toContain("用法：miz vtb gift 礼物名");
   });
 });

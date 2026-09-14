@@ -1,4 +1,8 @@
-import type { MizPlugin, PluginContext } from "@/plugins";
+/**
+ * 礼物查询：按礼物名发一条合并转发（礼物台账 + 展示效果）。
+ * 入口只有 miz vtb gift，独立命令已下线。
+ */
+import type { PluginContext } from "@/plugins";
 import { summarizeError } from "@/errors";
 import { isVideoSendTimeoutError } from "@/video-delivery";
 import {
@@ -24,8 +28,8 @@ export type BiliGiftCommandContext = Pick<
 
 export const createBiliGiftUsage = (commandPrefix: string) => [
   "🎁 想看哪个礼物的特效？",
-  `用法：${commandPrefix} 礼物 礼物名`,
-  `例如：${commandPrefix} 礼物 小电视飞船`,
+  `用法：${commandPrefix} vtb gift 礼物名`,
+  `例如：${commandPrefix} vtb gift 小电视飞船`,
 ].join("\n");
 
 export type BiliGiftCommandOptions = Readonly<{
@@ -127,25 +131,3 @@ export const handleBiliGiftCommand = async ({
     await reply("礼物特效没能发出去，稍后再试一次吧。");
   }
 };
-
-const giftPlugin: MizPlugin = {
-  name: "gift",
-  commands: ["gift", "礼物"],
-  description: [
-    "把 B 站直播礼物做成一条转发消息：礼物名、价格（付费礼物换算成电池与人民币）等台账数据，加上礼物的展示效果。",
-    "用法：miz 礼物 礼物名",
-    "同名礼物取礼物 ID 最大的一版；有全屏特效的送特效视频，没有的送礼物动图，名字后面加「动图」可以只看动图。",
-    "例如：miz 礼物 小电视飞船",
-  ].join("\n"),
-  async handle({ command, commandPrefix, logger, reply, replyForwardWithoutRetry }) {
-    await handleBiliGiftCommand({
-      args: command.args,
-      commandPrefix,
-      logger,
-      reply,
-      replyForwardWithoutRetry,
-    });
-  },
-};
-
-export default giftPlugin;
