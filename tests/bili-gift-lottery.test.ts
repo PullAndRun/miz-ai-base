@@ -134,7 +134,8 @@ const createMemoryStore = () => {
   const records = new Map<string, GiftLotteryDailyDraw>();
   const balances = new Map<string, number>();
   const released: string[] = [];
-  const keyOf = (key: { groupId: string; drawDate: string }) => `${key.groupId}:${key.drawDate}`;
+  const keyOf = (key: { groupId: string; userId: string; drawDate: string }) =>
+    `${key.groupId}:${key.userId}:${key.drawDate}`;
   const coinKeyOf = (key: { groupId: string; userId: string }) => `${key.groupId}:${key.userId}`;
   const store: GiftLotteryDrawStore = {
     find: async (key) => records.get(keyOf(key)),
@@ -146,7 +147,6 @@ const createMemoryStore = () => {
         giftId: draw.giftId,
         giftName: draw.giftName,
         coins: draw.coins,
-        userId: draw.userId,
       });
       return "claimed";
     },
@@ -275,7 +275,7 @@ describe("Bilibili gift lottery", () => {
     expect(lotteryPlugin.commands).toEqual(["lottery", "抽奖"]);
     expect(lotteryPlugin.description).toContain("迷子的小游戏");
     expect(lotteryPlugin.description).toContain("miz 抽奖 榜单");
-    expect(lotteryPlugin.description).toContain("每个群每天只能抽一次");
+    expect(lotteryPlugin.description).toContain("每个群每人每天只能抽一次");
     expect(lotteryPlugin.description).toContain("迷币");
   });
 
@@ -438,11 +438,10 @@ describe("lottery plugin", () => {
       summary: "👑👑👑👑👑 神话 · +10000 迷币",
       timeoutMs: 300_000,
     });
-    expect(records.get("100:2026-09-14")).toEqual({
+    expect(records.get("100:1:2026-09-14")).toEqual({
       giftId: 5,
       giftName: "为你摘星",
       coins: 10_000,
-      userId: "1",
     });
     expect(balances.get("100:1")).toBe(10_000);
   });
@@ -470,41 +469,38 @@ describe("lottery plugin", () => {
     });
   });
 
-  test("names the winner when the group already drew today", async () => {
+  test("tells the member what they already drew today", async () => {
     const { store } = createMemoryStore();
     const now = new Date(2026, 8, 14, 10, 0);
     await runLottery("", { random: createSequenceRandom([0.95, 0]), now, store });
-    await runLottery("", {
-      random: createSequenceRandom([0.95, 0]),
-      now,
-      userId: "2",
-      store,
-      gateway: {
-        getGroupMemberName: async (_groupId, userId) => (userId === "1" ? "爱的战士" : undefined),
-      },
-    });
+    await runLottery("", { random: createSequenceRandom([0.95, 0]), now, store });
 
-    expect(String(replies[0])).toContain("本群今天已经抽过啦");
-    expect(String(replies[0])).toContain("爱的战士 抽到的是「为你摘星」");
+    expect(String(replies[0])).toContain("你今天在本群已经抽过啦");
+    expect(String(replies[0])).toContain("抽到的是「为你摘星」（+10000 迷币）");
   });
 
-  test("refuses a second draw in the same group on the same day and allows the next day", async () => {
+  test("refuses a second draw for the same person and lets others draw", async () => {
     const { store } = createMemoryStore();
     const now = new Date(2026, 8, 14, 10, 0);
     await runLottery("", { random: createSequenceRandom([0.95, 0]), now, store });
-    // 同群换个人来抽也不行：名额属于群。
-    await runLottery("", { random: createSequenceRandom([0.95, 0]), now, userId: "2", store });
+    // 同一个人当天再抽不行。
+    await runLottery("", { random: createSequenceRandom([0.95, 0]), now, store });
 
     expect(forwards).toHaveLength(1);
-    expect(String(replies[0])).toContain("本群今天已经抽过啦");
+    expect(String(replies[0])).toContain("你今天在本群已经抽过啦");
     expect(String(replies[0])).toContain("为你摘星");
 
+    // 同群另一个人当天照样能抽。
+    await runLottery("", { random: createSequenceRandom([0.95, 0]), now, userId: "2", store });
+    expect(forwards).toHaveLength(2);
+
+    // 第二天本来的人又能抽。
     await runLottery("", {
       random: createSequenceRandom([0.95, 0]),
       now: new Date(2026, 8, 15, 8, 0),
       store,
     });
-    expect(forwards).toHaveLength(2);
+    expect(forwards).toHaveLength(3);
   });
 
   test("gives every group its own daily draw", async () => {
@@ -568,7 +564,7 @@ describe("lottery plugin", () => {
     });
 
     expect(forwards).toHaveLength(1);
-    expect(String(replies[0])).toContain("今天已经抽过啦");
+    expect(String(replies[0])).toContain("已经抽过啦");
   });
 
   test("still draws when the daily lookup fails", async () => {
@@ -598,7 +594,7 @@ describe("lottery plugin", () => {
 
     expect(String(replies[0])).toContain("素材读不出来");
     expect(records.size).toBe(0);
-    expect(released).toEqual(["100:2026-09-14"]);
+    expect(released).toEqual(["100:1:2026-09-14"]);
   });
 
   test("gives the daily chance back when the forward fails", async () => {

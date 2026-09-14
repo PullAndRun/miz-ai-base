@@ -48,14 +48,13 @@ export const createAlreadyDrawnMessage = (
   isGroupChat: boolean,
   giftName?: string,
   coins?: number,
-  winnerName?: string,
 ) => {
-  const scope = isGroupChat ? "本群" : "";
-  const winner = winnerName?.trim() ? `${winnerName.trim()} ` : "";
+  // 名额属于本人，所以直接对这个人说话。
+  const scope = isGroupChat ? "你今天在本群" : "你今天";
   const detail = giftName
-    ? `，${winner}抽到的是「${giftName}」${coins ? `（+${coins} 迷币）` : ""}`
+    ? `，抽到的是「${giftName}」${coins ? `（+${coins} 迷币）` : ""}`
     : "";
-  return [`${scope}今天已经抽过啦${detail}。`, "明天再来试试手气吧～"].join("\n");
+  return [`${scope}已经抽过啦${detail}。`, "明天再来试试手气吧～"].join("\n");
 };
 
 export const createBiliGiftLotteryUsage = (commandPrefix: string) => [
@@ -195,7 +194,7 @@ export const handleBiliGiftLotteryCommand = async ({
   const groupId = isGroupChat ? String(message.groupId) : `private:${userId}`;
   const now = options.now ?? new Date();
   const drawDate = formatGiftLotteryDrawDate(now);
-  const drawKey = { groupId, drawDate };
+  const drawKey = { groupId, userId, drawDate };
   const store = options.store ?? giftLotteryDrawStore;
 
   if (request === "leaderboard") {
@@ -222,12 +221,7 @@ export const handleBiliGiftLotteryCommand = async ({
     });
   }
   if (existing) {
-    const winnerName = isGroupChat && existing.userId
-      ? await loadMemberName(gateway, groupId, existing.userId)
-      : undefined;
-    await reply(
-      createAlreadyDrawnMessage(isGroupChat, existing.giftName, existing.coins, winnerName),
-    );
+    await reply(createAlreadyDrawnMessage(isGroupChat, existing.giftName, existing.coins));
     return;
   }
 
@@ -252,24 +246,18 @@ export const handleBiliGiftLotteryCommand = async ({
 
   const coins = getBiliGiftLotteryCoins(draw.gift);
 
-  // 先占住这个群今天的名额，避免两条消息同时抽两次。
+  // 先占住这个人今天在本群的名额，避免两条消息同时抽两次。
   let claimed = false;
   try {
     const result = await store.claim({
       ...drawKey,
-      userId,
       giftId: draw.gift.id,
       giftName: draw.gift.name,
       coins,
     });
     if (result === "taken") {
       const taken = await store.find(drawKey).catch(() => undefined);
-      const winnerName = isGroupChat && taken?.userId
-        ? await loadMemberName(gateway, groupId, taken.userId)
-        : undefined;
-      await reply(
-        createAlreadyDrawnMessage(isGroupChat, taken?.giftName, taken?.coins, winnerName),
-      );
+      await reply(createAlreadyDrawnMessage(isGroupChat, taken?.giftName, taken?.coins));
       return;
     }
     claimed = true;
@@ -292,7 +280,7 @@ export const handleBiliGiftLotteryCommand = async ({
     });
   }
 
-  // 没能把结果发出去时退回名额，让大家可以再试一次。
+  // 没能把结果发出去时退回名额，让 TA 可以再试一次。
   const releaseClaim = async () => {
     if (!claimed) {
       return;
@@ -369,7 +357,7 @@ const lotteryPlugin: MizPlugin = {
   description: [
     "迷子的小游戏：从 B 站直播礼物里抽一款，连展示效果一起发出来。",
     "用法：miz 抽奖，看榜：miz 抽奖 榜单",
-    "每个群每天只能抽一次，抽到的礼物按价值折算成迷币，入账到抽奖人头上。",
+    "每个群每人每天只能抽一次，抽到的礼物按价值折算成迷币，入账到抽奖人头上。",
     "礼物按价值分五档：🌱 普通 / ⭐ 稀有 / ✨ 史诗 / 💎 传说 / 👑 神话，越贵越难抽到。",
   ].join("\n"),
   async handle({
