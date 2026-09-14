@@ -3,6 +3,7 @@ import {
   createLastGroupMessageTracker,
   createGroupMessageUnavailableError,
   getSelfGroupMessageIdsFromHistory,
+  pickGroupMemberDisplayName,
   getSelfSentGroupMessage,
   getRecallHistoryTimeoutMs,
   getGroupSendPermission,
@@ -259,5 +260,27 @@ describe("group @all permission", () => {
   test("keeps compatibility with numeric quota responses", () => {
     expect(isGroupAtAllAvailable(1)).toBeTrue();
     expect(isGroupAtAllAvailable(0)).toBeFalse();
+  });
+});
+
+describe("group member display names", () => {
+  test("prefers the group card and falls back to the nickname", () => {
+    expect(pickGroupMemberDisplayName({ card: " 小电视 ", nickname: "miz" })).toBe("小电视");
+    expect(pickGroupMemberDisplayName({ card: "", nickname: " miz " })).toBe("miz");
+    expect(pickGroupMemberDisplayName({ nickname: "miz" })).toBe("miz");
+  });
+
+  test("rejects empty or unusable member info", () => {
+    expect(pickGroupMemberDisplayName({})).toBeUndefined();
+    expect(pickGroupMemberDisplayName({ card: "   ", nickname: "  " })).toBeUndefined();
+    expect(pickGroupMemberDisplayName(undefined)).toBeUndefined();
+    expect(pickGroupMemberDisplayName({ nickname: 123 })).toBeUndefined();
+  });
+
+  test("flattens whitespace and truncates long names", () => {
+    expect(pickGroupMemberDisplayName({ nickname: "miz\n\t小电视" })).toBe("miz 小电视");
+    const longName = "超".repeat(30);
+    const shortened = pickGroupMemberDisplayName({ nickname: longName });
+    expect(shortened).toBe("超".repeat(24) + "…");
   });
 });

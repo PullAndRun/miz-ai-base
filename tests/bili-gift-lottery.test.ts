@@ -276,24 +276,30 @@ describe("Bilibili gift lottery", () => {
     expect(parseBiliGiftLotteryArguments("rank")).toBeUndefined();
   });
 
-  test("renders the mi coin leaderboard with mentions", () => {
+  test("renders the mi coin leaderboard as plain text", () => {
     const message = createBiliGiftLotteryLeaderboardMessage([
       { userId: "1001", coins: 12_000 },
       { userId: "1002", coins: 8_000 },
       { userId: "1003", coins: 6_000 },
       { userId: "1004", coins: 500 },
-    ]) as Array<{ type: string; data: Record<string, unknown> }>;
+    ]);
 
-    const texts = message.filter((segment) => segment.type === "text")
-      .map((segment) => String(segment.data.text));
-    expect(texts.join("")).toContain("🏆 本群迷币榜 · 前 10 名");
-    expect(texts.join("")).toContain("🥇 ");
-    expect(texts.join("")).toContain("🥈 ");
-    expect(texts.join("")).toContain("🥉 ");
-    expect(texts.join("")).toContain("4. ");
-    expect(texts.join("")).toContain(" · 12000 迷币");
-    expect(message.filter((segment) => segment.type === "at")).toHaveLength(4);
-    expect(message).toContainEqual({ type: "at", data: { qq: "1002" } });
+    expect(typeof message).toBe("string");
+    expect(message).toContain("🏆 本群迷币榜 · 前 10 名");
+    expect(message).toContain("🥇 1001 · 12000 迷币");
+    expect(message).toContain("🥈 1002 · 8000 迷币");
+    expect(message).toContain("🥉 1003 · 6000 迷币");
+    expect(message).toContain("4. 1004 · 500 迷币");
+    // 有昵称就显示昵称，没有就退回 QQ 号。
+    const named = createBiliGiftLotteryLeaderboardMessage([
+      { userId: "1005", coins: 300, name: "小电视" },
+      { userId: "1006", coins: 200, name: "   " },
+    ]);
+    expect(named).toContain("🥇 小电视 · 300 迷币");
+    expect(named).toContain("🥈 1006 · 200 迷币");
+    // 榜单只列文字，不 at 任何人。
+    expect(message).not.toContain("@");
+    expect(message).not.toContain("CQ:at");
   });
 
   test("keeps the leaderboard to ten entries and handles an empty group", () => {
@@ -301,15 +307,13 @@ describe("Bilibili gift lottery", () => {
       userId: String(2_000 + index),
       coins: 1_000 - index,
     }));
-    const message = createBiliGiftLotteryLeaderboardMessage(entries) as Array<{ type: string }>;
-    expect(message.filter((segment) => segment.type === "at")).toHaveLength(10);
+    const message = createBiliGiftLotteryLeaderboardMessage(entries);
 
-    const empty = createBiliGiftLotteryLeaderboardMessage([], { commandPrefix: "迷子" }) as Array<{
-      type: string;
-      data: { text?: string };
-    }>;
-    expect(empty).toHaveLength(1);
-    expect(empty[0]?.data.text).toContain("迷子 抽奖");
+    expect(message.split("\n").filter((line) => line.endsWith("迷币"))).toHaveLength(10);
+
+    const empty = createBiliGiftLotteryLeaderboardMessage([], { commandPrefix: "迷子" });
+    expect(empty).toContain("本群还没有人抽过奖");
+    expect(empty).toContain("迷子 抽奖");
   });
 
   test("formats the local draw date", () => {
@@ -332,12 +336,14 @@ describe("lottery plugin", () => {
       groupId?: number;
       privateChat?: boolean;
       store?: GiftLotteryDrawStore;
+      gateway?: { getGroupMemberName: (groupId: string, userId: string) => Promise<string | undefined> };
     } = {},
   ) => {
     const { logger, entries } = createLogger();
     await handleBiliGiftLotteryCommand({
       args,
       commandPrefix: "miz",
+      gateway: (options.gateway ?? { getGroupMemberName: async () => undefined }) as never,
       logger,
       message: {
         text: "miz 抽奖",
@@ -545,6 +551,7 @@ describe("lottery plugin", () => {
     await handleBiliGiftLotteryCommand({
       args: "",
       commandPrefix: "miz",
+      gateway: { getGroupMemberName: async () => undefined } as never,
       logger,
       message: { text: "miz 抽奖", groupId: 100, userId: "1", raw: {} },
       reply: async (message: unknown) => {
@@ -574,25 +581,59 @@ describe("lottery plugin", () => {
     expect(forwards).toEqual([]);
   });
 
-  test("shows the group leaderboard with mentions", async () => {
+  test("shows the group leaderboard without mentioning anyone", async () => {
     const { balances, store } = createMemoryStore();
     balances.set("100:1", 12_000);
     balances.set("100:2", 8_000);
     balances.set("100:3", 500);
     await runLottery("榜单", { userId: "3", store });
 
-    const message = replies[0] as Array<{ type: string; data: { text?: string; qq?: string } }>;
-    const texts = message
-      .filter((segment) => segment.type === "text")
-      .map((segment) => String(segment.data.text))
-      .join("");
-    expect(texts).toContain("🏆 本群迷币榜 · 前 10 名");
-    expect(texts).toContain("🥇 ");
-    expect(texts).toContain(" · 12000 迷币");
-    expect(message.filter((segment) => segment.type === "at")).toHaveLength(3);
+    const text = String(replies[0]);
+    expect(text).toContain("🏆 本群迷币榜 · 前 10 名");
+    expect(text).toContain("🥇 1 · 12000 迷币");
+    expect(text).toContain("🥈 2 · 8000 迷币");
+    expect(text).toContain("🥉 3 · 500 迷币");
+    expect(text).not.toContain("@");
     // 自己就在榜上，就不再重复报排名。
-    expect(texts).not.toContain("你的排名");
+    expect(text).not.toContain("你的排名");
     expect(forwards).toEqual([]);
+  });
+
+  test("shows group nicknames instead of QQ numbers", async () => {
+    const { balances, store } = createMemoryStore();
+    balances.set("100:1", 12_000);
+    balances.set("100:2", 8_000);
+    balances.set("100:3", 500);
+    await runLottery("榜单", {
+      userId: "3",
+      store,
+      gateway: {
+        getGroupMemberName: async (_groupId, userId) => (userId === "2" ? undefined : "群友" + userId),
+      },
+    });
+
+    const text = String(replies[0]);
+    expect(text).toContain("🥇 群友1 · 12000 迷币");
+    // 昵称取不到时退回 QQ 号。
+    expect(text).toContain("🥈 2 · 8000 迷币");
+    expect(text).toContain("🥉 群友3 · 500 迷币");
+    expect(text).not.toContain("@");
+  });
+
+  test("falls back to QQ numbers when the nickname lookup fails", async () => {
+    const { balances, store } = createMemoryStore();
+    balances.set("100:1", 700);
+    await runLottery("榜单", {
+      userId: "1",
+      store,
+      gateway: {
+        getGroupMemberName: async () => {
+          throw new Error("napcat down");
+        },
+      },
+    });
+
+    expect(String(replies[0])).toContain("🥇 1 · 700 迷币");
   });
 
   test("appends the viewer rank when outside the top ten", async () => {
@@ -603,11 +644,7 @@ describe("lottery plugin", () => {
     balances.set("100:999", 5);
     await runLottery("榜单", { userId: "999", store });
 
-    const texts = (replies[0] as Array<{ type: string; data: { text?: string } }>)
-      .filter((segment) => segment.type === "text")
-      .map((segment) => String(segment.data.text))
-      .join("");
-    expect(texts).toContain("你的排名：第 13 名 · 5 迷币");
+    expect(String(replies[0])).toContain("你的排名：第 13 名 · 5 迷币");
   });
 
   test("invites members without coins to join the leaderboard", async () => {
@@ -615,20 +652,15 @@ describe("lottery plugin", () => {
     balances.set("100:1", 500);
     await runLottery("榜单", { userId: "77", store });
 
-    const texts = (replies[0] as Array<{ type: string; data: { text?: string } }>)
-      .filter((segment) => segment.type === "text")
-      .map((segment) => String(segment.data.text))
-      .join("");
-    expect(texts).toContain("你还没有迷币");
+    expect(String(replies[0])).toContain("你还没有迷币");
   });
 
   test("explains an empty leaderboard", async () => {
     const { store } = createMemoryStore();
     await runLottery("榜单", { store });
 
-    const message = replies[0] as Array<{ data: { text?: string } }>;
-    expect(String(message[0]?.data.text)).toContain("本群还没有人抽过奖");
-    expect(String(message[0]?.data.text)).toContain("miz 抽奖");
+    expect(String(replies[0])).toContain("本群还没有人抽过奖");
+    expect(String(replies[0])).toContain("miz 抽奖");
   });
 
   test("shows the leaderboard through the English command", async () => {
@@ -636,13 +668,9 @@ describe("lottery plugin", () => {
     balances.set("100:1", 900);
     await runLottery("leaderboard", { store });
 
-    const message = replies[0] as Array<{ type: string; data: { text?: string } }>;
-    const texts = message
-      .filter((segment) => segment.type === "text")
-      .map((segment) => String(segment.data.text))
-      .join("");
-    expect(texts).toContain("🏆 本群迷币榜");
-    expect(texts).toContain(" · 900 迷币");
+    const text = String(replies[0]);
+    expect(text).toContain("🏆 本群迷币榜");
+    expect(text).toContain("🥇 1 · 900 迷币");
   });
 
   test("keeps the leaderboard in groups only", async () => {

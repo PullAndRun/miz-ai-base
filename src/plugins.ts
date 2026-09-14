@@ -40,6 +40,7 @@ export type PluginContext = {
   }): Promise<unknown>;
   gateway: Pick<Gateway,
     | "getGroupList"
+    | "getGroupMemberName"
     | "recallLastGroupMessage"
     | "sendGroupMessage"
     | "sendPrivateMessage"

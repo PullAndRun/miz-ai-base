@@ -1,4 +1,5 @@
 import type { MizPlugin, PluginContext } from "@/plugins";
+import { settleWithConcurrency } from "@/concurrency";
 import { summarizeError } from "@/errors";
 import { isVideoSendTimeoutError } from "@/video-delivery";
 import {
@@ -18,13 +19,14 @@ import {
 import {
   formatGiftLotteryDrawDate,
   giftLotteryDrawStore,
+  type GiftLotteryCoinEntry,
   type GiftLotteryDailyDraw,
   type GiftLotteryDrawStore,
 } from "@/gift-lottery-draws";
 
 export type BiliGiftLotteryContext = Pick<
   PluginContext,
-  "logger" | "message" | "reply" | "replyForwardWithoutRetry"
+  "gateway" | "logger" | "message" | "reply" | "replyForwardWithoutRetry"
 > & Readonly<{
   args: string;
   commandPrefix: string;
@@ -72,9 +74,48 @@ export const parseBiliGiftLotteryArguments = (
   return normalized === "榜单" || normalized === "leaderboard" ? "leaderboard" : undefined;
 };
 
+/** 昵称查询的并发与超时：取不到就退回 QQ 号，别让榜单卡住。 */
+const LEADERBOARD_NAME_CONCURRENCY = 3;
+const LEADERBOARD_NAME_TIMEOUT_MS = 3_000;
+
+const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+};
+
+/** 给榜单条目补上群昵称，失败或超时就退回 QQ 号。 */
+const resolveLeaderboardNames = async (
+  entries: readonly GiftLotteryCoinEntry[],
+  gateway: BiliGiftLotteryContext["gateway"],
+  groupId: string,
+): Promise<readonly { userId: string; coins: number; name?: string }[]> => {
+  const results = await settleWithConcurrency(entries, LEADERBOARD_NAME_CONCURRENCY, async (entry) => ({
+    ...entry,
+    name: await withTimeout(
+      gateway.getGroupMemberName(groupId, entry.userId),
+      LEADERBOARD_NAME_TIMEOUT_MS,
+    ).catch(() => undefined),
+  }));
+  return results.map((result, index) =>
+    result.status === "fulfilled" ? result.value : entries[index]!);
+};
+
 /** 榜单只读，不消耗每天的抽奖名额。 */
 export const handleBiliGiftLotteryLeaderboard = async ({
   commandPrefix,
+  gateway,
   groupId,
   isGroupChat,
   logger,
@@ -83,6 +124,7 @@ export const handleBiliGiftLotteryLeaderboard = async ({
   userId,
 }: {
   commandPrefix: string;
+  gateway: BiliGiftLotteryContext["gateway"];
   groupId: string;
   isGroupChat: boolean;
   logger: BiliGiftLotteryContext["logger"];
@@ -108,25 +150,21 @@ export const handleBiliGiftLotteryLeaderboard = async ({
     return;
   }
 
-  const segments = createBiliGiftLotteryLeaderboardMessage(entries, { commandPrefix });
+  const namedEntries = await resolveLeaderboardNames(entries, gateway, groupId);
+  let text = createBiliGiftLotteryLeaderboardMessage(namedEntries, { commandPrefix });
   if (entries.length > 0) {
     if (!viewer) {
-      segments.push({
-        type: "text",
-        data: { text: "\n你还没有迷币，发一次 " + commandPrefix + " 抽奖 就能上榜～" },
-      });
+      text += "\n\n你还没有迷币，发一次 " + commandPrefix + " 抽奖 就能上榜～";
     } else if (!entries.some((entry) => entry.userId === userId)) {
-      segments.push({
-        type: "text",
-        data: { text: "\n你的排名：第 " + viewer.rank + " 名 · " + viewer.coins + " 迷币" },
-      });
+      text += "\n\n你的排名：第 " + viewer.rank + " 名 · " + viewer.coins + " 迷币";
     }
   }
-  await reply(segments);
+  await reply(text);
 };
 export const handleBiliGiftLotteryCommand = async ({
   args,
   commandPrefix,
+  gateway,
   logger,
   message,
   reply,
@@ -155,6 +193,7 @@ export const handleBiliGiftLotteryCommand = async ({
   if (request === "leaderboard") {
     await handleBiliGiftLotteryLeaderboard({
       commandPrefix,
+      gateway,
       groupId,
       isGroupChat,
       logger,
@@ -312,6 +351,7 @@ const lotteryPlugin: MizPlugin = {
   async handle({
     command,
     commandPrefix,
+    gateway,
     logger,
     message,
     reply,
@@ -320,6 +360,7 @@ const lotteryPlugin: MizPlugin = {
     await handleBiliGiftLotteryCommand({
       args: command.args,
       commandPrefix,
+      gateway,
       logger,
       message,
       reply,

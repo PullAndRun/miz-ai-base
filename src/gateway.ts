@@ -69,6 +69,8 @@ export type Gateway = {
   dispose(): void;
   reportServerInfo(): Promise<void>;
   getGroupList(): Promise<unknown>;
+  /** 群成员显示名（优先群名片），取不到时返回 undefined。 */
+  getGroupMemberName(groupId: number | string, userId: number | string): Promise<string | undefined>;
   canMentionAllGroupMembers(groupId: number | string): Promise<boolean>;
   recallLastGroupMessage(groupId: number | string, count?: number): Promise<RecallGroupMessagesResult>;
   sendGroupMessage(groupId: number | string, message: unknown): Promise<unknown>;
@@ -127,6 +129,29 @@ const atSegmentSchema = z
         qq: z.union([z.string(), z.number()]),
       }),
   });
+
+const groupMemberInfoSchema = z.looseObject({
+  card: z.string().optional(),
+  nickname: z.string().optional(),
+});
+
+/**
+ * 群成员显示名：有群名片就用群名片，否则用昵称。
+ * 只保留单行短文本，避免把奇怪的名字带进群消息。
+ */
+export const pickGroupMemberDisplayName = (value: unknown): string | undefined => {
+  const parsed = groupMemberInfoSchema.safeParse(value);
+  if (!parsed.success) {
+    return undefined;
+  }
+  const name = (parsed.data.card?.trim() || parsed.data.nickname?.trim() || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (name === "") {
+    return undefined;
+  }
+  return name.length > 24 ? name.slice(0, 24) + "…" : name;
+};
 
 const napCatEventSchema = z
   .looseObject({
@@ -241,6 +266,16 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
         }
         logger.warn("gateway", "group list refresh failed; using last successful result", error);
         return [...cachedGroupList];
+      }
+    },
+    getGroupMemberName: async (groupId, userId) => {
+      try {
+        return pickGroupMemberDisplayName(
+          await client.getGroupMemberInfo(groupId, userId, false),
+        );
+      } catch (error) {
+        logger.warn("gateway", "group member name lookup failed", { groupId, userId, error });
+        return undefined;
       }
     },
     canMentionAllGroupMembers,

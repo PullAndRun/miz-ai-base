@@ -185,6 +185,8 @@ const LEADERBOARD_MEDALS = ["🥇", "🥈", "🥉"];
 export type BiliGiftLotteryLeaderboardEntry = Readonly<{
   userId: string;
   coins: number;
+  /** 群名片或昵称；取不到时榜单退回显示 QQ 号。 */
+  name?: string;
 }>;
 
 export type BiliGiftLotteryLeaderboardOptions = Readonly<{
@@ -192,35 +194,26 @@ export type BiliGiftLotteryLeaderboardOptions = Readonly<{
   commandPrefix?: string;
 }>;
 
-/** 迷币榜消息段：用 at 段点名，群里直接认得出是谁。 */
+/** 迷币榜：纯文本榜单，不 at 人，按顺序列出群昵称与迷币。 */
 export const createBiliGiftLotteryLeaderboardMessage = (
   entries: readonly BiliGiftLotteryLeaderboardEntry[],
   options: BiliGiftLotteryLeaderboardOptions = {},
-) => {
+): string => {
   const prefix = options.commandPrefix ?? "miz";
   const top = entries.slice(0, BILI_GIFT_LOTTERY_LEADERBOARD_SIZE);
   if (top.length === 0) {
-    return [{
-      type: "text",
-      data: {
-        text: "🏆 本群迷币榜\n\n本群还没有人抽过奖，第一个发 " + prefix + " 抽奖 的就是榜一～",
-      },
-    }];
+    return "🏆 本群迷币榜\n\n本群还没有人抽过奖，第一个发 " + prefix + " 抽奖 的就是榜一～";
   }
 
-  const segments: unknown[] = [{
-    type: "text",
-    data: { text: "🏆 本群迷币榜 · 前 " + BILI_GIFT_LOTTERY_LEADERBOARD_SIZE + " 名\n\n" },
-  }];
-  top.forEach((entry, index) => {
-    const medal = LEADERBOARD_MEDALS[index] ?? (index + 1) + ".";
-    segments.push(
-      { type: "text", data: { text: medal + " " } },
-      { type: "at", data: { qq: entry.userId } },
-      { type: "text", data: { text: " · " + entry.coins + " 迷币\n" } },
-    );
-  });
-  return segments;
+  return [
+    "🏆 本群迷币榜 · 前 " + BILI_GIFT_LOTTERY_LEADERBOARD_SIZE + " 名",
+    "",
+    ...top.map((entry, index) => {
+      const medal = LEADERBOARD_MEDALS[index] ?? (index + 1) + ".";
+      const label = entry.name?.trim() || entry.userId;
+      return medal + " " + label + " · " + entry.coins + " 迷币";
+    }),
+  ].join("\n");
 };
 /** 抽奖转发消息：结果卡片 + 礼物的展示效果。 */
 export const createBiliGiftLotteryForwardMessages = (
