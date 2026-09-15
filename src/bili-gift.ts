@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import { inspectMp4Video } from "@/mp4";
 import type { ForwardMessageContent } from "@/plugins";
 
 /** 素材库默认位于项目根目录，可通过参数覆盖（测试或自定义部署）。 */
@@ -321,10 +322,52 @@ export const readBiliGiftMedia = async (
     throw createBiliGiftIndexError(`Bilibili gift media file is too large: ${mediaPath}`);
   }
 
+  const data = await readFile(mediaPath);
   return {
     path: mediaPath,
     size: mediaFile.size,
-    base64: (await readFile(mediaPath)).toString("base64"),
+    data,
+    base64: data.toString("base64"),
+  };
+};
+
+export type BiliGiftMediaDelivery = Readonly<{
+  media: BiliGiftMedia;
+  base64: string;
+  /** 特效视频坏掉、改用礼物动图时带上原素材路径与原因，供调用方记日志。 */
+  fallback?: Readonly<{ relativePath: string; reason: string }>;
+}>;
+
+/**
+ * 读取准备发送的素材：特效视频结构损坏（QQ 会提示播放失败）时退回礼物动图。
+ * 视频和动图都读不出来时抛出 BiliGiftIndexError，由调用方提示管理员检查素材库。
+ */
+export const loadBiliGiftMediaForDelivery = async (
+  gift: BiliGift,
+  media: BiliGiftMedia,
+  directory = BILI_GIFT_RESOURCE_DIRECTORY,
+): Promise<BiliGiftMediaDelivery> => {
+  const loaded = await readBiliGiftMedia(media, directory);
+  if (media.kind !== "video") {
+    return { media, base64: loaded.base64 };
+  }
+
+  const inspection = inspectMp4Video(loaded.data);
+  if (inspection.playable) {
+    return { media, base64: loaded.base64 };
+  }
+
+  const animation = resolveBiliGiftMedia(gift, "animation");
+  if (!animation) {
+    throw createBiliGiftIndexError(
+      `Bilibili gift effect video is unplayable and no animation is available: ${media.relativePath} (${inspection.reason})`,
+    );
+  }
+  const fallback = await readBiliGiftMedia(animation, directory);
+  return {
+    media: animation,
+    base64: fallback.base64,
+    fallback: { relativePath: media.relativePath, reason: inspection.reason },
   };
 };
 

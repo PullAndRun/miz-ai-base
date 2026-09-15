@@ -5,7 +5,7 @@ import { isVideoSendTimeoutError } from "@/video-delivery";
 import {
   BILI_GIFT_MEDIA_SEND_TIMEOUT_MS,
   loadBiliGiftLibrary,
-  readBiliGiftMedia,
+  loadBiliGiftMediaForDelivery,
 } from "@/bili-gift";
 import {
   BILI_GIFT_LOTTERY_LEADERBOARD_SIZE,
@@ -294,9 +294,10 @@ export const handleBiliGiftLotteryCommand = async ({
     }
   };
 
-  let mediaBase64;
+  // 素材读不出来（或特效视频本身就是坏的）时退回名额，让 TA 还能再抽一次。
+  let delivery;
   try {
-    mediaBase64 = (await readBiliGiftMedia(media, options.directory)).base64;
+    delivery = await loadBiliGiftMediaForDelivery(draw.gift, media, options.directory);
   } catch (error) {
     logger.error("plugin", "bilibili gift lottery media unreadable", {
       relativePath: media.relativePath,
@@ -306,13 +307,20 @@ export const handleBiliGiftLotteryCommand = async ({
     await reply("抽到的礼物素材读不出来，请管理员检查 resource/bili-gift 是否完整。");
     return;
   }
+  if (delivery.fallback) {
+    logger.warn("plugin", "bilibili gift lottery effect video is unplayable", {
+      relativePath: delivery.fallback.relativePath,
+      reason: delivery.fallback.reason,
+      fallbackPath: delivery.media.relativePath,
+    });
+  }
 
   try {
     await replyForwardWithoutRetry(
       createBiliGiftLotteryForwardMessages(
         formatBiliGiftLotteryCard(draw, { totalCoins, winnerName }),
-        media,
-        `base64://${mediaBase64}`,
+        delivery.media,
+        `base64://${delivery.base64}`,
       ),
       {
         // 标题带中奖人，卡片预览里直接看出是谁抽的。

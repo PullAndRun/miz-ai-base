@@ -8,6 +8,7 @@ import {
   formatBiliGiftCard,
   formatBiliGiftPrice,
   loadBiliGiftLibrary,
+  loadBiliGiftMediaForDelivery,
   parseBiliGiftCommandArguments,
   readBiliGiftMedia,
   resolveBiliGiftMedia,
@@ -16,6 +17,7 @@ import {
 } from "@/bili-gift";
 import { handleBiliGiftCommand } from "@/bili-gift-command";
 import { createVtbPlugin } from "../plugins/vtb";
+import { createMp4VideoFixture } from "./support/mp4-fixture";
 
 type GiftForwardNode = string | Array<{ type: string; data: { file?: string } }>;
 
@@ -31,6 +33,9 @@ const createGift = (gift: Pick<BiliGift, "id" | "name"> & Partial<BiliGift>): Bi
   effectMp4: "",
   ...gift,
 });
+
+/** 结构自检能过的最小特效视频；坏素材用 createMp4VideoFixture({ chunkOffsetShift }) 现造。 */
+const effectVideo = createMp4VideoFixture();
 
 const spaceShip = createGift({
   id: 34998,
@@ -251,7 +256,8 @@ describe("Bilibili gift library", () => {
     directory = await mkdtemp(path.join(os.tmpdir(), "miz-gift-"));
     await mkdir(path.join(directory, "全屏特效/在用"), { recursive: true });
     await mkdir(path.join(directory, "礼物动图"), { recursive: true });
-    await writeFile(path.join(directory, "全屏特效/在用/34998_小电视飞船_2200.mp4"), "video-bytes");
+    await writeFile(path.join(directory, "全屏特效/在用/34998_小电视飞船_2200.mp4"), effectVideo);
+    await writeFile(path.join(directory, "礼物动图/34998_小电视飞船.gif"), "gif-bytes");
     await writeFile(path.join(directory, "礼物动图/30052_冰淇淋.gif"), "gif-bytes");
     await writeIndex({
       generated: "2026-09-14T00:00:00.000Z",
@@ -306,6 +312,36 @@ describe("Bilibili gift library", () => {
     expect(reloaded).not.toBe(first);
   });
 
+  test("falls back to the gift animation when the effect video cannot be played", async () => {
+    const gift = (await loadBiliGiftLibrary(directory)).find((entry) => entry.id === 34998)!;
+    await writeFile(
+      path.join(directory, gift.effectMp4),
+      createMp4VideoFixture({ chunkOffsetShift: -8 }),
+    );
+
+    await expect(loadBiliGiftMediaForDelivery(gift, resolveBiliGiftMedia(gift)!, directory)).resolves.toEqual({
+      media: { kind: "image", label: "礼物动图", relativePath: "礼物动图/34998_小电视飞船.gif" },
+      base64: Buffer.from("gif-bytes").toString("base64"),
+      fallback: {
+        relativePath: "全屏特效/在用/34998_小电视飞船_2200.mp4",
+        reason: "sample 0 is not a valid NAL unit chain",
+      },
+    });
+  });
+
+  test("rejects an unplayable effect video that has no animation", async () => {
+    const gift = createGift({
+      id: 777,
+      name: "损坏特效",
+      effectMp4: "全屏特效/在用/777_损坏特效_1.mp4",
+    });
+    await writeFile(path.join(directory, gift.effectMp4), createMp4VideoFixture({ chunkOffsetShift: -8 }));
+
+    await expect(
+      loadBiliGiftMediaForDelivery(gift, resolveBiliGiftMedia(gift, "effect")!, directory),
+    ).rejects.toMatchObject({ name: "BiliGiftIndexError" });
+  });
+
   test("reports a missing or malformed index", async () => {
     await rm(path.join(directory, "素材索引.json"), { force: true });
     await expect(loadBiliGiftLibrary(directory)).rejects.toMatchObject({
@@ -322,8 +358,9 @@ describe("Bilibili gift library", () => {
     const media = resolveBiliGiftMedia(spaceShip)!;
     const loaded = await readBiliGiftMedia(media, directory);
 
-    expect(loaded.size).toBe("video-bytes".length);
-    expect(Buffer.from(loaded.base64, "base64").toString()).toBe("video-bytes");
+    expect(loaded.size).toBe(effectVideo.byteLength);
+    expect(Buffer.from(loaded.base64, "base64")).toEqual(effectVideo);
+    expect(Buffer.from(loaded.data)).toEqual(effectVideo);
 
     await expect(readBiliGiftMedia({
       kind: "video",
@@ -386,8 +423,8 @@ describe("gift lookup command", () => {
     directory = await mkdtemp(path.join(os.tmpdir(), "miz-gift-plugin-"));
     await mkdir(path.join(directory, "全屏特效/在用"), { recursive: true });
     await mkdir(path.join(directory, "礼物动图"), { recursive: true });
-    await writeFile(path.join(directory, "全屏特效/在用/34998_小电视飞船_2200.mp4"), "video-bytes");
-    await writeFile(path.join(directory, "全屏特效/在用/33215_小电视飞船_1171.mp4"), "old-video-bytes");
+    await writeFile(path.join(directory, "全屏特效/在用/34998_小电视飞船_2200.mp4"), effectVideo);
+    await writeFile(path.join(directory, "全屏特效/在用/33215_小电视飞船_1171.mp4"), createMp4VideoFixture());
     await writeFile(path.join(directory, "礼物动图/34998_小电视飞船.gif"), "gif-bytes");
     await writeFile(path.join(directory, "礼物动图/30052_冰淇淋.gif"), "ice-gif-bytes");
     await writeFile(path.join(directory, "素材索引.json"), JSON.stringify({
@@ -441,7 +478,7 @@ describe("gift lookup command", () => {
     expect(card).toContain("· 展示素材：全屏特效");
     expect(mediaNode).toEqual([{
       type: "video",
-      data: { file: `base64://${Buffer.from("video-bytes").toString("base64")}` },
+      data: { file: `base64://${effectVideo.toString("base64")}` },
     }]);
     expect(options).toEqual({
       title: "🎁 小电视飞船",
@@ -449,6 +486,28 @@ describe("gift lookup command", () => {
       summary: "全屏特效 · 礼物 #34998",
       timeoutMs: 300_000,
     });
+  });
+
+  test("falls back to the gift animation when the effect video cannot be played", async () => {
+    await writeFile(
+      path.join(directory, "全屏特效/在用/34998_小电视飞船_2200.mp4"),
+      createMp4VideoFixture({ chunkOffsetShift: -8 }),
+    );
+    const entries = await runGiftCommand("小电视飞船");
+
+    const { card, mediaNode, options } = readForward();
+    expect(card).toContain("· 展示素材：礼物动图");
+    expect(mediaNode).toEqual([{
+      type: "image",
+      data: { file: `base64://${Buffer.from("gif-bytes").toString("base64")}` },
+    }]);
+    expect(options).toEqual({
+      title: "🎁 小电视飞船",
+      source: "miz 礼物",
+      summary: "礼物动图 · 礼物 #34998",
+      timeoutMs: 300_000,
+    });
+    expect(entries).toContain("warn:bilibili gift effect video is unplayable");
   });
 
   test("forwards the gift animation when the gift has no full-screen effect", async () => {

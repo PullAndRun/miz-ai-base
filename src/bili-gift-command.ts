@@ -12,8 +12,8 @@ import {
   formatBiliGiftCard,
   findBiliGift,
   loadBiliGiftLibrary,
+  loadBiliGiftMediaForDelivery,
   parseBiliGiftCommandArguments,
-  readBiliGiftMedia,
   resolveBiliGiftMedia,
   suggestBiliGiftNames,
 } from "@/bili-gift";
@@ -90,9 +90,10 @@ export const handleBiliGiftCommand = async ({
     return;
   }
 
-  let mediaBase64;
+  // 特效视频坏了就退回礼物动图，免得发一条 QQ 播不出来的视频。
+  let delivery;
   try {
-    mediaBase64 = (await readBiliGiftMedia(media, options.directory)).base64;
+    delivery = await loadBiliGiftMediaForDelivery(match.gift, media, options.directory);
   } catch (error) {
     logger.error("plugin", "bilibili gift media unreadable", {
       relativePath: media.relativePath,
@@ -101,18 +102,25 @@ export const handleBiliGiftCommand = async ({
     await reply("这份礼物的素材文件读不出来，请管理员检查 resource/bili-gift 是否完整。");
     return;
   }
+  if (delivery.fallback) {
+    logger.warn("plugin", "bilibili gift effect video is unplayable", {
+      relativePath: delivery.fallback.relativePath,
+      reason: delivery.fallback.reason,
+      fallbackPath: delivery.media.relativePath,
+    });
+  }
 
   try {
     await replyForwardWithoutRetry(
       createBiliGiftForwardMessage(
-        formatBiliGiftCard(match, media),
-        media,
-        `base64://${mediaBase64}`,
+        formatBiliGiftCard(match, delivery.media),
+        delivery.media,
+        `base64://${delivery.base64}`,
       ),
       {
         title: `🎁 ${match.gift.name}`,
         source: `${commandPrefix} 礼物`,
-        summary: `${media.label} · 礼物 #${match.gift.id}`,
+        summary: `${delivery.media.label} · 礼物 #${match.gift.id}`,
         timeoutMs: BILI_GIFT_MEDIA_SEND_TIMEOUT_MS,
       },
     );

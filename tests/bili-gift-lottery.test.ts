@@ -20,6 +20,7 @@ import lotteryPlugin, {
   handleBiliGiftLotteryCommand,
   parseBiliGiftLotteryArguments,
 } from "../plugins/lottery";
+import { createMp4VideoFixture, createNalSample } from "./support/mp4-fixture";
 
 type GameForwardNode = string | Array<{ type: string; data: { file?: string } }>;
 
@@ -35,6 +36,10 @@ const createGift = (gift: Pick<BiliGift, "id" | "name"> & Partial<BiliGift>): Bi
   effectMp4: "",
   ...gift,
 });
+
+/** 每个礼物的特效视频内容不同，方便断言发出的是抽中礼物的素材。 */
+const createEffectVideo = (giftId: number) =>
+  createMp4VideoFixture({ samples: [createNalSample(0x65, 8 + (giftId % 16))] });
 
 const freeGift = createGift({
   id: 1,
@@ -472,7 +477,7 @@ describe("lottery plugin", () => {
     for (const gift of gifts) {
       await writeFile(path.join(directory, gift.gif), `gif-${gift.id}`);
       if (gift.effectMp4) {
-        await writeFile(path.join(directory, gift.effectMp4), `bytes-${gift.id}`);
+        await writeFile(path.join(directory, gift.effectMp4), createEffectVideo(gift.id));
       }
     }
     await writeFile(path.join(directory, "素材索引.json"), JSON.stringify({
@@ -513,7 +518,7 @@ describe("lottery plugin", () => {
     expect(card).toContain("💰 获得 10000 迷币 · 累计 10000");
     expect(mediaNode).toEqual([{
       type: "video",
-      data: { file: `base64://${Buffer.from("bytes-5").toString("base64")}` },
+      data: { file: `base64://${createEffectVideo(5).toString("base64")}` },
     }]);
     expect(forward!.options).toEqual({
       title: "👑👑👑👑👑 神话 · 为你摘星",
@@ -527,6 +532,26 @@ describe("lottery plugin", () => {
       coins: 10_000,
     });
     expect(balances.get("100:1")).toBe(10_000);
+  });
+
+  test("falls back to the gift animation when the effect video cannot be played", async () => {
+    const { store } = createMemoryStore();
+    await writeFile(
+      path.join(directory, "全屏特效/在用/5_为你摘星_14.mp4"),
+      createMp4VideoFixture({ chunkOffsetShift: -8 }),
+    );
+    const entries = await runLottery("", {
+      random: createSequenceRandom([0.95, 0]),
+      now: new Date(2026, 8, 14, 10, 0),
+      store,
+    });
+
+    const mediaNode = forwards[0]!.messages[1] as Array<{ type: string; data: { file?: string } }>;
+    expect(mediaNode).toEqual([{
+      type: "image",
+      data: { file: `base64://${Buffer.from("gif-5").toString("base64")}` },
+    }]);
+    expect(entries).toContain("warn:bilibili gift lottery effect video is unplayable");
   });
 
   test("announces the winner nickname in the draw result", async () => {
