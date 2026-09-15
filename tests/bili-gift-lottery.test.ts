@@ -224,8 +224,9 @@ describe("Bilibili gift lottery", () => {
   test("picks the tier with the rolled probability band", () => {
     const draw = (roll: number) => drawBiliGiftLottery(gifts, { random: createSequenceRandom([roll, 0]) })!;
 
-    expect(draw(0).rarity.label).toBe("普通");
-    expect(draw(0.29).rarity.label).toBe("普通");
+    // 免费礼物被剔除后，原普通档的概率段顺延到稀有档。
+    expect(draw(0).rarity.label).toBe("稀有");
+    expect(draw(0.29).rarity.label).toBe("稀有");
     expect(draw(0.31).rarity.label).toBe("稀有");
     expect(draw(0.61).rarity.label).toBe("史诗");
     expect(draw(0.83).rarity.label).toBe("传说");
@@ -265,7 +266,7 @@ describe("Bilibili gift lottery", () => {
   test("converts gift value into mi coins", () => {
     expect(getBiliGiftLotteryCoins(mythicGift)).toBe(10_000);
     expect(getBiliGiftLotteryCoins(rareGift)).toBe(100);
-    // 免费礼物也有保底迷币。
+    // 直接换算免费礼物时仍有保底；抽奖池会剔除它们。
     expect(getBiliGiftLotteryCoins(freeGift)).toBe(1);
   });
 
@@ -299,13 +300,34 @@ describe("Bilibili gift lottery", () => {
       .toContain("你抽到了「为你摘星」");
   });
 
-  test("gives free gifts the minimum coins", () => {
-    const draw = drawBiliGiftLottery([freeGift], { random: createSequenceRandom([0, 0]) })!;
-    const card = formatBiliGiftLotteryCard(draw, { totalCoins: 1 });
+  test("excludes free and zero-price gifts from the lottery pool", () => {
+    const zeroPriceGift = createGift({
+      id: 8,
+      name: "零价礼物",
+      price: 0,
+      coinType: "gold",
+    });
 
-    expect(card).toContain("🌱 普通！");
-    expect(card).toContain("💰 获得 1 迷币 · 累计 1");
-    expect(card).not.toContain("电池");
+    expect(drawBiliGiftLottery([freeGift, zeroPriceGift], {
+      random: createSequenceRandom([0, 0]),
+    })).toBeUndefined();
+    // 直接换算仍保留保底，但抽奖池不会包含免费或 0 价格礼物。
+    expect(getBiliGiftLotteryCoins(freeGift)).toBe(1);
+  });
+
+  test("keeps paid gifts with a positive battery value", () => {
+    const paidGift = createGift({
+      id: 9,
+      name: "一电池礼物",
+      price: 100,
+      coinType: "gold",
+    });
+    const draw = drawBiliGiftLottery([paidGift], { random: createSequenceRandom([0, 0]) })!;
+
+    expect(draw.gift.name).toBe("一电池礼物");
+    expect(draw.rarity.label).toBe("稀有");
+    expect(draw.batteryValue).toBe(1);
+    expect(draw.coins).toBe(1);
   });
 
   test("describes the mini game, the leaderboard and the daily limit", () => {
@@ -315,6 +337,7 @@ describe("Bilibili gift lottery", () => {
     expect(lotteryPlugin.description).toContain("miz 抽奖 榜单");
     expect(lotteryPlugin.description).toContain("每个群每人每天只能抽一次");
     expect(lotteryPlugin.description).toContain("迷币");
+    expect(lotteryPlugin.description).toContain("免费礼物不参与");
   });
 
   test("accepts the English command arguments", () => {

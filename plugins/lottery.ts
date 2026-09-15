@@ -60,7 +60,7 @@ export const createBiliGiftLotteryUsage = (commandPrefix: string) => [
   "🎰 迷子的小游戏，每天可以抽一次：",
   `用法：${commandPrefix} 抽奖`,
   `看榜：${commandPrefix} 抽奖 榜单`,
-  "从 B 站直播礼物里随机抽一款，抽中什么全看运气～",
+  "从 B 站直播付费礼物里随机抽一款，抽中什么全看运气～",
 ].join("\n");
 
 /** 抽奖参数：空是抽一次，「榜单」或 leaderboard 是看迷币榜。 */
@@ -239,7 +239,7 @@ export const handleBiliGiftLotteryCommand = async ({
   const media = draw?.media;
   if (!draw || !media) {
     logger.error("plugin", "bilibili gift lottery has nothing to show");
-    await reply("这次没抽到能展示的礼物，稍后再试一次吧。");
+    await reply("这次没抽到能展示的付费礼物，稍后再试一次吧。");
     return;
   }
 
@@ -355,10 +355,10 @@ const lotteryPlugin: MizPlugin = {
   name: "lottery",
   commands: ["lottery", "抽奖"],
   description: [
-    "迷子的小游戏：从 B 站直播礼物里抽一款，连展示效果一起发出来。",
+    "迷子的小游戏：从 B 站直播付费礼物里抽一款，连展示效果一起发出来。",
     "用法：miz 抽奖，看榜：miz 抽奖 榜单",
     "每个群每人每天只能抽一次，抽到的礼物按价值折算成迷币，入账到抽奖人头上。",
-    "礼物按价值分五档：🌱 普通 / ⭐ 稀有 / ✨ 史诗 / 💎 传说 / 👑 神话，越贵越难抽到。",
+    "礼物按价值分四档：⭐ 稀有 / ✨ 史诗 / 💎 传说 / 👑 神话，越贵越难抽到；免费礼物不参与。",
   ].join("\n"),
   async handle({
     command,

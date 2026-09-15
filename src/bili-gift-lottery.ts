@@ -20,7 +20,7 @@ export type BiliGiftRarity = Readonly<{
   flavor: string;
 }>;
 
-/** 稀有度按礼物价值分档：免费礼物是普通，越贵越稀有。 */
+/** 稀有度按礼物价值分档：免费礼物会归为普通，但抽奖池会剔除它们，越贵越稀有。 */
 export const BILI_GIFT_RARITIES: readonly BiliGiftRarity[] = [
   {
     key: "common",
@@ -92,8 +92,8 @@ export type BiliGiftLotteryDraw = Readonly<{
   rarity: BiliGiftRarity;
   /** 展示效果素材；理论上每个礼物都有动图，取不到时为 undefined。 */
   media: BiliGiftMedia | undefined;
-  /** 同名礼物多个版本中的最高电池价值；免费礼物为 undefined。 */
-  batteryValue: number | undefined;
+  /** 抽中礼物的电池价值；免费和 0 电池礼物不会进入奖池，因此始终大于 0。 */
+  batteryValue: number;
   /** 本次获得的迷币，按 batteryValue 折算。 */
   coins: number;
 }>;
@@ -111,7 +111,7 @@ const pickRandom = <T>(items: readonly T[], random: () => number): T | undefined
   return items[index];
 };
 
-/** 免费礼物也有保底迷币，抽奖不会空手而归。 */
+/** 直接换算免费礼物时的保底迷币；抽奖池会剔除免费和 0 电池礼物。 */
 export const BILI_GIFT_LOTTERY_MIN_COINS = 1;
 
 const getBiliGiftLotteryCoinsForBatteryValue = (batteries: number | undefined) =>
@@ -121,14 +121,14 @@ const getBiliGiftLotteryCoinsForBatteryValue = (batteries: number | undefined) =
 
 type BiliGiftLotteryCandidate = Readonly<{
   gift: BiliGift;
-  batteryValue: number | undefined;
+  batteryValue: number;
   rarity: BiliGiftRarity;
   coins: number;
 }>;
 
 const createBiliGiftLotteryCandidate = (
   gifts: readonly BiliGift[],
-): BiliGiftLotteryCandidate => {
+): BiliGiftLotteryCandidate | undefined => {
   // 同名礼物展示最新版本，但计价取所有版本中的最高电池价值。
   const gift = gifts[0]!;
   const batteryValue = gifts.reduce<number | undefined>((highest, version) => {
@@ -136,6 +136,10 @@ const createBiliGiftLotteryCandidate = (
     if (batteries === undefined) return highest;
     return highest === undefined || batteries > highest ? batteries : highest;
   }, undefined);
+  // 免费、0 价格等没有正电池价值的礼物不进入抽奖池。
+  if (batteryValue === undefined || batteryValue <= 0) {
+    return undefined;
+  }
   return {
     gift,
     batteryValue,
@@ -157,15 +161,16 @@ const toBiliGiftLotteryDraw = (
 /**
  * 抽一款礼物：先按稀有度概率决定档位，再在该档位里随机取一款。
  * 同名礼物只保留 ID 最大的一版展示，计价取同名版本中的最高电池价值。
+ * 免费和实际价值 0 电池的礼物不会进入奖池。
  */
 export const drawBiliGiftLottery = (
   gifts: readonly BiliGift[],
   options: BiliGiftLotteryOptions = {},
 ): BiliGiftLotteryDraw | undefined => {
   const random = options.random ?? Math.random;
-  const pool = groupBiliGiftsByName(gifts).map((group) =>
-    createBiliGiftLotteryCandidate(group.gifts),
-  );
+  const pool = groupBiliGiftsByName(gifts)
+    .map((group) => createBiliGiftLotteryCandidate(group.gifts))
+    .filter((candidate): candidate is BiliGiftLotteryCandidate => candidate !== undefined);
   const roll = random();
   let cursor = 0;
 
@@ -185,7 +190,7 @@ export const drawBiliGiftLottery = (
   return candidate ? toBiliGiftLotteryDraw(candidate) : undefined;
 };
 
-/** 迷币：按礼物的电池价值折算，免费礼物保底 1 迷币。 */
+/** 迷币：按礼物的电池价值折算；直接传免费礼物时保底 1 迷币，但抽奖池不会包含它们。 */
 export const getBiliGiftLotteryCoins = (gift: BiliGift) =>
   getBiliGiftLotteryCoinsForBatteryValue(getBiliGiftBatteryValue(gift));
 
