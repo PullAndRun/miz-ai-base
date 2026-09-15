@@ -243,7 +243,7 @@ export const handleBiliGiftLotteryCommand = async ({
     return;
   }
 
-  // draw 已按同名版本的最高电池价值算好迷币，直接采用以免最新免费版把付费礼物压成保底。
+  // draw 已按明码标价和同名最高电池价值算好迷币，直接采用以免最新免费版把付费礼物算成 0/1。
   const coins = draw.coins;
 
   // 先占住这个人今天在本群的名额，避免两条消息同时抽两次。
@@ -359,6 +359,7 @@ const lotteryPlugin: MizPlugin = {
     "用法：miz 抽奖，看榜：miz 抽奖 榜单",
     "每个群每人每天只能抽一次，抽到的礼物按价值折算成迷币，入账到抽奖人头上。",
     "礼物按价值分四档：⭐ 稀有 / ✨ 史诗 / 💎 传说 / 👑 神话，越贵越难抽到；免费礼物不参与。",
+    "1 迷币只对应 B 站明码标价 1 电池的礼物，不会作为其他价格的兜底。",
   ].join("\n"),
   async handle({
     command,

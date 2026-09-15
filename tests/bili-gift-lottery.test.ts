@@ -266,8 +266,8 @@ describe("Bilibili gift lottery", () => {
   test("converts gift value into mi coins", () => {
     expect(getBiliGiftLotteryCoins(mythicGift)).toBe(10_000);
     expect(getBiliGiftLotteryCoins(rareGift)).toBe(100);
-    // 直接换算免费礼物时仍有保底；抽奖池会剔除它们。
-    expect(getBiliGiftLotteryCoins(freeGift)).toBe(1);
+    // 免费礼物没有明码标价，不再用 1 迷币兜底。
+    expect(getBiliGiftLotteryCoins(freeGift)).toBe(0);
   });
 
   test("writes a game-style reveal card instead of a gift data card", () => {
@@ -311,11 +311,11 @@ describe("Bilibili gift lottery", () => {
     expect(drawBiliGiftLottery([freeGift, zeroPriceGift], {
       random: createSequenceRandom([0, 0]),
     })).toBeUndefined();
-    // 直接换算仍保留保底，但抽奖池不会包含免费或 0 价格礼物。
-    expect(getBiliGiftLotteryCoins(freeGift)).toBe(1);
+    // 免费或 0 价格礼物不折算成保底迷币，也不进入抽奖池。
+    expect(getBiliGiftLotteryCoins(freeGift)).toBe(0);
   });
 
-  test("keeps paid gifts with a positive battery value", () => {
+  test("keeps gifts explicitly priced at exactly one battery", () => {
     const paidGift = createGift({
       id: 9,
       name: "一电池礼物",
@@ -330,6 +330,27 @@ describe("Bilibili gift lottery", () => {
     expect(draw.coins).toBe(1);
   });
 
+  test("does not use 1 coin as a fallback for non-exact prices", () => {
+    const belowOneBattery = createGift({
+      id: 10,
+      name: "低于一电池",
+      price: 40,
+      coinType: "gold",
+    });
+    const roundsToOne = createGift({
+      id: 11,
+      name: "近似一电池",
+      price: 140,
+      coinType: "gold",
+    });
+
+    expect(getBiliGiftLotteryCoins(belowOneBattery)).toBe(0);
+    expect(getBiliGiftLotteryCoins(roundsToOne)).toBe(0);
+    expect(drawBiliGiftLottery([belowOneBattery, roundsToOne], {
+      random: createSequenceRandom([0, 0]),
+    })).toBeUndefined();
+  });
+
   test("describes the mini game, the leaderboard and the daily limit", () => {
     expect(lotteryPlugin.name).toBe("lottery");
     expect(lotteryPlugin.commands).toEqual(["lottery", "抽奖"]);
@@ -338,6 +359,7 @@ describe("Bilibili gift lottery", () => {
     expect(lotteryPlugin.description).toContain("每个群每人每天只能抽一次");
     expect(lotteryPlugin.description).toContain("迷币");
     expect(lotteryPlugin.description).toContain("免费礼物不参与");
+    expect(lotteryPlugin.description).toContain("1 电池");
   });
 
   test("accepts the English command arguments", () => {

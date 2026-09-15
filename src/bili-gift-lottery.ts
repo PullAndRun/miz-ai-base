@@ -111,13 +111,24 @@ const pickRandom = <T>(items: readonly T[], random: () => number): T | undefined
   return items[index];
 };
 
-/** 直接换算免费礼物时的保底迷币；抽奖池会剔除免费和 0 电池礼物。 */
-export const BILI_GIFT_LOTTERY_MIN_COINS = 1;
-
-const getBiliGiftLotteryCoinsForBatteryValue = (batteries: number | undefined) =>
-  batteries === undefined
-    ? BILI_GIFT_LOTTERY_MIN_COINS
-    : Math.max(BILI_GIFT_LOTTERY_MIN_COINS, Math.round(batteries));
+/**
+ * 迷币只按 B 站明码标价的电池价值折算。
+ * 免费、0 价格、低于 1 电池，以及会四舍五入成 1 但不是恰好 1 电池的价格，都返回 0。
+ */
+const getBiliGiftLotteryCoinsForBatteryValue = (batteries: number | undefined) => {
+  if (batteries === undefined || !Number.isFinite(batteries) || batteries <= 0) {
+    return 0;
+  }
+  const coins = Math.round(batteries);
+  if (coins < 1) {
+    return 0;
+  }
+  // 1 迷币必须是 B 站明码标价的 1 电池礼物，不能由 0.5~1.49 电池的近似价格兜底。
+  if (coins === 1 && batteries !== 1) {
+    return 0;
+  }
+  return coins;
+};
 
 type BiliGiftLotteryCandidate = Readonly<{
   gift: BiliGift;
@@ -140,11 +151,16 @@ const createBiliGiftLotteryCandidate = (
   if (batteryValue === undefined || batteryValue <= 0) {
     return undefined;
   }
+  const coins = getBiliGiftLotteryCoinsForBatteryValue(batteryValue);
+  // 1 迷币只给恰好标价 1 电池的礼物，不能用保底兜底。
+  if (coins < 1) {
+    return undefined;
+  }
   return {
     gift,
     batteryValue,
     rarity: getBiliGiftRarityForBatteryValue(batteryValue),
-    coins: getBiliGiftLotteryCoinsForBatteryValue(batteryValue),
+    coins,
   };
 };
 
@@ -161,7 +177,8 @@ const toBiliGiftLotteryDraw = (
 /**
  * 抽一款礼物：先按稀有度概率决定档位，再在该档位里随机取一款。
  * 同名礼物只保留 ID 最大的一版展示，计价取同名版本中的最高电池价值。
- * 免费和实际价值 0 电池的礼物不会进入奖池。
+ * 免费、0 价格和不能按明码标价合法折算的礼物不会进入奖池。
+ * 1 迷币只对应恰好标价 1 电池的礼物。
  */
 export const drawBiliGiftLottery = (
   gifts: readonly BiliGift[],
@@ -190,7 +207,7 @@ export const drawBiliGiftLottery = (
   return candidate ? toBiliGiftLotteryDraw(candidate) : undefined;
 };
 
-/** 迷币：按礼物的电池价值折算；直接传免费礼物时保底 1 迷币，但抽奖池不会包含它们。 */
+/** 迷币：只有 B 站明码标价的电池价值才折算；免费、0 价格或不能合法折算时返回 0。 */
 export const getBiliGiftLotteryCoins = (gift: BiliGift) =>
   getBiliGiftLotteryCoinsForBatteryValue(getBiliGiftBatteryValue(gift));
 
