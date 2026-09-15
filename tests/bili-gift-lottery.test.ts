@@ -103,6 +103,28 @@ const sameNameGifts: readonly BiliGift[] = [
   }),
 ];
 
+/** 同名礼物的免费新版与付费旧版，用来验证计价取最高电池价值。 */
+const sameNameValueGifts: readonly BiliGift[] = [
+  createGift({
+    id: 35_541,
+    name: "bilibili星跃",
+    price: 1_000_000,
+    coinType: "gold",
+    effectId: 5_494,
+    gif: "礼物动图/35541_bilibili星跃.gif",
+    effectMp4: "全屏特效/在用/35541_bilibili星跃_5494.mp4",
+  }),
+  createGift({
+    id: 35_659,
+    name: "bilibili星跃",
+    price: 0,
+    coinType: "silver",
+    effectId: 5_780,
+    gif: "礼物动图/35659_bilibili星跃.gif",
+    effectMp4: "全屏特效/在用/35659_bilibili星跃_5780.mp4",
+  }),
+];
+
 const gifts: readonly BiliGift[] = [
   freeGift,
   rareGift,
@@ -218,6 +240,22 @@ describe("Bilibili gift lottery", () => {
     expect(draw.gift.name).toBe("小电视飞船");
     expect(draw.gift.id).toBe(34_998);
     expect(draw.media?.relativePath).toBe("全屏特效/在用/34998_小电视飞船_2200.mp4");
+  });
+
+  test("values same-name gifts by the highest battery value", () => {
+    const draw = drawBiliGiftLottery(
+      sameNameValueGifts,
+      { random: createSequenceRandom([0.99, 0]) },
+    )!;
+
+    // 最新版仍是 0 价格的 silver 版本，用于展示；计价使用旧版 gold 的 10000 电池。
+    expect(draw.gift.id).toBe(35_659);
+    expect(draw.media?.relativePath).toBe("全屏特效/在用/35659_bilibili星跃_5780.mp4");
+    expect(draw.rarity.label).toBe("神话");
+    expect(draw.batteryValue).toBe(10_000);
+    expect(draw.coins).toBe(10_000);
+    expect(formatBiliGiftLotteryCard(draw, { totalCoins: 10_000 }))
+      .toContain("💰 获得 10000 迷币 · 累计 10000");
   });
 
   test("returns no draw for an empty library", () => {

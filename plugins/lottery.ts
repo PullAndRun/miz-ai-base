@@ -14,7 +14,6 @@ import {
   drawBiliGiftLottery,
   formatBiliGiftLotteryCard,
   formatBiliGiftLotteryStars,
-  getBiliGiftLotteryCoins,
 } from "@/bili-gift-lottery";
 import {
   formatGiftLotteryDrawDate,
@@ -244,7 +243,8 @@ export const handleBiliGiftLotteryCommand = async ({
     return;
   }
 
-  const coins = getBiliGiftLotteryCoins(draw.gift);
+  // draw 已按同名版本的最高电池价值算好迷币，直接采用以免最新免费版把付费礼物压成保底。
+  const coins = draw.coins;
 
   // 先占住这个人今天在本群的名额，避免两条消息同时抽两次。
   let claimed = false;

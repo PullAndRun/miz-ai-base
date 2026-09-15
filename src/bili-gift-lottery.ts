@@ -74,14 +74,16 @@ const epicRarity = BILI_GIFT_RARITIES[2]!;
 const legendaryRarity = BILI_GIFT_RARITIES[3]!;
 const mythicRarity = BILI_GIFT_RARITIES[4]!;
 
-export const getBiliGiftRarity = (gift: BiliGift): BiliGiftRarity => {
-  const batteries = getBiliGiftBatteryValue(gift);
+const getBiliGiftRarityForBatteryValue = (batteries: number | undefined): BiliGiftRarity => {
   if (batteries === undefined) return commonRarity;
   if (batteries >= MYTHIC_MIN_BATTERIES) return mythicRarity;
   if (batteries >= LEGENDARY_MIN_BATTERIES) return legendaryRarity;
   if (batteries >= EPIC_MIN_BATTERIES) return epicRarity;
   return rareRarity;
 };
+
+export const getBiliGiftRarity = (gift: BiliGift): BiliGiftRarity =>
+  getBiliGiftRarityForBatteryValue(getBiliGiftBatteryValue(gift));
 
 export const BILI_GIFT_LOTTERY_TITLE = "🎰 迷子的礼物抽奖";
 
@@ -90,6 +92,10 @@ export type BiliGiftLotteryDraw = Readonly<{
   rarity: BiliGiftRarity;
   /** 展示效果素材；理论上每个礼物都有动图，取不到时为 undefined。 */
   media: BiliGiftMedia | undefined;
+  /** 同名礼物多个版本中的最高电池价值；免费礼物为 undefined。 */
+  batteryValue: number | undefined;
+  /** 本次获得的迷币，按 batteryValue 折算。 */
+  coins: number;
 }>;
 
 export type BiliGiftLotteryOptions = Readonly<{
@@ -105,45 +111,83 @@ const pickRandom = <T>(items: readonly T[], random: () => number): T | undefined
   return items[index];
 };
 
+/** 免费礼物也有保底迷币，抽奖不会空手而归。 */
+export const BILI_GIFT_LOTTERY_MIN_COINS = 1;
+
+const getBiliGiftLotteryCoinsForBatteryValue = (batteries: number | undefined) =>
+  batteries === undefined
+    ? BILI_GIFT_LOTTERY_MIN_COINS
+    : Math.max(BILI_GIFT_LOTTERY_MIN_COINS, Math.round(batteries));
+
+type BiliGiftLotteryCandidate = Readonly<{
+  gift: BiliGift;
+  batteryValue: number | undefined;
+  rarity: BiliGiftRarity;
+  coins: number;
+}>;
+
+const createBiliGiftLotteryCandidate = (
+  gifts: readonly BiliGift[],
+): BiliGiftLotteryCandidate => {
+  // 同名礼物展示最新版本，但计价取所有版本中的最高电池价值。
+  const gift = gifts[0]!;
+  const batteryValue = gifts.reduce<number | undefined>((highest, version) => {
+    const batteries = getBiliGiftBatteryValue(version);
+    if (batteries === undefined) return highest;
+    return highest === undefined || batteries > highest ? batteries : highest;
+  }, undefined);
+  return {
+    gift,
+    batteryValue,
+    rarity: getBiliGiftRarityForBatteryValue(batteryValue),
+    coins: getBiliGiftLotteryCoinsForBatteryValue(batteryValue),
+  };
+};
+
+const toBiliGiftLotteryDraw = (
+  candidate: BiliGiftLotteryCandidate,
+): BiliGiftLotteryDraw => ({
+  gift: candidate.gift,
+  rarity: candidate.rarity,
+  media: resolveBiliGiftMedia(candidate.gift),
+  batteryValue: candidate.batteryValue,
+  coins: candidate.coins,
+});
+
 /**
  * 抽一款礼物：先按稀有度概率决定档位，再在该档位里随机取一款。
- * 同名礼物只保留 ID 最大的一版。
+ * 同名礼物只保留 ID 最大的一版展示，计价取同名版本中的最高电池价值。
  */
 export const drawBiliGiftLottery = (
   gifts: readonly BiliGift[],
   options: BiliGiftLotteryOptions = {},
 ): BiliGiftLotteryDraw | undefined => {
   const random = options.random ?? Math.random;
-  const pool = groupBiliGiftsByName(gifts).map((group) => group.gifts[0]!);
+  const pool = groupBiliGiftsByName(gifts).map((group) =>
+    createBiliGiftLotteryCandidate(group.gifts),
+  );
   const roll = random();
   let cursor = 0;
 
   for (const rarity of BILI_GIFT_RARITIES) {
     cursor += rarity.probability;
     if (roll < cursor) {
-      const candidates = pool.filter((gift) => getBiliGiftRarity(gift).key === rarity.key);
-      const gift = pickRandom(candidates, random);
-      if (gift) {
-        return { gift, rarity: getBiliGiftRarity(gift), media: resolveBiliGiftMedia(gift) };
+      const candidates = pool.filter((candidate) => candidate.rarity.key === rarity.key);
+      const candidate = pickRandom(candidates, random);
+      if (candidate) {
+        return toBiliGiftLotteryDraw(candidate);
       }
     }
   }
 
   // 随机数落在边界或对应档位暂时没货时，整池兜底。
-  const gift = pickRandom(pool, random);
-  return gift ? { gift, rarity: getBiliGiftRarity(gift), media: resolveBiliGiftMedia(gift) } : undefined;
+  const candidate = pickRandom(pool, random);
+  return candidate ? toBiliGiftLotteryDraw(candidate) : undefined;
 };
-
-/** 免费礼物也有保底迷币，抽奖不会空手而归。 */
-export const BILI_GIFT_LOTTERY_MIN_COINS = 1;
 
 /** 迷币：按礼物的电池价值折算，免费礼物保底 1 迷币。 */
-export const getBiliGiftLotteryCoins = (gift: BiliGift) => {
-  const batteries = getBiliGiftBatteryValue(gift);
-  return batteries === undefined
-    ? BILI_GIFT_LOTTERY_MIN_COINS
-    : Math.max(BILI_GIFT_LOTTERY_MIN_COINS, Math.round(batteries));
-};
+export const getBiliGiftLotteryCoins = (gift: BiliGift) =>
+  getBiliGiftLotteryCoinsForBatteryValue(getBiliGiftBatteryValue(gift));
 
 /** 稀有度星级：emoji 个数就是档位。 */
 export const formatBiliGiftLotteryStars = (rarity: BiliGiftRarity) =>
@@ -154,8 +198,8 @@ export const formatBiliGiftLotteryReveal = (rarity: BiliGiftRarity) =>
   `${formatBiliGiftLotteryStars(rarity)}！`;
 
 /** 奖品行：这次拿到多少迷币，以及在这个群累计多少。 */
-export const formatBiliGiftLotteryPrizeLine = (gift: BiliGift, totalCoins: number) =>
-  `💰 获得 ${getBiliGiftLotteryCoins(gift)} 迷币 · 累计 ${totalCoins}`;
+export const formatBiliGiftLotteryPrizeLine = (coins: number, totalCoins: number) =>
+  `💰 获得 ${coins} 迷币 · 累计 ${totalCoins}`;
 
 export type BiliGiftLotteryCardOptions = Readonly<{
   /** 抽奖人这个群的迷币总量（已包含本次获得）。 */
@@ -178,7 +222,7 @@ export const formatBiliGiftLotteryCard = (
     formatBiliGiftLotteryReveal(rarity),
     winner ? `抽到了「${gift.name}」` : `你抽到了「${gift.name}」`,
     "",
-    formatBiliGiftLotteryPrizeLine(gift, options.totalCoins),
+    formatBiliGiftLotteryPrizeLine(draw.coins, options.totalCoins),
     `🎉 ${rarity.flavor}`,
   ].join("\n");
 };
