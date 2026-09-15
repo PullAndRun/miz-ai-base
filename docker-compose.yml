@@ -7,10 +7,7 @@ services:
     working_dir: /app
     environment:
       TZ: Asia/Shanghai
-    command: >-
-      sh -c 'test ! -f tools/yt-dlp || chmod +x tools/yt-dlp;
-      test ! -f tools/ffmpeg || chmod +x tools/ffmpeg;
-      bun install --production && bun run start:docker'
+    command: ["bun", "run", "scripts/start-docker.ts"]
     volumes:
       - .:/app
     networks:
