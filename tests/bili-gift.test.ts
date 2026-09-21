@@ -484,7 +484,7 @@ describe("gift lookup command", () => {
       title: "🎁 小电视飞船",
       source: "miz 礼物",
       summary: "全屏特效 · 礼物 #34998",
-      timeoutMs: 300_000,
+      timeoutMs: 900_000,
     });
   });
 
@@ -505,7 +505,7 @@ describe("gift lookup command", () => {
       title: "🎁 小电视飞船",
       source: "miz 礼物",
       summary: "礼物动图 · 礼物 #34998",
-      timeoutMs: 300_000,
+      timeoutMs: 900_000,
     });
     expect(entries).toContain("warn:bilibili gift effect video is unplayable");
   });

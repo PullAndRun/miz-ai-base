@@ -6,6 +6,7 @@ import {
   pickGroupMemberDisplayName,
   getSelfSentGroupMessage,
   getRecallHistoryTimeoutMs,
+  resolveNapLinkApiTimeoutMs,
   getGroupSendPermission,
   isGroupAtAllAvailable,
   isGroupMessageUnavailableError,
@@ -15,6 +16,12 @@ import {
 
 test("gateway reconnect attempts are unlimited", () => {
   expect(NAPLINK_RECONNECT_MAX_ATTEMPTS).toBe(Number.POSITIVE_INFINITY);
+});
+
+test("keeps the gateway stale-request window wider than a gift media send", () => {
+  // 30 秒的配置会让网关 60 秒就丢弃挂起请求，礼物特效视频根本发不出去。
+  expect(resolveNapLinkApiTimeoutMs(30_000)).toBe(510_000);
+  expect(resolveNapLinkApiTimeoutMs(600_000)).toBe(600_000);
 });
 
 test("recall history lookup always has a short timeout", () => {

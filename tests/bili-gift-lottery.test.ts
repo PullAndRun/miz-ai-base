@@ -524,7 +524,7 @@ describe("lottery plugin", () => {
       title: "👑👑👑👑👑 神话 · 为你摘星",
       source: "miz 抽奖",
       summary: "👑👑👑👑👑 神话 · +10000 迷币",
-      timeoutMs: 300_000,
+      timeoutMs: 900_000,
     });
     expect(records.get("100:1:2026-09-14")).toEqual({
       giftId: 5,
@@ -573,7 +573,7 @@ describe("lottery plugin", () => {
       title: "爱的战士 抽到了「为你摘星」",
       source: "miz 抽奖",
       summary: "👑👑👑👑👑 神话 · +10000 迷币",
-      timeoutMs: 300_000,
+      timeoutMs: 900_000,
     });
   });
 

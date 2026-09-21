@@ -7,7 +7,13 @@ import type { ForwardMessageContent } from "@/plugins";
 /** 素材库默认位于项目根目录，可通过参数覆盖（测试或自定义部署）。 */
 export const BILI_GIFT_RESOURCE_DIRECTORY = "resource/bili-gift";
 export const BILI_GIFT_INDEX_FILE = "素材索引.json";
-export const BILI_GIFT_MEDIA_SEND_TIMEOUT_MS = 5 * 60_000;
+/**
+ * 素材（尤其是全屏特效视频）发送的等待上限：几 MB 的特效上传常常要几十秒，
+ * 等太短会把正常发送判成超时，而发送真失败的情况很少，所以给足余量。
+ * 注意 NapLink 会丢弃挂起超过 2 × naplink.apiTimeoutMs 的请求，那个阈值必须比这里更大，
+ * 否则长发送还没等到回执就先被网关判死（2026-09-15 / 09-20 两次丢迷币都是这么来的）。
+ */
+export const BILI_GIFT_MEDIA_SEND_TIMEOUT_MS = 15 * 60_000;
 
 const MAX_BILI_GIFT_INDEX_BYTES = 32 * 1024 * 1024;
 const MAX_BILI_GIFT_MEDIA_BYTES = 64 * 1024 * 1024;

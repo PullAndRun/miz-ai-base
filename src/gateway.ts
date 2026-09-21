@@ -1,6 +1,7 @@
 import { NapLink, type ConnectionState, type Logger as NapLinkLogger } from "@naplink/naplink";
 import { z } from "zod";
 import { createExpiringCache, readExpiringCache, writeExpiringCache } from "@/cache";
+import { BILI_GIFT_MEDIA_SEND_TIMEOUT_MS } from "@/bili-gift";
 import type { MizConfig } from "@/config";
 import type { Logger } from "@/logger";
 import type { ForwardMessageContent } from "@/plugins";
@@ -427,6 +428,14 @@ const createForwardNode = (message: ForwardMessageContent, options: ForwardMessa
   },
 });
 
+/**
+ * NapLink 会丢弃挂起超过 2 × api.timeout 的请求。礼物特效视频的发送上限是
+ * BILI_GIFT_MEDIA_SEND_TIMEOUT_MS，所以网关侧的窗口至少要宽过它的一半再加一分钟，
+ * 否则长发送还没等到回执就被判成超时（2026-09-15 / 09-20 两次丢迷币就是这么来的）。
+ */
+export const resolveNapLinkApiTimeoutMs = (configuredTimeoutMs: number) =>
+  Math.max(configuredTimeoutMs, Math.ceil(BILI_GIFT_MEDIA_SEND_TIMEOUT_MS / 2) + 60_000);
+
 const createNapLinkClient = (config: MizConfig, logger: Logger) =>
   new NapLink({
     connection: {
@@ -444,7 +453,7 @@ const createNapLinkClient = (config: MizConfig, logger: Logger) =>
       logger: createNapLinkLogger(logger),
     },
     api: {
-      timeout: config.naplink.apiTimeoutMs,
+      timeout: resolveNapLinkApiTimeoutMs(config.naplink.apiTimeoutMs),
       retries: config.naplink.apiRetries,
     },
   });
