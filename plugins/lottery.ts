@@ -56,6 +56,12 @@ export const createAlreadyDrawnMessage = (
   return [`${scope}已经抽过啦${detail}。`, "明天再来试试手气吧～"].join("\n");
 };
 
+/** 发送超时、结果未知时的兜底文案：卡片可能已经进群，但奖品照算，直接说清楚。 */
+export const createUnknownDeliveryMessage = (giftName: string, coins: number, totalCoins: number) => [
+  "抽奖结果发送超时了，先看看群里有没有出现卡片。",
+  `这次抽到的是「${giftName}」，+${coins} 迷币已经入账，累计 ${totalCoins}。`,
+].join("\n");
+
 export const createBiliGiftLotteryUsage = (commandPrefix: string) => [
   "🎰 迷子的小游戏，每天可以抽一次：",
   `用法：${commandPrefix} 抽奖`,
@@ -294,6 +300,17 @@ export const handleBiliGiftLotteryCommand = async ({
     }
   };
 
+  // 中奖后入账；超时这类结果未知的情况也要入账，否则卡片说中了奖、账上却没有。
+  const creditCoins = async () => {
+    try {
+      await store.addCoins({ groupId, userId }, coins);
+    } catch (error) {
+      logger.warn("plugin", "bilibili gift lottery coin credit failed", {
+        error: summarizeError(error),
+      });
+    }
+  };
+
   // 素材读不出来（或特效视频本身就是坏的）时退回名额，让 TA 还能再抽一次。
   let delivery;
   try {
@@ -333,14 +350,18 @@ export const handleBiliGiftLotteryCommand = async ({
       },
     );
   } catch (error) {
-    await releaseClaim();
     if (isVideoSendTimeoutError(error)) {
       logger.warn("plugin", "bilibili gift lottery delivery timed out with an unknown result", {
         relativePath: media.relativePath,
       });
-      await reply("抽奖结果发送超时了，先看看群里有没有出现，稍等一下再试吧～");
+      // 超时只是没拿到回执：NapCat 往往还在发，卡片可能已经进群。
+      // 名额和迷币都照算，既不让人白多抽一次，也不会出现卡片中奖却不入账。
+      await creditCoins();
+      await reply(createUnknownDeliveryMessage(draw.gift.name, coins, totalCoins));
       return;
     }
+    // 明确失败（群里发不出去等）才退回名额，让 TA 可以再试一次。
+    await releaseClaim();
     logger.warn("plugin", "bilibili gift lottery delivery failed", {
       relativePath: media.relativePath,
       error: summarizeError(error),
@@ -350,13 +371,7 @@ export const handleBiliGiftLotteryCommand = async ({
   }
 
   // 发出去之后才入账，避免发送失败白拿迷币。
-  try {
-    await store.addCoins({ groupId, userId }, coins);
-  } catch (error) {
-    logger.warn("plugin", "bilibili gift lottery coin credit failed", {
-      error: summarizeError(error),
-    });
-  }
+  await creditCoins();
 };
 
 const lotteryPlugin: MizPlugin = {

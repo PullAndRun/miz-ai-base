@@ -705,8 +705,8 @@ describe("lottery plugin", () => {
     expect(released).toEqual(["100:1:2026-09-14"]);
   });
 
-  test("gives the daily chance back when the forward fails", async () => {
-    const { records, balances, store } = createMemoryStore();
+  test("keeps the prize and credits mi coins when the forward times out", async () => {
+    const { records, balances, released, store } = createMemoryStore();
     const { logger } = createLogger();
     await handleBiliGiftLotteryCommand({
       args: "",
@@ -718,7 +718,7 @@ describe("lottery plugin", () => {
         replies.push(message);
       },
       replyForwardWithoutRetry: async () => {
-        throw Object.assign(new Error("send failed"), { code: "E_API_TIMEOUT" });
+        throw Object.assign(new Error("send timed out"), { code: "E_API_TIMEOUT" });
       },
     }, {
       directory,
@@ -727,9 +727,45 @@ describe("lottery plugin", () => {
       store,
     });
 
+    // 超时只是没拿到回执，卡片可能已经进群：名额不退回，迷币照实入账。
+    expect(released).toEqual([]);
+    expect(records.get("100:1:2026-09-14")).toEqual({
+      giftId: 5,
+      giftName: "为你摘星",
+      coins: 10_000,
+    });
+    expect(balances.get("100:1")).toBe(10_000);
     expect(String(replies[0])).toContain("超时");
+    expect(String(replies[0])).toContain("为你摘星");
+    expect(String(replies[0])).toContain("+10000 迷币已经入账，累计 10000");
+  });
+
+  test("gives the daily chance back when the forward definitely fails", async () => {
+    const { records, balances, released, store } = createMemoryStore();
+    const { logger } = createLogger();
+    await handleBiliGiftLotteryCommand({
+      args: "",
+      commandPrefix: "miz",
+      gateway: { getGroupMemberName: async () => undefined } as never,
+      logger,
+      message: { text: "miz 抽奖", groupId: 100, userId: "1", raw: {} },
+      reply: async (message: unknown) => {
+        replies.push(message);
+      },
+      replyForwardWithoutRetry: async () => {
+        throw Object.assign(new Error("send failed"), { code: "E_API_FAILED" });
+      },
+    }, {
+      directory,
+      now: new Date(2026, 8, 14, 10, 0),
+      random: createSequenceRandom([0.95, 0]),
+      store,
+    });
+
+    expect(String(replies[0])).toContain("没能发出去");
     expect(records.size).toBe(0);
     expect(balances.size).toBe(0);
+    expect(released).toEqual(["100:1:2026-09-14"]);
   });
 
   test("rejects arguments other than the leaderboard", async () => {
