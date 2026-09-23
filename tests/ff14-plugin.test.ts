@@ -340,7 +340,7 @@ describe("FF14 batch price command", () => {
           status: "ready",
           lowestPrice: 90,
           referencePrice: 120,
-          samples: [{ price: 90, hq: false }],
+          samples: Array.from({ length: 5 }, (_, index) => ({ price: 90 + index, hq: false })),
           sellable: false,
         }],
       }),

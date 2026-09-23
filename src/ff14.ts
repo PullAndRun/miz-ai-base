@@ -366,7 +366,7 @@ export const selectFf14BatchAlertItems = (
     const itemId = item.item?.ID;
     const referencePrice = item.referencePrice;
     return item.status === "ready"
-      && item.sellable === true
+      && (item.sellable === true || isFf14BatchThinMarket(item, batch.sampleSize))
       && itemId !== undefined
       && referencePrice !== undefined
       && notifiedPrices.get(itemId) !== referencePrice;
@@ -682,13 +682,21 @@ const formatReviewTime = (value: number | undefined) => {
 };
 
 /**
- * 推送里要列出的商品：设了售卖线就只列达标的商品；
+ * 在售挂单不足参考条数（默认 5 条）：这种行情很稀薄，价格参考性弱，
+ * 但对手也少，值得单独提醒。
+ */
+export const isFf14BatchThinMarket = (item: Ff14BatchItemResult, sampleSize: number) =>
+  item.status === "ready" && item.samples.length < Math.max(1, Math.floor(sampleSize));
+
+/**
+ * 推送里要列出的商品：设了售卖线时列达标的商品，外加在售不足参考条数的稀薄行情；
  * 没设售卖线时没有"达标"一说，照常列出所有拿到行情的商品。
  */
 export const selectFf14BatchListedItems = (batch: Ff14BatchResult): Ff14BatchItemResult[] =>
   batch.sellPrice === undefined
     ? batch.items.filter((item) => item.status === "ready")
-    : batch.items.filter((item) => item.sellable === true);
+    : batch.items.filter((item) =>
+      item.sellable === true || isFf14BatchThinMarket(item, batch.sampleSize));
 
 export const formatFf14BatchMessages = (
   batch: Ff14BatchResult,
@@ -712,7 +720,7 @@ export const formatFf14BatchAlertMessages = (
 const formatFf14BatchAlertSummary = (batch: Ff14BatchResult, now: Date) =>
   [
     `🪙 FF14 售卖提醒 · ${batch.regionName}`,
-    `有 ${batch.items.length} 个商品参考价达到售卖线，而且价位和上次提醒不一样`,
+    `有 ${batch.items.length} 个商品的价位变了：达到售卖线，或在售不足 ${batch.sampleSize} 条`,
     ...(batch.sellPrice === undefined
       ? []
       : [`售卖线 ${formatGil(batch.sellPrice)} · 参考价取最低 ${batch.sampleSize} 条挂单的中位价`]),
@@ -723,34 +731,45 @@ const formatFf14BatchAlertSummary = (batch: Ff14BatchResult, now: Date) =>
   ].join("\n");
 
 const formatFf14BatchSummary = (batch: Ff14BatchResult, now: Date) => {
+  const hasSellLine = batch.sellPrice !== undefined;
   const listedItems = selectFf14BatchListedItems(batch);
+  const sellableItems = hasSellLine
+    ? listedItems.filter((item) => item.sellable === true)
+    : listedItems;
+  const thinItems = hasSellLine ? listedItems.filter((item) => item.sellable !== true) : [];
   const unavailableCount = batch.items.filter((item) => item.status !== "ready").length;
   const hiddenCount = batch.items.length - listedItems.length;
+  const sections = [
+    ...(sellableItems.length === 0
+      ? []
+      : [
+        hasSellLine ? `✅ 达到售卖线（${sellableItems.length} 个）` : `💰 行情参考（${sellableItems.length} 个）`,
+        ...sellableItems.map(formatFf14BatchSummaryItem),
+      ]),
+    ...(thinItems.length === 0
+      ? []
+      : [
+        ...(sellableItems.length === 0 ? [] : [""]),
+        `🔍 在售不足 ${batch.sampleSize} 条（${thinItems.length} 个）`,
+        ...thinItems.map(formatFf14BatchThinItem),
+      ]),
+  ];
 
   return [
-    batch.sellPrice === undefined
-      ? `🪙 ${batch.regionName} 批量查价 · ${batch.items.length} 个商品`
-      : `🪙 ${batch.regionName} 批量查价 · ${batch.items.length} 个商品 · 达到售卖线 ${listedItems.length} 个`,
+    hasSellLine
+      ? `🪙 ${batch.regionName} 批量查价 · ${batch.items.length} 个商品 · 达到售卖线 ${sellableItems.length} 个`
+      : `🪙 ${batch.regionName} 批量查价 · ${batch.items.length} 个商品`,
     `按交易板单件价取最低 ${batch.sampleSize} 条挂单，参考价取它们的中位价`,
-    ...(batch.sellPrice === undefined
-      ? []
-      : [`售卖线 ${formatGil(batch.sellPrice)} · 参考价达到它就值得上线挂单`]),
+    ...(hasSellLine ? [`售卖线 ${formatGil(batch.sellPrice)} · 参考价达到它就值得上线挂单`] : []),
     "",
-    ...(listedItems.length === 0
-      ? [batch.sellPrice === undefined
-        ? "😴 这次没有拿到可参考的价格。"
-        : "😴 暂时没有达到售卖线的商品，先不急着上线。"]
-      : [
-        batch.sellPrice === undefined
-          ? `💰 行情参考（${listedItems.length} 个）`
-          : `✅ 达到售卖线（${listedItems.length} 个）`,
-        ...listedItems.map(formatFf14BatchSummaryItem),
-      ]),
+    ...(sections.length === 0
+      ? [hasSellLine ? "😴 暂时没有达到售卖线的商品，先不急着上线。" : "😴 这次没有拿到可参考的价格。"]
+      : sections),
     ...(hiddenCount === 0
       ? []
-      : ["", batch.sellPrice === undefined
-        ? `还有 ${hiddenCount} 个没查到行情，不再列出。`
-        : `其余 ${hiddenCount} 个没到售卖线${unavailableCount === 0 ? "" : `（含 ${unavailableCount} 个没查到行情）`}，不再列出。`]),
+      : ["", hasSellLine
+        ? `其余 ${hiddenCount} 个没到售卖线${unavailableCount === 0 ? "" : `（含 ${unavailableCount} 个没查到行情）`}，不再列出。`
+        : `还有 ${hiddenCount} 个没查到行情，不再列出。`]),
     "",
     `🕒 查询于 ${dayjs(now).format("YYYY年MM月DD日 HH:mm")}`,
   ].join("\n");
@@ -758,6 +777,9 @@ const formatFf14BatchSummary = (batch: Ff14BatchResult, now: Date) => {
 
 const formatFf14BatchSummaryItem = (item: Ff14BatchItemResult) =>
   `· ${formatFf14BatchItemName(item)} · 参考 ${formatGil(item.referencePrice)}`;
+
+const formatFf14BatchThinItem = (item: Ff14BatchItemResult) =>
+  `· ${formatFf14BatchItemName(item)} · 参考 ${formatGil(item.referencePrice)} · 在售 ${item.samples.length} 条`;
 
 const formatFf14BatchItem = (item: Ff14BatchItemResult) => {
   const displayName = formatFf14BatchItemName(item);

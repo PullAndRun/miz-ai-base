@@ -1997,7 +1997,7 @@ const runFf14BatchSellAlerts = async (
         {
           title: `🪙 FF14 售卖提醒 · ${result.regionName}`,
           source: "miz ff14",
-          summary: `参考价变化，${alertItems.length} 个商品值得上线挂单`,
+          summary: `参考价变化，${alertItems.length} 个商品值得上线看看`,
         },
       );
 

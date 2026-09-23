@@ -415,13 +415,15 @@ describe("FF14 batch price query", () => {
     expect(messages[0]).toContain("售卖线 100 gil");
     expect(messages[0]).toContain("✅ 达到售卖线（1 个）");
     expect(messages[0]).toContain("· 火之水晶 · 参考 120 gil");
-    // 没到售卖线和没查到行情的商品只报数量，不逐条列出。
-    expect(messages[0]).toContain("其余 2 个没到售卖线（含 1 个没查到行情），不再列出。");
-    expect(messages[0]).not.toContain("水之水晶");
+    // 在售不足 5 条的商品也列出来，单独分组并标出在售条数。
+    expect(messages[0]).toContain("🔍 在售不足 5 条（1 个）");
+    expect(messages[0]).toContain("· 水之水晶 · 参考 40 gil · 在售 1 条");
+    // 其余的只报数量，不逐条列出。
+    expect(messages[0]).toContain("其余 1 个没到售卖线（含 1 个没查到行情），不再列出。");
     expect(messages[0]).not.toContain("土之水晶");
     expect(messages[1]).toContain("✅ 火之水晶 · 参考 120 gil");
     expect(messages[1]).toContain("📉 前 5 条 90 / 100 / 120 / 130 / 200 · 最低 90 gil");
-    expect(messages[1]).not.toContain("水之水晶");
+    expect(messages[1]).toContain("⏸️ 水之水晶 · 参考 40 gil");
     expect(messages[1]).not.toContain("土之水晶");
   });
 });
@@ -432,13 +434,17 @@ describe("FF14 batch sell alerts", () => {
     itemId: number,
     referencePrice: number,
     sellable: boolean,
+    sampleCount = 1,
   ): Ff14BatchItemResult => ({
     itemName,
     item: { ID: itemId, Name: itemName },
     status: "ready",
     lowestPrice: referencePrice - 1,
     referencePrice,
-    samples: [{ price: referencePrice - 1, hq: false }],
+    samples: Array.from({ length: sampleCount }, (_, index) => ({
+      price: referencePrice - 1 + index,
+      hq: false,
+    })),
     sellable,
   });
 
@@ -450,7 +456,7 @@ describe("FF14 batch sell alerts", () => {
     items: [
       readyItem("火之碎晶", 7, 66, true),
       readyItem("冰之碎晶", 8, 58, true),
-      readyItem("风之碎晶", 9, 40, false),
+      readyItem("风之碎晶", 9, 40, false, 5),
       { itemName: "土之碎晶", item: { ID: 10, Name: "土之碎晶" }, status: "empty", samples: [] },
     ],
   };
@@ -478,6 +484,19 @@ describe("FF14 batch sell alerts", () => {
       .toEqual(["火之碎晶", "冰之碎晶", "风之碎晶"]);
   });
 
+  test("also lists and alerts a thin market below the sell line", () => {
+    const thin = readyItem("雷之碎晶", 11, 30, false);
+    const thinBatch: Ff14BatchResult = { ...batch, items: [thin] };
+
+    expect(selectFf14BatchListedItems(thinBatch).map((item) => item.itemName)).toEqual(["雷之碎晶"]);
+    expect(selectFf14BatchAlertItems(thinBatch, new Map()).map((item) => item.itemName)).toEqual(["雷之碎晶"]);
+    // 价位没变就不再提醒。
+    expect(selectFf14BatchAlertItems(thinBatch, new Map([[11, 30]]))).toEqual([]);
+    // 在售 5 条以上就不算稀薄行情了。
+    const deep = { ...thin, samples: Array.from({ length: 5 }, () => ({ price: 30, hq: false })) };
+    expect(selectFf14BatchListedItems({ ...batch, items: [deep] })).toEqual([]);
+  });
+
   test("never alerts items below the sell line or without market data", () => {
     // 风之碎晶没到售卖线、土之碎晶没有行情，即使价位和记录不同也不会提醒。
     expect(alertedNames(new Map([[7, 66], [8, 58], [9, 30], [10, 30]]))).toEqual([]);
@@ -491,7 +510,7 @@ describe("FF14 batch sell alerts", () => {
 
     expect(messages).toHaveLength(2);
     expect(messages[0]).toContain("🪙 FF14 售卖提醒 · 猫小胖");
-    expect(messages[0]).toContain("有 1 个商品参考价达到售卖线，而且价位和上次提醒不一样");
+    expect(messages[0]).toContain("有 1 个商品的价位变了：达到售卖线，或在售不足 5 条");
     expect(messages[0]).toContain("售卖线 60 gil");
     expect(messages[0]).toContain("· 火之碎晶 · 参考 66 gil");
     expect(messages[1]).toContain("✅ 火之碎晶 · 参考 66 gil");
