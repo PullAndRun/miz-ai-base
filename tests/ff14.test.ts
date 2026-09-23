@@ -407,24 +407,15 @@ describe("FF14 batch price query", () => {
       ],
     };
 
-    const messages = formatFf14BatchMessages(batch, { now: new Date("2026-09-23T05:00:00Z") });
+    const messages = formatFf14BatchMessages(batch);
 
-    expect(messages).toHaveLength(2);
-    expect(messages[0]).toContain("🪙 猫小胖 批量查价 · 3 个商品 · 达到售卖线 1 个");
-    expect(messages[0]).toContain("按交易板单件价取最低 5 条挂单，参考价取它们的中位价");
-    expect(messages[0]).toContain("售卖线 100 gil");
-    expect(messages[0]).toContain("✅ 达到售卖线（1 个）");
-    expect(messages[0]).toContain("· 火之水晶 · 参考 120 gil");
-    // 在售不足 5 条的商品也列出来，单独分组并标出在售条数。
-    expect(messages[0]).toContain("🔍 在售不足 5 条（1 个）");
-    expect(messages[0]).toContain("· 水之水晶 · 参考 40 gil · 在售 1 条");
-    // 其余的只报数量，不逐条列出。
-    expect(messages[0]).toContain("其余 1 个没到售卖线（含 1 个没查到行情），不再列出。");
+    // 一条消息、一行一个商品，只列值得上线的。
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("🪙 猫小胖 批量查价 · 3 个商品 · 售卖线 100");
+    expect(messages[0]).toContain("✅ 火之水晶 120｜前5 90/100/120/130/200");
+    expect(messages[0]).toContain("🔍 水之水晶 40｜在售1 20");
+    expect(messages[0]).toContain("⚠️ 1 个没查到行情");
     expect(messages[0]).not.toContain("土之水晶");
-    expect(messages[1]).toContain("✅ 火之水晶 · 参考 120 gil");
-    expect(messages[1]).toContain("📉 前 5 条 90 / 100 / 120 / 130 / 200 · 最低 90 gil");
-    expect(messages[1]).toContain("⏸️ 水之水晶 · 参考 40 gil");
-    expect(messages[1]).not.toContain("土之水晶");
   });
 });
 
@@ -502,19 +493,12 @@ describe("FF14 batch sell alerts", () => {
     expect(alertedNames(new Map([[7, 66], [8, 58], [9, 30], [10, 30]]))).toEqual([]);
   });
 
-  test("formats the sell alert with a summary and a detail node", () => {
-    const messages = formatFf14BatchAlertMessages(
-      { ...batch, items: [batch.items[0]] },
-      { now: new Date("2026-09-23T05:00:00Z") },
-    );
+  test("formats the sell alert as one compact node", () => {
+    const messages = formatFf14BatchAlertMessages({ ...batch, items: [batch.items[0]] });
 
-    expect(messages).toHaveLength(2);
-    expect(messages[0]).toContain("🪙 FF14 售卖提醒 · 猫小胖");
-    expect(messages[0]).toContain("有 1 个商品的价位变了：达到售卖线，或在售不足 5 条");
-    expect(messages[0]).toContain("售卖线 60 gil");
-    expect(messages[0]).toContain("· 火之碎晶 · 参考 66 gil");
-    expect(messages[1]).toContain("✅ 火之碎晶 · 参考 66 gil");
-    expect(messages[1]).toContain("📉 前 1 条 65 · 最低 65 gil");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("🪙 售卖提醒 · 猫小胖 · 售卖线 60");
+    expect(messages[0]).toContain("✅ 火之碎晶 66｜在售1 65");
   });
 
   test("mentions configured members with the sell alert wording", () => {

@@ -65,7 +65,7 @@ const SCHEDULED_DELIVERY_CONCURRENCY = 5;
 const WALLPAPER_DELIVERY_CONCURRENCY = 3;
 const WALLPAPER_SEND_INTERVAL_MS = 2_000;
 const FF14_PRICE_ALERT_DELIVERY_RETENTION_MS = 3 * 24 * 60 * 60_000;
-const FF14_BATCH_SELL_ALERT_MENTION = "FF14 售卖提醒已触发，请查看上方行情。";
+const FF14_BATCH_SELL_ALERT_MENTION = "FF14 售卖提醒，请看上面。";
 const VTB_INITIAL_DYNAMIC_MAX_AGE_MS = 60 * 60_000;
 const vtbPollingIntervalCache = new Map<string, number>();
 
@@ -1995,9 +1995,9 @@ const runFf14BatchSellAlerts = async (
         { text: "", groupId: batch.groupId, raw: {} },
         formatFf14BatchAlertMessages({ ...result, items: alertItems }),
         {
-          title: `🪙 FF14 售卖提醒 · ${result.regionName}`,
+          title: "🪙 FF14 售卖提醒",
           source: "miz ff14",
-          summary: `参考价变化，${alertItems.length} 个商品值得上线看看`,
+          summary: `${alertItems.length} 个商品值得上线`,
         },
       );
 

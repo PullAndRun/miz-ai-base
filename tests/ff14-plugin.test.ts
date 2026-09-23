@@ -319,7 +319,9 @@ describe("FF14 batch price command", () => {
       proxyUrl: "",
     });
     expect(forwarded).toHaveLength(1);
-    expect(String(forwarded[0].messages[0])).toContain("达到售卖线 1 个");
+    expect(forwarded[0].messages).toHaveLength(1);
+    expect(String(forwarded[0].messages[0])).toContain("🪙 猫小胖 批量查价 · 1 个商品 · 售卖线 100");
+    expect(String(forwarded[0].messages[0])).toContain("✅ 火之水晶 120｜在售1 90");
     expect(forwarded[0].summary).toContain("共 1 个商品");
   });
 
@@ -358,8 +360,7 @@ describe("FF14 batch price command", () => {
 
     expect(forwarded).toHaveLength(0);
     expect(replyText).toContain("猫小胖");
-    expect(replyText).toContain("1 个商品都没到售卖线");
-    expect(replyText).toContain("先不急着上线");
+    expect(replyText).toContain("1 个商品暂时都不值得上线");
   });
 
   test("keeps an ordinary member from pushing a batch result into another group", async () => {
@@ -416,9 +417,8 @@ describe("FF14 batch price command", () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0].groupId).toBe(200);
-    expect(sent[0].messages).toHaveLength(2);
-    expect(String(sent[0].messages[0])).toContain("达到售卖线 1 个");
-    expect(String(sent[0].messages[1])).toContain("📉 前 1 条 90 · 最低 90 gil");
+    expect(sent[0].messages).toHaveLength(1);
+    expect(String(sent[0].messages[0])).toContain("✅ 火之水晶 120｜在售1 90");
     expect(replyText).toContain("已把批量查价结果推到群 200");
   });
 });

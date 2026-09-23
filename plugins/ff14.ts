@@ -463,7 +463,7 @@ const handleFf14Batch = async ({
     const sellingResults = results.filter((result) => selectFf14BatchListedItems(result).length > 0);
     if (sellingResults.length === 0) {
       const regionNames = [...new Set(results.map((result) => result.regionName))].join("、");
-      await reply(`🪙 ${regionNames} 批量查价：${itemCount} 个商品都没到售卖线，先不急着上线。`);
+      await reply(`🪙 ${regionNames} 批量查价：${itemCount} 个商品暂时都不值得上线。`);
       logger.info("plugin", "ff14 batch price query sent: nothing above the sell line", {
         groupId: targetGroupId,
         senderGroupId: message.groupId,
@@ -478,7 +478,7 @@ const handleFf14Batch = async ({
     const options = {
       title: "🪙 FF14 批量查价",
       source: "miz ff14 batch",
-      summary: `最低 ${config.ff14.batchSampleSize} 条挂单中位参考 · 共 ${itemCount} 个商品`,
+      summary: `共 ${itemCount} 个商品 · 只列值得上线的`,
     };
 
     if (isCurrentGroup) {
