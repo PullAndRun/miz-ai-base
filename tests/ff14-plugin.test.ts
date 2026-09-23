@@ -323,6 +323,45 @@ describe("FF14 batch price command", () => {
     expect(forwarded[0].summary).toContain("共 1 个商品");
   });
 
+  test("replies a short hint instead of a forward when nothing reaches the sell line", async () => {
+    const config = createBatchConfig([{ groupId: 100, region: "猫", sellPrice: 500, itemNames: ["火之水晶"] }]);
+    const forwarded: unknown[][] = [];
+    let replyText = "";
+    const plugin = createFf14Plugin({
+      getRepository: async () => ({} as never),
+      queryBatch: async () => ({
+        regionKey: "猫",
+        regionName: "猫小胖",
+        sellPrice: 500,
+        sampleSize: 5,
+        items: [{
+          itemName: "火之水晶",
+          item: { ID: 1, Name: "火之水晶" },
+          status: "ready",
+          lowestPrice: 90,
+          referencePrice: 120,
+          samples: [{ price: 90, hq: false }],
+          sellable: false,
+        }],
+      }),
+    });
+
+    await plugin.handle!({
+      command: { name: "ff14", args: "batch", raw: "ff14 batch" },
+      commandPrefix: "miz",
+      config,
+      message: adminMessage,
+      logger: { error: () => undefined, info: () => undefined },
+      reply: async (message: unknown) => { replyText = String(message); },
+      replyForward: async (messages: unknown[]) => { forwarded.push(messages); },
+    } as never);
+
+    expect(forwarded).toHaveLength(0);
+    expect(replyText).toContain("猫小胖");
+    expect(replyText).toContain("1 个商品都没到售卖线");
+    expect(replyText).toContain("先不急着上线");
+  });
+
   test("keeps an ordinary member from pushing a batch result into another group", async () => {
     const config = createBatchConfig([{ groupId: 200, region: "猫", itemNames: ["火之水晶"] }]);
     let queryCalls = 0;

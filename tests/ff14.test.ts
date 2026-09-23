@@ -11,6 +11,7 @@ import {
   queryFf14Batch,
   queryFf14Market,
   selectFf14BatchAlertItems,
+  selectFf14BatchListedItems,
   selectFf14BatchSamples,
 } from "@/ff14";
 
@@ -414,14 +415,14 @@ describe("FF14 batch price query", () => {
     expect(messages[0]).toContain("售卖线 100 gil");
     expect(messages[0]).toContain("✅ 达到售卖线（1 个）");
     expect(messages[0]).toContain("· 火之水晶 · 参考 120 gil");
-    expect(messages[0]).toContain("⏸️ 还没到售卖线（1 个）");
-    expect(messages[0]).toContain("⚠️ 没查到（1 个）");
-    expect(messages[0]).toContain("市场板没有在售挂单");
+    // 没到售卖线和没查到行情的商品只报数量，不逐条列出。
+    expect(messages[0]).toContain("其余 2 个没到售卖线（含 1 个没查到行情），不再列出。");
+    expect(messages[0]).not.toContain("水之水晶");
+    expect(messages[0]).not.toContain("土之水晶");
     expect(messages[1]).toContain("✅ 火之水晶 · 参考 120 gil");
     expect(messages[1]).toContain("📉 前 5 条 90 / 100 / 120 / 130 / 200 · 最低 90 gil");
-    expect(messages[1]).toContain("⏸️ 水之水晶 · 参考 40 gil");
-    expect(messages[1]).toContain("⚠️ 土之水晶");
-    expect(messages[1]).toContain("市场板暂时没有在售挂单");
+    expect(messages[1]).not.toContain("水之水晶");
+    expect(messages[1]).not.toContain("土之水晶");
   });
 });
 
@@ -469,6 +470,12 @@ describe("FF14 batch sell alerts", () => {
   test("alerts again once the reference price changes", () => {
     expect(alertedNames(new Map([[7, 65], [8, 58]]))).toEqual(["火之碎晶"]);
     expect(alertedNames(new Map([[7, 70], [8, 58]]))).toEqual(["火之碎晶"]);
+  });
+
+  test("only lists items above the sell line", () => {
+    expect(selectFf14BatchListedItems(batch).map((item) => item.itemName)).toEqual(["火之碎晶", "冰之碎晶"]);
+    expect(selectFf14BatchListedItems({ ...batch, sellPrice: undefined }).map((item) => item.itemName))
+      .toEqual(["火之碎晶", "冰之碎晶", "风之碎晶"]);
   });
 
   test("never alerts items below the sell line or without market data", () => {

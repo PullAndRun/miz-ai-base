@@ -13,6 +13,7 @@ import {
   normalizeFf14ItemQueryName,
   queryFf14Batch,
   queryFf14Market,
+  selectFf14BatchListedItems,
   type Ff14BatchResult,
   type Ff14RegionKey,
 } from "@/ff14";
@@ -457,8 +458,23 @@ const handleFf14Batch = async ({
       }));
     }
 
-    const messages = results.flatMap((result) => formatFf14BatchMessages(result));
     const itemCount = results.reduce((total, result) => total + result.items.length, 0);
+    // 一个达标的都没有时只回一句提示，不推合并转发。
+    const sellingResults = results.filter((result) => selectFf14BatchListedItems(result).length > 0);
+    if (sellingResults.length === 0) {
+      const regionNames = [...new Set(results.map((result) => result.regionName))].join("、");
+      await reply(`🪙 ${regionNames} 批量查价：${itemCount} 个商品都没到售卖线，先不急着上线。`);
+      logger.info("plugin", "ff14 batch price query sent: nothing above the sell line", {
+        groupId: targetGroupId,
+        senderGroupId: message.groupId,
+        userId: message.userId,
+        batches: batches.length,
+        items: itemCount,
+      });
+      return;
+    }
+
+    const messages = sellingResults.flatMap((result) => formatFf14BatchMessages(result));
     const options = {
       title: "🪙 FF14 批量查价",
       source: "miz ff14 batch",
