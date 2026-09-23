@@ -135,6 +135,20 @@ model Ff14PriceAlertDelivery {
   @@map("ff14_price_alert_deliveries")
 }
 
+/// 批量查价的售卖提醒：记录每个商品最近一次提醒过的参考价，
+/// 同一个价位只提醒一次，价格变了才再提醒。
+model Ff14BatchAlertState {
+  groupId       String   @map("group_id")
+  region        String
+  itemId        Int      @map("item_id")
+  notifiedPrice Int      @map("notified_price")
+  notifiedAt    DateTime @default(now()) @map("notified_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@id([groupId, region, itemId])
+  @@map("ff14_batch_alert_states")
+}
+
 model Reminder {
   id          Int      @id @default(autoincrement())
   groupId     String   @map("group_id")

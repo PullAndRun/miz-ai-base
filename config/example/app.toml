@@ -28,6 +28,8 @@ manageWhitelistUserIds = []
 priceAlertEnabled = true
 priceAlertCron = ""
 maxListingCount = 0
+# 批量查价参考价取最低几条挂单的中位数。
+batchSampleSize = 5
 itemSearchApiUrl = ""
 marketApiUrl = ""
 

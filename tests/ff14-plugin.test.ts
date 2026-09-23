@@ -234,3 +234,152 @@ describe("FF14 price alert commands", () => {
     expect(replyText).toContain("需要群管理");
   });
 });
+
+type BatchQueryInput =
+  Omit<MizConfig["ff14"]["batchQueries"][number], "alertEnabled" | "alertAtUserIds">
+  & { alertEnabled?: boolean; alertAtUserIds?: Array<string | number> };
+
+const createBatchConfig = (
+  batchQueries: BatchQueryInput[],
+  manageWhitelistUserIds: MizConfig["ff14"]["manageWhitelistUserIds"] = [],
+) => ({
+  ff14: {
+    manageWhitelistUserIds,
+    priceAlerts: [],
+    batchSampleSize: 5,
+    batchQueries: batchQueries.map((query) => ({
+      ...query,
+      alertEnabled: query.alertEnabled ?? false,
+      alertAtUserIds: query.alertAtUserIds ?? [],
+    })),
+    itemSearchApiUrl: "https://search.example.test/items/search",
+    marketApiUrl: "https://universalis.example.test/api/v2",
+    maxListingCount: 10,
+  },
+  network: { proxyUrl: "" },
+} as unknown as MizConfig);
+
+const createBatchQueryResult = (sellPrice: number | undefined) => ({
+  regionKey: "猫" as const,
+  regionName: "猫小胖",
+  sellPrice,
+  sampleSize: 5,
+  items: [{
+    itemName: "火之水晶",
+    item: { ID: 1, Name: "火之水晶" },
+    status: "ready" as const,
+    lowestPrice: 90,
+    referencePrice: 120,
+    samples: [{ price: 90, hq: false }],
+    sellable: sellPrice === undefined ? undefined : true,
+  }],
+});
+
+describe("FF14 batch price command", () => {
+  test("parses batch actions with an optional target group", () => {
+    expect(parseFf14Action("batch")).toEqual({ type: "batch" });
+    expect(parseFf14Action("批量查价")).toEqual({ type: "batch" });
+    expect(parseFf14Action("查价 627836955")).toEqual({ type: "batch", targetGroupId: 627836955 });
+    expect(parseFf14Action("batch 12a")).toBeUndefined();
+    expect(parseFf14Action("batch 100 200")).toBeUndefined();
+  });
+
+  test("queries the current group list and forwards the sell verdict", async () => {
+    const config = createBatchConfig([
+      { groupId: 100, region: "猫", sellPrice: 100, itemNames: ["火之水晶", "火之碎晶"] },
+    ]);
+    const forwarded: Array<{ messages: unknown[]; summary: string }> = [];
+    const queries: unknown[] = [];
+    const plugin = createFf14Plugin({
+      getRepository: async () => ({} as never),
+      queryBatch: async (query) => {
+        queries.push(query);
+        return createBatchQueryResult(query.sellPrice);
+      },
+    });
+
+    await plugin.handle!({
+      command: { name: "ff14", args: "batch", raw: "ff14 batch" },
+      commandPrefix: "miz",
+      config,
+      message: adminMessage,
+      logger: { error: () => undefined, info: () => undefined },
+      reply: async () => undefined,
+      replyForward: async (messages: unknown[], options?: { summary?: string }) => {
+        forwarded.push({ messages, summary: options?.summary ?? "" });
+      },
+    } as never);
+
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toMatchObject({
+      regionKey: "猫",
+      itemNames: ["火之水晶", "火之碎晶"],
+      sellPrice: 100,
+      sampleSize: 5,
+      proxyUrl: "",
+    });
+    expect(forwarded).toHaveLength(1);
+    expect(String(forwarded[0].messages[0])).toContain("达到售卖线 1 个");
+    expect(forwarded[0].summary).toContain("共 1 个商品");
+  });
+
+  test("keeps an ordinary member from pushing a batch result into another group", async () => {
+    const config = createBatchConfig([{ groupId: 200, region: "猫", itemNames: ["火之水晶"] }]);
+    let queryCalls = 0;
+    let replyText = "";
+    const plugin = createFf14Plugin({
+      getRepository: async () => ({} as never),
+      queryBatch: async () => {
+        queryCalls += 1;
+        throw new Error("batch query should not start");
+      },
+    });
+
+    await plugin.handle!({
+      command: { name: "ff14", args: "batch 200", raw: "ff14 batch 200" },
+      commandPrefix: "miz",
+      config,
+      message: { groupId: 100, userId: 2, raw: { sender: { role: "member" } } },
+      logger: { error: () => undefined, info: () => undefined },
+      reply: async (message: unknown) => { replyText = String(message); },
+    } as never);
+
+    expect(queryCalls).toBe(0);
+    expect(replyText).toContain("需要群管理或 FF14 管理白名单权限");
+  });
+
+  test("lets a whitelisted user push a batch result into the configured group", async () => {
+    const config = createBatchConfig(
+      [{ groupId: 200, region: "猫", sellPrice: 50, itemNames: ["火之水晶"] }],
+      [1],
+    );
+    const sent: Array<{ groupId: unknown; messages: unknown[] }> = [];
+    let replyText = "";
+    const plugin = createFf14Plugin({
+      getRepository: async () => ({} as never),
+      queryBatch: async (query) => createBatchQueryResult(query.sellPrice),
+    });
+
+    await plugin.handle!({
+      command: { name: "ff14", args: "batch 200", raw: "ff14 batch 200" },
+      commandPrefix: "miz",
+      config,
+      gateway: {
+        sendForwardMessage: async (target: { groupId?: unknown }, messages: unknown[]) => {
+          sent.push({ groupId: target.groupId, messages });
+          return { status: "ok" };
+        },
+      },
+      message: { userId: 1, raw: { sender: { role: "member" } } },
+      logger: { error: () => undefined, info: () => undefined },
+      reply: async (message: unknown) => { replyText = String(message); },
+    } as never);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].groupId).toBe(200);
+    expect(sent[0].messages).toHaveLength(2);
+    expect(String(sent[0].messages[0])).toContain("达到售卖线 1 个");
+    expect(String(sent[0].messages[1])).toContain("📉 前 1 条 90 · 最低 90 gil");
+    expect(replyText).toContain("已把批量查价结果推到群 200");
+  });
+});

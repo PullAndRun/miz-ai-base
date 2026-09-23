@@ -1,10 +1,17 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { Ff14BatchItemResult, Ff14BatchResult } from "@/ff14";
 import {
   createFf14PriceAlertMentionMessage,
+  formatFf14BatchAlertMessages,
+  formatFf14BatchMessages,
   formatFf14MarketMessages,
   getFf14LowPriceListingKeys,
+  getFf14ReferencePrice,
   normalizeFf14ItemQueryName,
+  queryFf14Batch,
   queryFf14Market,
+  selectFf14BatchAlertItems,
+  selectFf14BatchSamples,
 } from "@/ff14";
 
 const originalFetch = globalThis.fetch;
@@ -282,5 +289,212 @@ describe("FF14 market message formatting", () => {
     expect(messages[0]).not.toContain("HQ 最低");
     expect(messages[0]).not.toContain("HQ 平均");
     expect(messages[0]).not.toContain("还没有报价");
+  });
+});
+
+describe("FF14 batch price query", () => {
+  test("takes the cheapest listings and uses their median as the reference price", () => {
+    const listings = [
+      { listingID: "a", pricePerUnit: 2000, quantity: 1, total: 2000 },
+      { listingID: "b", pricePerUnit: 5, quantity: 1, total: 5 },
+      { listingID: "c", pricePerUnit: 120, quantity: 99, total: 11880, hq: true },
+      { listingID: "d", pricePerUnit: 100, quantity: 99, total: 9900 },
+      { listingID: "e", pricePerUnit: 110, quantity: 99, total: 10890 },
+      { listingID: "f", pricePerUnit: 130, quantity: 99, total: 12870 },
+    ];
+
+    const samples = selectFf14BatchSamples(listings, 5);
+
+    // 单件价排序：1 件散卖的低价挂单照样排在最前，HQ 也不会被单独往后排。
+    expect(samples.map((sample) => sample.price)).toEqual([5, 100, 110, 120, 130]);
+    expect(samples.map((sample) => sample.hq)).toEqual([false, false, false, true, false]);
+    expect(getFf14ReferencePrice(samples.map((sample) => sample.price))).toBe(110);
+    expect(getFf14ReferencePrice([100, 120])).toBe(110);
+    expect(getFf14ReferencePrice([])).toBeUndefined();
+  });
+
+  test("queries every listed commodity and keeps a missing one from breaking the batch", async () => {
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      requested.push(url.pathname);
+      if (url.hostname === "raw.githubusercontent.com") {
+        return new Response("key,0\n#,Singular\nint32,str\n", {
+          headers: { "content-type": "text/csv" },
+        });
+      }
+      if (url.pathname.endsWith("/items/search")) {
+        const query = url.searchParams.get("query") ?? "";
+        const items = query === "没上架的道具" ? [] : [{ id: query === "火之水晶" ? 7 : 8, name: query }];
+        return new Response(JSON.stringify({ total: items.length, items }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      const itemId = Number(url.pathname.split("/").at(-1));
+      return new Response(JSON.stringify({
+        itemID: itemId,
+        listingsCount: itemId === 7 ? 2 : 0,
+        lastUploadTime: 1_700_000_000_000,
+        hasData: itemId === 7,
+        listings: itemId === 7
+          ? [
+            { listingID: "cheap", pricePerUnit: 8, quantity: 1, total: 8, worldName: "神意之地" },
+            { listingID: "rest", pricePerUnit: 40, quantity: 99, total: 3960, worldName: "神意之地" },
+          ]
+          : [],
+      }), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const result = await queryFf14Batch({
+      regionKey: "猫",
+      itemNames: ["火之水晶", "水之水晶", "没上架的道具"],
+      itemSearchApiUrl: "https://search.example.test/items/search",
+      marketApiUrl: "https://universalis.example.test/api/v2",
+      sellPrice: 30,
+      sampleSize: 5,
+      maxListingCount: 2,
+    });
+
+    expect(result.regionName).toBe("猫小胖");
+    expect(result.sampleSize).toBe(5);
+    expect(result.items.map((item) => item.status)).toEqual(["ready", "empty", "missing"]);
+    expect(result.items[0]).toMatchObject({
+      itemName: "火之水晶",
+      item: { ID: 7, Name: "火之水晶" },
+      lowestPrice: 8,
+      referencePrice: 24,
+      sellable: false,
+    });
+    expect(result.items[1]).toMatchObject({ item: { ID: 8, Name: "水之水晶" }, status: "empty", samples: [] });
+    expect(result.items[1].referencePrice).toBeUndefined();
+    expect(requested.filter((path) => path.endsWith("/items/search"))).toHaveLength(3);
+    expect(requested.some((path) => path.endsWith("/7"))).toBeTrue();
+  });
+
+  test("formats the sell summary and keeps the sampled listings visible", () => {
+    const batch: Ff14BatchResult = {
+      regionKey: "猫",
+      regionName: "猫小胖",
+      sellPrice: 100,
+      sampleSize: 5,
+      items: [
+        {
+          itemName: "火之水晶",
+          item: { ID: 1, Name: "火之水晶" },
+          status: "ready",
+          lowestPrice: 90,
+          referencePrice: 120,
+          samples: [90, 100, 120, 130, 200].map((price) => ({ price, hq: false })),
+          sellable: true,
+        },
+        {
+          itemName: "水之水晶",
+          item: { ID: 2, Name: "水之水晶" },
+          status: "ready",
+          lowestPrice: 20,
+          referencePrice: 40,
+          samples: [{ price: 20, hq: false }],
+          sellable: false,
+        },
+        {
+          itemName: "土之水晶",
+          item: { ID: 3, Name: "土之水晶" },
+          status: "empty",
+          samples: [],
+        },
+      ],
+    };
+
+    const messages = formatFf14BatchMessages(batch, { now: new Date("2026-09-23T05:00:00Z") });
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toContain("🪙 猫小胖 批量查价 · 3 个商品 · 达到售卖线 1 个");
+    expect(messages[0]).toContain("按交易板单件价取最低 5 条挂单，参考价取它们的中位价");
+    expect(messages[0]).toContain("售卖线 100 gil");
+    expect(messages[0]).toContain("✅ 达到售卖线（1 个）");
+    expect(messages[0]).toContain("· 火之水晶 · 参考 120 gil");
+    expect(messages[0]).toContain("⏸️ 还没到售卖线（1 个）");
+    expect(messages[0]).toContain("⚠️ 没查到（1 个）");
+    expect(messages[0]).toContain("市场板没有在售挂单");
+    expect(messages[1]).toContain("✅ 火之水晶 · 参考 120 gil");
+    expect(messages[1]).toContain("📉 前 5 条 90 / 100 / 120 / 130 / 200 · 最低 90 gil");
+    expect(messages[1]).toContain("⏸️ 水之水晶 · 参考 40 gil");
+    expect(messages[1]).toContain("⚠️ 土之水晶");
+    expect(messages[1]).toContain("市场板暂时没有在售挂单");
+  });
+});
+
+describe("FF14 batch sell alerts", () => {
+  const readyItem = (
+    itemName: string,
+    itemId: number,
+    referencePrice: number,
+    sellable: boolean,
+  ): Ff14BatchItemResult => ({
+    itemName,
+    item: { ID: itemId, Name: itemName },
+    status: "ready",
+    lowestPrice: referencePrice - 1,
+    referencePrice,
+    samples: [{ price: referencePrice - 1, hq: false }],
+    sellable,
+  });
+
+  const batch: Ff14BatchResult = {
+    regionKey: "猫",
+    regionName: "猫小胖",
+    sellPrice: 60,
+    sampleSize: 5,
+    items: [
+      readyItem("火之碎晶", 7, 66, true),
+      readyItem("冰之碎晶", 8, 58, true),
+      readyItem("风之碎晶", 9, 40, false),
+      { itemName: "土之碎晶", item: { ID: 10, Name: "土之碎晶" }, status: "empty", samples: [] },
+    ],
+  };
+
+  const alertedNames = (notifiedPrices: ReadonlyMap<number, number>) =>
+    selectFf14BatchAlertItems(batch, notifiedPrices).map((item) => item.itemName);
+
+  test("alerts a price that was never notified before", () => {
+    expect(alertedNames(new Map())).toEqual(["火之碎晶", "冰之碎晶"]);
+  });
+
+  test("does not repeat the same price level", () => {
+    expect(alertedNames(new Map([[7, 66], [8, 58]]))).toEqual([]);
+    expect(alertedNames(new Map([[7, 66], [8, 57]]))).toEqual(["冰之碎晶"]);
+  });
+
+  test("alerts again once the reference price changes", () => {
+    expect(alertedNames(new Map([[7, 65], [8, 58]]))).toEqual(["火之碎晶"]);
+    expect(alertedNames(new Map([[7, 70], [8, 58]]))).toEqual(["火之碎晶"]);
+  });
+
+  test("never alerts items below the sell line or without market data", () => {
+    // 风之碎晶没到售卖线、土之碎晶没有行情，即使价位和记录不同也不会提醒。
+    expect(alertedNames(new Map([[7, 66], [8, 58], [9, 30], [10, 30]]))).toEqual([]);
+  });
+
+  test("formats the sell alert with a summary and a detail node", () => {
+    const messages = formatFf14BatchAlertMessages(
+      { ...batch, items: [batch.items[0]] },
+      { now: new Date("2026-09-23T05:00:00Z") },
+    );
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toContain("🪙 FF14 售卖提醒 · 猫小胖");
+    expect(messages[0]).toContain("有 1 个商品参考价达到售卖线，而且价位和上次提醒不一样");
+    expect(messages[0]).toContain("售卖线 60 gil");
+    expect(messages[0]).toContain("· 火之碎晶 · 参考 66 gil");
+    expect(messages[1]).toContain("✅ 火之碎晶 · 参考 66 gil");
+    expect(messages[1]).toContain("📉 前 1 条 65 · 最低 65 gil");
+  });
+
+  test("mentions configured members with the sell alert wording", () => {
+    expect(createFf14PriceAlertMentionMessage([123, 123], "FF14 售卖提醒已触发，请查看上方行情。")).toEqual([
+      { type: "at", data: { qq: 123 } },
+      { type: "text", data: { text: " FF14 售卖提醒已触发，请查看上方行情。" } },
+    ]);
   });
 });

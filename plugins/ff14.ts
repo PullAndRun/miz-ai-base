@@ -7,14 +7,17 @@ import {
 import {
   createFf14PriceAlertKey,
   FF14_REGION_NAMES,
+  formatFf14BatchMessages,
   formatFf14MarketMessages,
   isFf14RegionKey,
   normalizeFf14ItemQueryName,
+  queryFf14Batch,
   queryFf14Market,
+  type Ff14BatchResult,
   type Ff14RegionKey,
 } from "@/ff14";
 import { canManageGroupFeature } from "@/group-permissions";
-import type { MizPlugin } from "@/plugins";
+import type { MizPlugin, PluginContext } from "@/plugins";
 import { getVtbRepository } from "@/vtb";
 import { notifyFf14AlertChange } from "@/ff14-alert-runtime";
 
@@ -31,11 +34,13 @@ type Ff14PluginDependencies = {
   addPriceAlert?: typeof addFf14PriceAlert;
   removePriceAlerts?: typeof removeFf14PriceAlerts;
   getRepository?: (config: MizConfig) => Promise<Ff14PluginRepository>;
+  queryBatch?: typeof queryFf14Batch;
   notifyAlertChange?: typeof notifyFf14AlertChange;
 };
 
 type Ff14Action =
   | { type: "query"; regionKey: Ff14RegionKey; itemName: string }
+  | { type: "batch"; targetGroupId?: number }
   | { type: "list" }
   | { type: "add"; region: Ff14RegionKey; minimumPrice: number; itemName: string; atUserIds: string[] }
   | { type: "remove" | "disable" | "enable"; itemName: string };
@@ -47,6 +52,7 @@ export const createFf14Plugin = ({
   addPriceAlert = addFf14PriceAlert,
   removePriceAlerts = removeFf14PriceAlerts,
   getRepository = getVtbRepository,
+  queryBatch = queryFf14Batch,
   notifyAlertChange = notifyFf14AlertChange,
 }: Ff14PluginDependencies = {}): MizPlugin => ({
   name: "ff14",
@@ -54,6 +60,7 @@ export const createFf14Plugin = ({
   description: [
     "查询 FF14 国服市场板，也能维护本群的低价商品推送。",
     "市场查询：miz ff14 分区 道具名",
+    "批量查价：miz ff14 batch [群号]",
     "推送列表：miz ff14 list",
     "新增推送：miz ff14 add 分区 最高价 道具名 [@成员 ...]",
     "删除推送：miz ff14 remove 道具名",
@@ -61,10 +68,36 @@ export const createFf14Plugin = ({
     "恢复启用：miz ff14 enable 道具名",
     "分区简写：猫、猪、狗、鸟；推送变更需要群管理或 FF14 管理白名单权限。",
   ].join("\n"),
-  async handle({ command, config, logger, message, reply, replyForward }) {
+  async handle(context: PluginContext) {
+    const {
+      command,
+      commandPrefix,
+      config,
+      gateway,
+      logger,
+      message,
+      reply,
+      replyForward,
+    } = context;
     const action = parseFf14Action(command.args);
     if (!action) {
       await reply(createUsageMessage());
+      return;
+    }
+
+    if (action.type === "batch") {
+      await handleFf14Batch({
+        action,
+        commandPrefix,
+        config,
+        gateway,
+        getRepository,
+        logger,
+        message,
+        queryBatch,
+        reply,
+        replyForward,
+      });
       return;
     }
 
@@ -268,6 +301,18 @@ export const parseFf14Action = (args: string): Ff14Action | undefined => {
   }
 
   const [rawType, ...parts] = normalized.split(/\s+/);
+  if (isFf14BatchActionName(rawType)) {
+    const rawTarget = parts[0];
+    if (rawTarget === undefined) {
+      return { type: "batch" };
+    }
+
+    const targetGroupId = Number(rawTarget);
+    return parts.length === 1 && /^\d+$/.test(rawTarget) && Number.isSafeInteger(targetGroupId)
+      ? { type: "batch", targetGroupId }
+      : undefined;
+  }
+
   const simpleAction = normalizeManagementAction(rawType);
   if (simpleAction === "remove" || simpleAction === "disable" || simpleAction === "enable") {
     const itemName = parts.join(" ").trim();
@@ -305,6 +350,10 @@ export const parseFf14Action = (args: string): Ff14Action | undefined => {
     : undefined;
 };
 
+// 批量查价与 add/remove 这类管理动作分开解析：它只读配置，不改配置。
+const isFf14BatchActionName = (value: string) =>
+  value === "batch" || value === "批量" || value === "批量查价" || value === "查价";
+
 const normalizeManagementAction = (action: string) => {
   if (action === "add" || action === "添加" || action === "新增") return "add" as const;
   if (action === "remove" || action === "delete" || action === "删除") return "remove" as const;
@@ -341,9 +390,109 @@ export const formatFf14PriceAlertListItem = (
   ].join("\n");
 };
 
+type Ff14BatchHandlerContext = Pick<PluginContext,
+  | "commandPrefix"
+  | "config"
+  | "gateway"
+  | "logger"
+  | "message"
+  | "reply"
+  | "replyForward"
+> & {
+  action: Extract<Ff14Action, { type: "batch" }>;
+  getRepository: (config: MizConfig) => Promise<Ff14PluginRepository>;
+  queryBatch: typeof queryFf14Batch;
+};
+
+/** 批量查价是只读查询：查完直接把结果推到目标群，不改动任何配置。 */
+const handleFf14Batch = async ({
+  action,
+  commandPrefix,
+  config,
+  gateway,
+  getRepository,
+  logger,
+  message,
+  queryBatch,
+  reply,
+  replyForward,
+}: Ff14BatchHandlerContext) => {
+  const targetGroupId = action.targetGroupId ?? message.groupId;
+  if (targetGroupId === undefined) {
+    await reply(`批量查价跟着群配置走：在群里发 ${commandPrefix} ff14 batch，或者带上群号 ${commandPrefix} ff14 batch 123456789。`);
+    return;
+  }
+
+  const isCurrentGroup = message.groupId !== undefined && String(message.groupId) === String(targetGroupId);
+  if (!isCurrentGroup && !canManageGroupFeature(message.raw, message.userId, config.ff14.manageWhitelistUserIds)) {
+    await reply("把批量查价结果推到别的群需要群管理或 FF14 管理白名单权限。");
+    return;
+  }
+
+  const batches = config.ff14.batchQueries.filter((batch) => String(batch.groupId) === String(targetGroupId));
+  if (batches.length === 0) {
+    await reply(`群 ${targetGroupId} 还没有批量查价清单，先在 config/ff14.toml 里加一段 [[miz.ff14.batchQueries]] 吧。`);
+    return;
+  }
+
+  if (!config.ff14.itemSearchApiUrl || !config.ff14.marketApiUrl) {
+    await reply("FF14 市场板的查询通道还没接好，请联系管理员完成配置。");
+    return;
+  }
+
+  try {
+    const itemStore = await getRepository(config);
+    const results: Ff14BatchResult[] = [];
+    for (const batch of batches) {
+      results.push(await queryBatch({
+        regionKey: batch.region,
+        itemNames: batch.itemNames,
+        sellPrice: batch.sellPrice,
+        sampleSize: config.ff14.batchSampleSize,
+        itemSearchApiUrl: config.ff14.itemSearchApiUrl,
+        marketApiUrl: config.ff14.marketApiUrl,
+        proxyUrl: config.network.proxyUrl,
+        maxListingCount: config.ff14.maxListingCount,
+        itemStore,
+      }));
+    }
+
+    const messages = results.flatMap((result) => formatFf14BatchMessages(result));
+    const itemCount = results.reduce((total, result) => total + result.items.length, 0);
+    const options = {
+      title: "🪙 FF14 批量查价",
+      source: "miz ff14 batch",
+      summary: `最低 ${config.ff14.batchSampleSize} 条挂单中位参考 · 共 ${itemCount} 个商品`,
+    };
+
+    if (isCurrentGroup) {
+      await replyForward(messages, options);
+    } else {
+      await gateway.sendForwardMessage(
+        { text: "", groupId: targetGroupId, raw: {} },
+        messages,
+        options,
+      );
+      await reply(`已把批量查价结果推到群 ${targetGroupId} 了。`);
+    }
+
+    logger.info("plugin", "ff14 batch price query sent", {
+      groupId: targetGroupId,
+      senderGroupId: message.groupId,
+      userId: message.userId,
+      batches: batches.length,
+      items: itemCount,
+    });
+  } catch (error) {
+    logger.error("plugin", "ff14 batch price query failed", error);
+    await reply("批量查价刚才没成功，稍后再试一次吧。");
+  }
+};
+
 const createUsageMessage = () => [
   "🪙 FF14 市场与商品推送：",
   "查询：miz ff14 分区 道具名",
+  "批量查价：miz ff14 batch [群号]",
   "列表：miz ff14 list",
   "添加：miz ff14 add 分区 最高价 道具名 [@成员 ...]",
   "删除：miz ff14 remove 道具名",
@@ -351,4 +500,5 @@ const createUsageMessage = () => [
   "启用：miz ff14 enable 道具名",
   "分区：猫=猫小胖，猪=莫古力，狗=豆豆柴，鸟=陆行鸟",
   "例如：miz ff14 add 猫 1000 水之碎晶 @123456789",
+  "例如：miz ff14 batch 627836955",
 ].join("\n");

@@ -130,7 +130,7 @@ Docker 模式最后再合并：
 
 对象字段会递归合并，数组会整体替换。`ff14.toml`、`vtb.toml` 和 `app.local.toml` 都是可选文件；`app.toml` 始终必需。
 
-通用外部 API URL 放在 `app.toml`。`ff14.toml` 只保存低价提醒目标，`vtb.toml` 只保存群订阅；本机网关、数据库和代理等环境相关地址继续放在 `app.local.toml`，Docker 地址放在 `app.docker.toml`。
+通用外部 API URL 放在 `app.toml`。`ff14.toml` 只保存低价提醒目标和批量查价清单，`vtb.toml` 只保存群订阅；本机网关、数据库和代理等环境相关地址继续放在 `app.local.toml`，Docker 地址放在 `app.docker.toml`。
 
 运行期间修改 `config` 目录中的 TOML 文件，会重新加载插件和定时任务配置。如果修改了网关地址、NapLink 连接参数等连接级配置，建议重启进程以确保完全生效。
 
@@ -153,7 +153,7 @@ Docker 模式最后再合并：
 | `[miz.video]` | 视频开关、白名单、B 站域名、下载目录、NapCat 媒体目录、工具路径，以及视频任务并发上限 `maxConcurrentJobs`（默认 2，最大 8）。 |
 | `[miz.news]` | 财经新闻接口、目标群和定时表达式。 |
 | `[miz.wallpaper]` | Bing 官方元数据接口、图片基址、开关和定时表达式。 |
-| `[miz.ff14]` | Universalis 市场接口及其前端使用的物品搜索接口、返回条数、低价提醒开关、定时表达式和管理白名单；每条 `priceAlerts` 可单独配置提醒成员列表 `priceAlertAtUserIds`。 |
+| `[miz.ff14]` | Universalis 市场接口及其前端使用的物品搜索接口、返回条数、低价提醒开关、定时表达式、批量查价参考条数 `batchSampleSize`（默认 5）和管理白名单；每条 `priceAlerts` 可单独配置提醒成员列表 `priceAlertAtUserIds`，每条 `batchQueries` 配置一个群的批量查价清单，并用 `alertEnabled`、`alertAtUserIds` 控制定时售卖提醒。 |
 | `[miz.vtb]` | B 站数据接口、网页与直播基址、轮询策略、实时大航海/打赏连接限流、缓存及管理白名单。 |
 
 VTB 实时事件默认只连接当前正在直播的房间；`liveEventMaxConnections`（默认 12）、`liveEventConnectIntervalMs`、`liveEventReconnectBaseMs` 和 `liveEventReconnectMaxMs` 控制并发、错峰及退避。`contributionMinAmount`（默认 50，单位为人民币）控制普通礼物/醒目留言的最低实时感谢金额；加入大航海、续费大航海和红包不受此项限制。连续打赏会进入可配置的防刷屏汇总窗口：`contributionBatchWindowMs`（默认 10000 毫秒）控制静默等待时间，每次新打赏都会刷新计时；`contributionBatchMaxWaitMs`（默认 120000 毫秒）限制单批最长等待时间。加入大航海、续费和红包仍即时提醒。相关事件写入 PostgreSQL，下播时感谢加入大航海和续费观众，并展示打赏金额前 5 名。若 WebSocket 或事件令牌接口不可用，原有 HTTP 轮询和新增大航海感谢仍会继续工作。
@@ -181,6 +181,28 @@ dynamicAtAllStreamers = ["主播甲"]
 - `atAllStreamers` 控制开播通知是否 `@全体成员`；`dynamicAtAllStreamers` 控制动态通知是否 `@全体成员`，两者都必须对应已订阅的主播。
 - 只有机器人是群主或管理员，且该 QQ 账号在群内仍有可用的 `@全体成员` 次数时，开播或动态通知才会真正 `@全体`；否则发送普通通知。
 - 群管理员或 VTB 管理员白名单成员可以通过命令直接维护 `config/vtb.toml` 中的订阅。
+
+### FF14 批量查价
+
+批量查价清单按群配置在 `config/ff14.toml`，每段 `[[miz.ff14.batchQueries]]` 声明推送目标、分区、商品清单和可选的售卖线：
+
+```toml
+[[miz.ff14.batchQueries]]
+groupId = 627836955
+region = "猫"
+sellPrice = 120
+alertEnabled = true
+alertAtUserIds = [361390990]
+itemNames = ["火之水晶", "冰之水晶", "风之水晶"]
+```
+
+- 一条命令查询清单里的全部商品，每个商品取最低 `batchSampleSize`（默认 5）条挂单。
+- 排序和取数都按交易板默认的单件价格（`pricePerUnit`）升序，不按挂单件数加权：1 件散卖的低价挂单和整叠挂单一起比较。
+- 参考价取这几条挂单的中位价，避免某条超低挂单把行情带偏；推送里同时列出前几条挂单的价格，方便自己判断。
+- 参考价达到 `sellPrice` 就标成「达到售卖线」，说明这个价格值得上线挂单；不配置 `sellPrice` 时只报行情、不做判断。
+- 打开 `alertEnabled` 后，会按 `[miz.ff14].priceAlertCron` 的节奏（默认每小时）自动推送售卖提醒：只有参考价达到售卖线才推，同一个价位只提醒一次，参考价变了才再提醒；`alertAtUserIds` 指定提醒时要 `@` 的成员，留空就只发群消息。
+- 行情差别大的品类可以拆成多段配置块，各用一条售卖线。
+- 在群里发 `miz ff14 batch` 查询本群清单并把结果推回本群；带群号（例如 `miz ff14 batch 627836955`）会把结果推到该群，需要群管理或 FF14 管理白名单权限。
 
 ## Docker 部署
 
@@ -256,6 +278,7 @@ napcatMediaDirectory = "/app/media"
 | `miz 抽奖` | 迷子的小游戏：从素材库里随机抽一款 B 站礼物，用合并转发附上抽奖揭晓（中奖群友的昵称放在卡片最前面，卡片预览里就能看出是谁抽的；取不到昵称时用「你」）和它的展示效果；抽奖池只保留 B 站明码标价的付费礼物，按价值分四档稀有度（⭐ 稀有 / ✨ 史诗 / 💎 传说 / 👑 神话），越贵越难抽到；1 迷币只对应恰好标价 1 电池的礼物，免费、0 价格或不能合法折算的礼物不参与。抽到的礼物按价值折算成**迷币**（同名礼物有多个版本时按最高电池价值计算），奖品行会显示本次获得和该群累计；每个群每人每天只能抽一次（同群不同人各算一次，跨群也各算一次，私聊按用户算），迷币按群按人记录在 PostgreSQL 的 `gift_lottery_coin_balances` 表里。 |
 | `miz 抽奖 榜单` | 看本群迷币榜前 10 名，按群昵称（优先群名片）显示，取不到昵称时退回 QQ 号，且不会 `@` 人；不在榜上时会在末尾附上自己的名次；只看榜不消耗每天的抽奖名额。 |
 | `miz ff14 <分区> <道具名>` | 查询国服市场；分区简写为猫、猪、狗、鸟。 |
+| `miz ff14 batch [群号]` | 批量查价：查询 `config/ff14.toml` 中该群的商品清单，每种商品取最低 5 条挂单的中位价作参考，并标注参考价是否达到售卖线 `sellPrice`；结果用合并转发推到目标群。带群号时可以从别的群或私聊触发，需要群管理或 FF14 管理白名单权限。 |
 | `miz ff14 list` | 用一条合并转发展示当前群的全部商品推送及启用状态；转发内每 10 个商品归为一个节点。 |
 | `miz ff14 add <分区> <最高价> <道具名> [@成员 ...]` | 给当前群增加商品推送，可指定触发时要 at 的成员；需要群管理或 FF14 管理白名单权限。 |
 | `miz ff14 remove <道具名>` | 删除当前群中该商品的全部推送；需要管理权限。 |
@@ -282,6 +305,7 @@ napcatMediaDirectory = "/app/media"
 | VTB 动态 | 分片轮转，默认约 15 分钟覆盖全部订阅主播。 |
 | VTB 资料同步 | 默认每周日 00:00。 |
 | FF14 低价提醒 | 默认每小时检查，实际目标及每条提醒的 `priceAlertAtUserIds` 由 `config/ff14.toml` 配置；已提醒的市场挂单会记录到 PostgreSQL，同一挂单只提醒一次，连续 3 天未再出现的挂单记录会自动清理。 |
+| FF14 售卖提醒 | 与低价提醒共用同一个 cron；`batchQueries` 中打开 `alertEnabled` 的清单会在参考价达到 `sellPrice` 时推送，价位记录到 PostgreSQL，同一个价位只提醒一次，参考价变化后才再提醒。 |
 
 同一个定时任务不会重叠执行：前一次还未结束时，下一次会跳过并写入日志。短暂的事件循环或容器调度延迟会被容忍；确实错过 cron 时刻时，任务恢复调度后会自动补跑一次。VTB 上游请求还会合并相同并发查询、限制请求间隔，并在遇到 429、412 或连续故障时暂时熔断，冷却后自动恢复。FF14 道具名称与 ID 会保存在 PostgreSQL，命中后只查询动态市场价格；所有 FF14 外部请求共用保守的请求间隔，并在限流时按 `Retry-After` 退避重试。
 

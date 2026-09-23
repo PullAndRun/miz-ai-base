@@ -1268,6 +1268,40 @@ const createVtbRepository = (prisma: PrismaClient) => {
       where: { lastSeenAt: { lt: lastSeenBefore } },
     });
 
+  const listFf14BatchAlertStates = async (
+    groupId: string | number,
+    region: string,
+    itemIds: readonly number[],
+  ) => {
+    if (itemIds.length === 0) return [];
+    return prisma.ff14BatchAlertState.findMany({
+      where: {
+        groupId: String(groupId),
+        region,
+        itemId: { in: [...itemIds] },
+      },
+      select: { itemId: true, notifiedPrice: true },
+    });
+  };
+
+  const recordFf14BatchAlertStates = async (
+    groupId: string | number,
+    region: string,
+    states: readonly { itemId: number; notifiedPrice: number }[],
+  ) => {
+    if (states.length === 0) return;
+    const group = String(groupId);
+    const notifiedAt = new Date();
+    await prisma.$transaction(
+      [...new Map(states.map((state) => [state.itemId, state])).values()].map((state) =>
+        prisma.ff14BatchAlertState.upsert({
+          where: { groupId_region_itemId: { groupId: group, region, itemId: state.itemId } },
+          create: { groupId: group, region, itemId: state.itemId, notifiedPrice: state.notifiedPrice, notifiedAt },
+          update: { notifiedPrice: state.notifiedPrice, notifiedAt },
+        })),
+    );
+  };
+
   const recordLiveEndDelivery = async (mid: string, groupIds: readonly string[]) => {
     if (groupIds.length === 0) return;
     await prisma.vtbLiveSession.update({
@@ -1954,6 +1988,7 @@ const createVtbRepository = (prisma: PrismaClient) => {
     disableFf14PriceAlert, enableFf14PriceAlert, listDisabledFf14PriceAlerts,
     listDeliveredFf14PriceAlertListingKeys, recordFf14PriceAlertDeliveries,
     cleanupExpiredFf14PriceAlertDeliveries,
+    listFf14BatchAlertStates, recordFf14BatchAlertStates,
     findStreamerByName, listStreamers, deleteStreamersNotInNames, deleteStreamerByName,
     upsertStreamer, getLiveSession, startLiveSession, captureLiveSessionStartGuards,
     recordLiveDelivery, markLiveSessionEnded, recordLiveContributionEvent, getLiveContributionSummary,

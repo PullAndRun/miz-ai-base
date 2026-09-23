@@ -1,6 +1,20 @@
+# 低价提醒：商品价格跌到 minimumPrice 或更低时，把行情推到 groupId 指定的群。
 [[miz.ff14.priceAlerts]]
 groupId = ""
 region = ""
 itemName = ""
 minimumPrice = 0
 priceAlertAtUserIds = []
+
+# 批量查价：miz ff14 batch [群号] 会一次查询下面这些商品，
+# 每种商品取最低 5 条挂单的中位价作参考，参考价达到 sellPrice 就标成值得上线挂单。
+# 行情差得多的商品可以拆成多段 [[miz.ff14.batchQueries]]，各用一条售卖线。
+[[miz.ff14.batchQueries]]
+groupId = ""
+region = ""
+sellPrice = 0
+# 订阅开关：打开后按 [miz.ff14].priceAlertCron 的节奏推送售卖提醒，同一个价位只提醒一次。
+alertEnabled = false
+# 提醒时 at 这些成员；留空表示只发群消息。
+alertAtUserIds = []
+itemNames = [""]

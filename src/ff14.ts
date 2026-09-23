@@ -1,6 +1,7 @@
 import dayjs from "dayjs";
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { settleWithConcurrency } from "@/concurrency";
 import { fetchWithRetry, readResponseJson, readResponseText } from "@/http";
 
 const itemSearchResultSchema = z.looseObject({
@@ -89,6 +90,7 @@ export type Ff14MarketResult = {
 
 export const createFf14PriceAlertMentionMessage = (
   userIds: readonly (string | number)[],
+  notice = "FF14 低价提醒已触发，请查看上方行情。",
 ) => {
   const uniqueUserIds = [...new Map(userIds.map((userId) => [String(userId), userId])).values()];
   return uniqueUserIds.flatMap((userId, index) => [
@@ -97,7 +99,7 @@ export const createFf14PriceAlertMentionMessage = (
       type: "text",
       data: {
         text: index === uniqueUserIds.length - 1
-          ? " FF14 低价提醒已触发，请查看上方行情。"
+          ? ` ${notice}`
           : " ",
       },
     },
@@ -221,6 +223,167 @@ export const getFf14LowPriceListingKeys = (
 
 const hashFf14ListingKey = (value: unknown) =>
   createHash("sha256").update(JSON.stringify(value)).digest("base64url");
+
+export const FF14_BATCH_SAMPLE_SIZE = 5;
+const FF14_BATCH_QUERY_CONCURRENCY = 3;
+const FF14_BATCH_NODE_ITEM_COUNT = 6;
+
+export type Ff14BatchItemStatus = "ready" | "empty" | "missing" | "failed";
+
+export type Ff14BatchSample = {
+  price: number;
+  hq: boolean;
+};
+
+export type Ff14BatchItemResult = {
+  /** 配置里写的道具名，用于对回配置。 */
+  itemName: string;
+  /** 查询到的官方道具名与 ID；道具库没有它时为 undefined。 */
+  item?: ItemSearchResult;
+  status: Ff14BatchItemStatus;
+  /** 市场板上最低的在售单价。 */
+  lowestPrice?: number;
+  /** 用作上架参考的价格。 */
+  referencePrice?: number;
+  /** 参与参考价计算的挂单，从低到高。 */
+  samples: Ff14BatchSample[];
+  /** 配置了售卖线时表示参考价是否达到售卖线。 */
+  sellable?: boolean;
+};
+
+export type Ff14BatchQuery = {
+  regionKey: Ff14RegionKey;
+  itemNames: readonly string[];
+  itemSearchApiUrl: string;
+  marketApiUrl: string;
+  proxyUrl?: string;
+  /** 参考价达到这个价格就值得上线挂单。 */
+  sellPrice?: number;
+  sampleSize?: number;
+  maxListingCount?: number;
+  itemStore?: Ff14ItemStore;
+};
+
+export type Ff14BatchResult = {
+  regionKey: Ff14RegionKey;
+  regionName: string;
+  sellPrice?: number;
+  sampleSize: number;
+  items: readonly Ff14BatchItemResult[];
+};
+
+/**
+ * 批量查询同一分区里的多个商品，每个商品取最低的若干条挂单。
+ * 参考价取这些挂单的中位数：单条超低挂单不会把整条行情带偏。
+ */
+export const queryFf14Batch = async ({
+  regionKey,
+  itemNames,
+  itemSearchApiUrl,
+  marketApiUrl,
+  proxyUrl = "",
+  sellPrice,
+  sampleSize = FF14_BATCH_SAMPLE_SIZE,
+  maxListingCount = DEFAULT_MAX_LISTING_COUNT,
+  itemStore,
+}: Ff14BatchQuery): Promise<Ff14BatchResult> => {
+  const effectiveSampleSize = Math.max(1, Math.floor(sampleSize));
+  const listingCount = Math.max(effectiveSampleSize, Math.floor(maxListingCount));
+  const settled = await settleWithConcurrency(
+    itemNames,
+    FF14_BATCH_QUERY_CONCURRENCY,
+    async (itemName) => {
+      const result = await queryFf14Market({
+        regionKey,
+        itemName,
+        itemSearchApiUrl,
+        marketApiUrl,
+        proxyUrl,
+        maxListingCount: listingCount,
+        itemStore,
+      });
+      return createFf14BatchItemResult(itemName, result, effectiveSampleSize, sellPrice);
+    },
+  );
+
+  return {
+    regionKey,
+    regionName: FF14_REGION_NAMES[regionKey],
+    sellPrice,
+    sampleSize: effectiveSampleSize,
+    items: settled.map((entry, index) => entry.status === "fulfilled"
+      ? entry.value
+      : { itemName: itemNames[index], status: "failed", samples: [] }),
+  };
+};
+
+const createFf14BatchItemResult = (
+  itemName: string,
+  result: Ff14MarketResult | undefined,
+  sampleSize: number,
+  sellPrice: number | undefined,
+): Ff14BatchItemResult => {
+  if (!result) {
+    return { itemName, status: "missing", samples: [] };
+  }
+
+  const samples = selectFf14BatchSamples(result.market.listings, sampleSize);
+  const referencePrice = getFf14ReferencePrice(samples.map((sample) => sample.price));
+  if (referencePrice === undefined) {
+    return { itemName, item: result.item, status: "empty", samples };
+  }
+
+  return {
+    itemName,
+    item: result.item,
+    status: "ready",
+    lowestPrice: samples[0]?.price,
+    referencePrice,
+    samples,
+    sellable: sellPrice === undefined ? undefined : referencePrice >= sellPrice,
+  };
+};
+
+// 交易板默认按单件价格升序排列，这里也照单件价取最低的若干条挂单：
+// 不按挂单件数加权，1 件散卖的超低价挂单和整叠挂单在同一张榜单上比较。
+export const selectFf14BatchSamples = (
+  listings: readonly Listing[],
+  sampleSize: number,
+): Ff14BatchSample[] =>
+  sortListingsByPrice(listings.filter((listing) => listing.pricePerUnit > 0))
+    .slice(0, Math.max(1, Math.floor(sampleSize)))
+    .map((listing) => ({ price: listing.pricePerUnit, hq: listing.hq === true }));
+
+/**
+ * 挑出这次该提醒的商品：参考价达到售卖线，而且和上次提醒过的价位不一样。
+ * 同一个价位只提醒一次，价格变了才会再提醒。
+ */
+export const selectFf14BatchAlertItems = (
+  batch: Ff14BatchResult,
+  notifiedPrices: ReadonlyMap<number, number>,
+): Ff14BatchItemResult[] =>
+  batch.items.filter((item) => {
+    const itemId = item.item?.ID;
+    const referencePrice = item.referencePrice;
+    return item.status === "ready"
+      && item.sellable === true
+      && itemId !== undefined
+      && referencePrice !== undefined
+      && notifiedPrices.get(itemId) !== referencePrice;
+  });
+
+/** 取中位价；偶数条挂单时取中间两条的平均值。 */
+export const getFf14ReferencePrice = (prices: readonly number[]): number | undefined => {
+  if (prices.length === 0) {
+    return undefined;
+  }
+
+  const sorted = [...prices].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1
+    ? sorted[middle]
+    : Math.round((sorted[middle - 1] + sorted[middle]) / 2);
+};
 
 export const formatFf14MarketMessages = ({
   item,
@@ -494,8 +657,10 @@ const formatGil = (value: number | undefined) => {
     return "还没有报价";
   }
 
-  return `${Math.round(value).toLocaleString("zh-CN")} gil`;
+  return `${formatGilAmount(value)} gil`;
 };
+
+const formatGilAmount = (value: number) => Math.round(value).toLocaleString("zh-CN");
 
 const formatCount = (value: number | undefined) =>
   typeof value === "number" ? value.toLocaleString("zh-CN") : "还没有数据";
@@ -515,3 +680,125 @@ const formatReviewTime = (value: number | undefined) => {
 
   return dayjs.unix(value).format("YYYY年MM月DD日 HH:mm");
 };
+
+export const formatFf14BatchMessages = (
+  batch: Ff14BatchResult,
+  { now = new Date() }: { now?: Date } = {},
+): string[] => [
+  formatFf14BatchSummary(batch, now),
+  ...chunkFf14BatchItems(batch.items, FF14_BATCH_NODE_ITEM_COUNT)
+    .map((items) => items.map((item) => formatFf14BatchItem(item)).join("\n\n")),
+];
+
+/** 定时售卖提醒：只带这次价位有变化的商品。 */
+export const formatFf14BatchAlertMessages = (
+  batch: Ff14BatchResult,
+  { now = new Date() }: { now?: Date } = {},
+): string[] => [
+  formatFf14BatchAlertSummary(batch, now),
+  ...chunkFf14BatchItems(batch.items, FF14_BATCH_NODE_ITEM_COUNT)
+    .map((items) => items.map((item) => formatFf14BatchItem(item)).join("\n\n")),
+];
+
+const formatFf14BatchAlertSummary = (batch: Ff14BatchResult, now: Date) =>
+  [
+    `🪙 FF14 售卖提醒 · ${batch.regionName}`,
+    `有 ${batch.items.length} 个商品参考价达到售卖线，而且价位和上次提醒不一样`,
+    ...(batch.sellPrice === undefined
+      ? []
+      : [`售卖线 ${formatGil(batch.sellPrice)} · 参考价取最低 ${batch.sampleSize} 条挂单的中位价`]),
+    "",
+    ...batch.items.map((item) => `· ${formatFf14BatchItemName(item)} · 参考 ${formatGil(item.referencePrice)}`),
+    "",
+    `🕒 ${dayjs(now).format("YYYY年MM月DD日 HH:mm")}`,
+  ].join("\n");
+
+const formatFf14BatchSummary = (batch: Ff14BatchResult, now: Date) => {
+  const readyItems = batch.items.filter((item) => item.status === "ready");
+  const sellableItems = readyItems.filter((item) => item.sellable === true);
+  const waitingItems = readyItems.filter((item) => item.sellable === false);
+  const headlineItems = batch.sellPrice === undefined ? readyItems : sellableItems;
+  const unavailableItems = batch.items.filter((item) => item.status !== "ready");
+
+  return [
+    batch.sellPrice === undefined
+      ? `🪙 ${batch.regionName} 批量查价 · ${batch.items.length} 个商品`
+      : `🪙 ${batch.regionName} 批量查价 · ${batch.items.length} 个商品 · 达到售卖线 ${sellableItems.length} 个`,
+    `按交易板单件价取最低 ${batch.sampleSize} 条挂单，参考价取它们的中位价`,
+    ...(batch.sellPrice === undefined
+      ? []
+      : [`售卖线 ${formatGil(batch.sellPrice)} · 参考价达到它就值得上线挂单`]),
+    "",
+    ...(headlineItems.length === 0
+      ? [batch.sellPrice === undefined
+        ? "😴 这次没有拿到可参考的价格。"
+        : "😴 暂时没有达到售卖线的商品，先不急着上线。"]
+      : [
+        batch.sellPrice === undefined
+          ? `💰 行情参考（${headlineItems.length} 个）`
+          : `✅ 达到售卖线（${headlineItems.length} 个）`,
+        ...headlineItems.map(formatFf14BatchSummaryItem),
+      ]),
+    ...(waitingItems.length === 0
+      ? []
+      : ["", `⏸️ 还没到售卖线（${waitingItems.length} 个）`, ...waitingItems.map(formatFf14BatchSummaryItem)]),
+    ...(unavailableItems.length === 0
+      ? []
+      : [
+        "",
+        `⚠️ 没查到（${unavailableItems.length} 个）`,
+        ...unavailableItems.map((item) =>
+          `· ${formatFf14BatchItemName(item)} · ${getFf14BatchUnavailableText(item.status)}`),
+      ]),
+    "",
+    `🕒 查询于 ${dayjs(now).format("YYYY年MM月DD日 HH:mm")}`,
+  ].join("\n");
+};
+
+const formatFf14BatchSummaryItem = (item: Ff14BatchItemResult) =>
+  `· ${formatFf14BatchItemName(item)} · 参考 ${formatGil(item.referencePrice)}`;
+
+const formatFf14BatchItem = (item: Ff14BatchItemResult) => {
+  const displayName = formatFf14BatchItemName(item);
+  if (item.status !== "ready") {
+    return `⚠️ ${displayName}\n${getFf14BatchDetailText(item.status)}`;
+  }
+
+  return [
+    `${formatFf14BatchBadge(item)} ${displayName} · 参考 ${formatGil(item.referencePrice)}`,
+    `📉 前 ${item.samples.length} 条 ${formatFf14BatchSamplePrices(item.samples)} · 最低 ${formatGil(item.lowestPrice)}`,
+  ].join("\n");
+};
+
+const formatFf14BatchBadge = (item: Ff14BatchItemResult) => {
+  if (item.sellable === undefined) {
+    return "💰";
+  }
+
+  return item.sellable ? "✅" : "⏸️";
+};
+
+const formatFf14BatchSamplePrices = (samples: readonly Ff14BatchSample[]) =>
+  samples
+    .map((sample) => `${formatGilAmount(sample.price)}${sample.hq ? "HQ" : ""}`)
+    .join(" / ");
+
+const formatFf14BatchItemName = (item: Ff14BatchItemResult) => item.item?.Name ?? item.itemName;
+
+const getFf14BatchUnavailableText = (status: Ff14BatchItemStatus) => {
+  if (status === "empty") return "市场板没有在售挂单";
+  if (status === "failed") return "这次没查到";
+  return "道具库里没找到这个名字";
+};
+
+const getFf14BatchDetailText = (status: Ff14BatchItemStatus) => {
+  if (status === "empty") return "市场板暂时没有在售挂单，可能还没人卖，也可能数据还在路上。";
+  if (status === "failed") return "这次没有查到行情，稍后再试一次就好。";
+  return "道具库里没找到这个名字，检查一下 config/ff14.toml 里的写法。";
+};
+
+const chunkFf14BatchItems = (items: readonly Ff14BatchItemResult[], size: number) =>
+  Array.from(
+    { length: Math.ceil(items.length / size) },
+    (_, index) => items.slice(index * size, (index + 1) * size),
+  );

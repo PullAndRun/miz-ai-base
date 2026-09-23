@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { rename, rm } from "node:fs/promises";
-import { normalizeFf14ItemQueryName } from "@/ff14";
+import { FF14_BATCH_SAMPLE_SIZE, normalizeFf14ItemQueryName } from "@/ff14";
 
 const logLevelSchema = z.enum(["debug", "info", "warn", "error", "off"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
@@ -15,6 +15,18 @@ const ff14PriceAlertSchema = z.object({
   minimumPrice: nonNegativeIntegerSchema,
   priceAlertAtUserIds: z.array(targetIdSchema).optional(),
 });
+const ff14BatchQuerySchema = z
+  .object({
+    groupId: targetIdSchema,
+    region: ff14RegionKeySchema,
+    itemNames: z.array(nonEmptyStringSchema).min(1),
+    sellPrice: z.number().int().positive().optional(),
+    alertEnabled: z.boolean().optional(),
+    alertAtUserIds: z.array(targetIdSchema).optional(),
+  })
+  .refine((query) => !query.alertEnabled || query.sellPrice !== undefined, {
+    message: "FF14 batch sell alert requires sellPrice",
+  });
 
 const rawMizConfigSchema = z.object({
   gateway: z.object({
@@ -58,6 +70,8 @@ const rawMizConfigSchema = z.object({
       itemSearchApiUrl: nonEmptyStringSchema.optional(),
       marketApiUrl: nonEmptyStringSchema.optional(),
       manageWhitelistUserIds: z.array(targetIdSchema).optional(),
+      batchSampleSize: z.number().int().min(1).max(20).optional(),
+      batchQueries: z.array(ff14BatchQuerySchema).optional(),
       priceAlerts: z.array(ff14PriceAlertSchema).optional(),
     })
     .optional(),
@@ -225,6 +239,13 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     itemSearchApiUrl: config.ff14?.itemSearchApiUrl ?? "",
     marketApiUrl: config.ff14?.marketApiUrl ?? "",
     manageWhitelistUserIds: config.ff14?.manageWhitelistUserIds ?? [],
+    batchSampleSize: config.ff14?.batchSampleSize ?? FF14_BATCH_SAMPLE_SIZE,
+    batchQueries: (config.ff14?.batchQueries ?? []).map((query) => ({
+      ...query,
+      itemNames: [...query.itemNames],
+      alertEnabled: query.alertEnabled ?? false,
+      alertAtUserIds: query.alertAtUserIds ?? [],
+    })),
     priceAlerts: (config.ff14?.priceAlerts ?? []).map((alert) => ({
       ...alert,
       priceAlertAtUserIds: alert.priceAlertAtUserIds ?? [],

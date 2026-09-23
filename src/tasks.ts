@@ -7,10 +7,13 @@ import {
   createFf14PriceAlertMentionMessage,
   createFf14PriceAlertKey,
   FF14_REGION_NAMES,
+  formatFf14BatchAlertMessages,
   formatFf14MarketMessages,
   getFf14LowPriceListingKeys,
   getLowestMarketPrice,
+  queryFf14Batch,
   queryFf14Market,
+  selectFf14BatchAlertItems,
 } from "@/ff14";
 import { createWallpaperMessage, getDailyWallpaper } from "@/wallpaper";
 import { settleWithConcurrency, startWithConcurrency } from "@/concurrency";
@@ -62,6 +65,7 @@ const SCHEDULED_DELIVERY_CONCURRENCY = 5;
 const WALLPAPER_DELIVERY_CONCURRENCY = 3;
 const WALLPAPER_SEND_INTERVAL_MS = 2_000;
 const FF14_PRICE_ALERT_DELIVERY_RETENTION_MS = 3 * 24 * 60 * 60_000;
+const FF14_BATCH_SELL_ALERT_MENTION = "FF14 售卖提醒已触发，请查看上方行情。";
 const VTB_INITIAL_DYNAMIC_MAX_AGE_MS = 60 * 60_000;
 const vtbPollingIntervalCache = new Map<string, number>();
 
@@ -1737,13 +1741,16 @@ const sendDailyWallpaper = async (config: MizConfig, gateway: Gateway, logger: L
   });
 };
 
+const hasFf14BatchSellAlerts = (ff14: MizConfig["ff14"]) =>
+  ff14.batchQueries.some((query) => query.alertEnabled);
+
 const startFf14PriceAlertTask = (
   config: MizConfig,
   gateway: Gateway,
   logger: Logger,
 ): TaskRuntime => {
-  if (!config.ff14.priceAlertEnabled) {
-    logger.info("plugin", "ff14 price alert task disabled: config switch is off");
+  if (!config.ff14.priceAlertEnabled && !hasFf14BatchSellAlerts(config.ff14)) {
+    logger.info("plugin", "ff14 alert task disabled: price alerts and batch sell alerts are both off");
     return createNoopTask();
   }
 
@@ -1765,11 +1772,15 @@ const startFf14PriceAlertTask = (
     if (pollingConfig.ff14.priceAlerts.length > 0) {
       await runFf14PriceAlerts(pollingConfig, gateway, logger);
     }
+    if (hasFf14BatchSellAlerts(pollingConfig.ff14)) {
+      await runFf14BatchSellAlerts(pollingConfig, gateway, logger);
+    }
   };
 
-  logger.info("plugin", "ff14 price alert task started", {
+  logger.info("plugin", "ff14 alert task started", {
     cronExpression,
     alerts: config.ff14.priceAlerts.length,
+    batchSellAlerts: config.ff14.batchQueries.filter((query) => query.alertEnabled).length,
   });
 
   const task = createExclusiveCronTask({
@@ -1919,6 +1930,105 @@ const runFf14PriceAlerts = async (
     logger.info("plugin", "expired ff14 price alert deliveries cleaned up", {
       count: cleanupResult.count,
     });
+  }
+};
+
+/** 批量查价的售卖提醒：价位变了才推送，同一个价位只提醒一次。 */
+const runFf14BatchSellAlerts = async (
+  config: MizConfig,
+  gateway: Gateway,
+  logger: Logger,
+) => {
+  const itemStore = await getVtbRepository(config);
+  for (const batch of config.ff14.batchQueries) {
+    if (!batch.alertEnabled) {
+      continue;
+    }
+
+    const sellPrice = batch.sellPrice;
+    if (sellPrice === undefined) {
+      logger.warn("plugin", "ff14 batch sell alert skipped: sell line is missing", {
+        groupId: batch.groupId,
+        region: batch.region,
+      });
+      continue;
+    }
+
+    try {
+      const result = await queryFf14Batch({
+        regionKey: batch.region,
+        itemNames: batch.itemNames,
+        sellPrice,
+        sampleSize: config.ff14.batchSampleSize,
+        itemSearchApiUrl: config.ff14.itemSearchApiUrl,
+        marketApiUrl: config.ff14.marketApiUrl,
+        proxyUrl: config.network.proxyUrl,
+        maxListingCount: config.ff14.maxListingCount,
+        itemStore,
+      });
+
+      const itemIds = result.items.flatMap((item) =>
+        item.status === "ready" && item.item !== undefined ? [item.item.ID] : []);
+      if (itemIds.length === 0) {
+        logger.info("plugin", "ff14 batch sell alert skipped: no market data", {
+          groupId: batch.groupId,
+          region: batch.region,
+        });
+        continue;
+      }
+
+      const notifiedPrices = new Map(
+        (await itemStore.listFf14BatchAlertStates(batch.groupId, batch.region, itemIds))
+          .map((state) => [state.itemId, state.notifiedPrice]),
+      );
+      const alertItems = selectFf14BatchAlertItems(result, notifiedPrices);
+      if (alertItems.length === 0) {
+        logger.info("plugin", "ff14 batch sell alert skipped: prices unchanged", {
+          groupId: batch.groupId,
+          region: batch.region,
+          items: itemIds.length,
+        });
+        continue;
+      }
+
+      await gateway.sendForwardMessage(
+        { text: "", groupId: batch.groupId, raw: {} },
+        formatFf14BatchAlertMessages({ ...result, items: alertItems }),
+        {
+          title: `🪙 FF14 售卖提醒 · ${result.regionName}`,
+          source: "miz ff14",
+          summary: `参考价变化，${alertItems.length} 个商品值得上线挂单`,
+        },
+      );
+
+      // 转发成功就先记下价位：即使后面的 at 失败，同一价位也不会重复提醒。
+      await itemStore.recordFf14BatchAlertStates(
+        batch.groupId,
+        batch.region,
+        alertItems.flatMap((item) => item.item === undefined || item.referencePrice === undefined
+          ? []
+          : [{ itemId: item.item.ID, notifiedPrice: item.referencePrice }]),
+      );
+
+      if (batch.alertAtUserIds.length > 0) {
+        await gateway.sendGroupMessage(
+          batch.groupId,
+          createFf14PriceAlertMentionMessage(batch.alertAtUserIds, FF14_BATCH_SELL_ALERT_MENTION),
+        );
+      }
+
+      logger.info("plugin", "ff14 batch sell alert sent", {
+        groupId: batch.groupId,
+        region: batch.region,
+        sellPrice,
+        items: alertItems.map((item) => `${item.itemName}:${item.referencePrice ?? 0}`),
+      });
+    } catch (error) {
+      logGroupDeliveryFailure(logger, "ff14 batch sell alert failed", {
+        groupId: batch.groupId,
+        region: batch.region,
+      }, error);
+    }
   }
 };
 

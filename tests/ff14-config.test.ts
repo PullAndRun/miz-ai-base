@@ -56,3 +56,33 @@ describe("FF14 price alert config updates", () => {
     });
   });
 });
+
+describe("FF14 batch query config", () => {
+  test("keeps batch query blocks intact when a price alert is appended", () => {
+    const batchSource = [
+      "[[miz.ff14.batchQueries]]",
+      "groupId = 100",
+      'region = "猫"',
+      "sellPrice = 100",
+      'itemNames = ["火之水晶", "水之碎晶"]',
+      "",
+    ].join("\n");
+
+    const result = addFf14PriceAlertToSource(batchSource, alert);
+
+    expect(result.changed).toBeTrue();
+    expect(Bun.TOML.parse(result.source)).toMatchObject({
+      miz: {
+        ff14: {
+          batchQueries: [{
+            groupId: 100,
+            region: "猫",
+            sellPrice: 100,
+            itemNames: ["火之水晶", "水之碎晶"],
+          }],
+          priceAlerts: [alert],
+        },
+      },
+    });
+  });
+});
