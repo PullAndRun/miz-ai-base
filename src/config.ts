@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { rename, rm } from "node:fs/promises";
 import { FF14_BATCH_SAMPLE_SIZE, normalizeFf14ItemQueryName } from "@/ff14";
+import { resolveSharedMediaDirectory } from "@/napcat-media";
 
 const logLevelSchema = z.enum(["debug", "info", "warn", "error", "off"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
@@ -351,6 +352,8 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
       ...(config.vtb?.subscriptionWhitelistUserIds ?? []),
     ].map((userId) => [String(userId), userId])).values()),
     proxyUrl: config.network?.proxyUrl ?? "",
+    imageDirectory: resolveSharedMediaDirectory(getRuntimeMode(), config.video?.downloadDirectory ?? "/temp"),
+    napcatImageDirectory: config.video?.napcatMediaDirectory ?? "/app/media",
     subscriptions: (config.vtb?.subscriptions ?? []).map((subscription) => ({
       ...subscription,
       ...(subscription.atAllStreamers === undefined
@@ -493,6 +496,10 @@ export type VtbConfig = {
   nameSyncCron: string;
   adminWhitelistUserIds: Array<string | number>;
   proxyUrl: string;
+  /** bot 侧写入通知图片的共享目录（与视频共用，Docker 下为项目 temp/）。 */
+  imageDirectory: string;
+  /** NapCat 读取同一目录的路径，file:// 地址以此拼接。 */
+  napcatImageDirectory: string;
   subscriptions: ReadonlyArray<{
     readonly groupId: string | number;
     readonly streamers: readonly string[];

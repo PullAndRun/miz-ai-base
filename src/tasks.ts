@@ -28,6 +28,7 @@ import {
   replaceVtbSubscriptionGroup,
 } from "@/vtb-subscription-runtime";
 import {
+  cleanupStaleVtbImageFiles,
   closeVtbRepository,
   createVtbNotificationMessage,
   formatDynamicMessage,
@@ -68,12 +69,15 @@ const FF14_PRICE_ALERT_DELIVERY_RETENTION_MS = 3 * 24 * 60 * 60_000;
 const FF14_BATCH_SELL_ALERT_MENTION = "FF14 售卖提醒，请看上面。";
 const VTB_INITIAL_DYNAMIC_MAX_AGE_MS = 60 * 60_000;
 const vtbPollingIntervalCache = new Map<string, number>();
+/** 共享目录里过期图片的清理间隔；图片文件保留期为 24 小时。 */
+const VTB_IMAGE_CLEANUP_INTERVAL_MS = 6 * 60 * 60_000;
 
 type VtbPollState = {
   dynamicCursor: number;
   dynamicRetryMids: Set<string>;
   cardInfos: Map<string, VtbCardInfo & { expiresAt: number }>;
   livePollInterruptedAt?: number;
+  lastImageCleanupAt?: number;
 };
 
 type VtbSubscriptionGroup = {
@@ -699,6 +703,21 @@ const pollVtbSubscriptions = async (
   flushContributionBatches: (streamerMid: string, sessionStart?: Date) => Promise<void>,
 ) => {
   logger.info("plugin", "vtb poll started", { subscriptions: config.vtb.subscriptions.length });
+
+  if (
+    pollState.lastImageCleanupAt === undefined ||
+    Date.now() - pollState.lastImageCleanupAt >= VTB_IMAGE_CLEANUP_INTERVAL_MS
+  ) {
+    pollState.lastImageCleanupAt = Date.now();
+    try {
+      const removedImages = await cleanupStaleVtbImageFiles(config.vtb);
+      if (removedImages.length > 0) {
+        logger.info("plugin", "removed stale vtb image files", { count: removedImages.length });
+      }
+    } catch (error) {
+      logger.warn("plugin", "vtb image cleanup failed", normalizeError(error));
+    }
+  }
   const streamerGroups = new Map<string, Map<string, VtbSubscriptionGroup>>();
   for (const subscription of config.vtb.subscriptions) {
     const streamers = new Set([...subscription.streamers, ...(subscription.dynamicStreamers ?? [])]);

@@ -15,6 +15,7 @@ import type { MizConfig, VtbConfig } from "@/config";
 import { createDatabaseClient, getDatabaseUrl } from "@/database";
 import { fetchWithRiskControlProxy, fetchWithRetry, readResponseBytes, readResponseJson } from "@/http";
 import { prepareImageForUpload } from "@/image-compress";
+import { buildNapcatFileUrl, createHashedMediaFileName, removeStaleMediaFiles, sharedMediaFileExists, writeSharedMediaFile } from "@/napcat-media";
 import { partitionVtbSubscriptionsByGroup } from "@/vtb-subscriptions";
 import { formatVtbBattery } from "@/vtb-contribution";
 
@@ -42,12 +43,26 @@ const VTB_STATS_REQUEST_INTERVAL_MS = 1_000;
 const VTB_FAN_CLUB_REQUEST_INTERVAL_MS = 1_000;
 const VTB_STATS_CACHE_MS = 60_000;
 const VTB_LIVE_QUERY_CACHE_MS = 60_000;
-const VTB_IMAGE_CACHE_MS = 10 * 60_000;
+// 图片先写进 bot/NapCat 共享目录并按 file:// 发送；同名文件在保留期内直接复用。
+const VTB_IMAGE_FILE_PREFIX = "miz-vtb-image-";
+export const STALE_VTB_IMAGE_FILE_MAX_AGE_MS = 24 * 60 * 60_000;
+const VTB_IMAGE_FILE_NAME_PATTERN = /^miz-vtb-image-[0-9a-f]{20}\./;
+const VTB_IMAGE_FILE_EXTENSIONS: Record<string, string> = {
+  jpeg: "jpg",
+  jpg: "jpg",
+  png: "png",
+  gif: "gif",
+  webp: "webp",
+  bmp: "bmp",
+  avif: "avif",
+  heic: "heic",
+  tif: "tiff",
+  tiff: "tiff",
+};
 // Keep image notifications useful for high-resolution covers while still
 // bounding memory use when an upstream returns an unexpectedly large body.
 const MAX_VTB_IMAGE_BYTES = 16 * 1024 * 1024;
 const MAX_VTB_RESPONSE_BYTES = 5 * 1024 * 1024;
-const MAX_VTB_IMAGE_CACHE_ENTRIES = 16;
 const MAX_VTB_QUERY_CACHE_ENTRIES = 1_000;
 // Unlike ambiguous validation/rejection codes such as -352 and -799, -509
 // specifically means that requests are too frequent. HTTP 412/429 are handled
@@ -220,7 +235,6 @@ let vtbLiveQueryCache = createExpiringCache<string, VtbLiveInfo>(MAX_VTB_QUERY_C
 let vtbCardQueryCache = createExpiringCache<string, VtbCardInfo>(MAX_VTB_QUERY_CACHE_ENTRIES);
 let vtbDynamicQueryCache = createExpiringCache<string, VtbDynamicFeed>(MAX_VTB_QUERY_CACHE_ENTRIES);
 let vtbUserSearchCache = createExpiringCache<string, VtbStreamer | null>(MAX_VTB_QUERY_CACHE_ENTRIES);
-let vtbImageCache = createExpiringCache<string, string>(MAX_VTB_IMAGE_CACHE_ENTRIES);
 let vtbLiveStatsCache = createExpiringCache<string, VtbCardInfo>(MAX_VTB_QUERY_CACHE_ENTRIES);
 const vtbLiveStatsInFlight = new Map<string, Promise<VtbCardInfo>>();
 let vtbWbiKeys: { mixinKey: string; expiresAt: number } | undefined;
@@ -875,18 +889,22 @@ export const getVtbDynamics = async (
   return feed;
 };
 
+/** 按 URL 扩展名命名文件；拿不到已知扩展名时退回 jpg（NapCat 按内容识别图片类型）。 */
+const guessVtbImageExtension = (url: string) => {
+  const match = /\.([a-z0-9]{2,5})$/i.exec(new URL(url).pathname);
+  return (match ? VTB_IMAGE_FILE_EXTENSIONS[match[1].toLowerCase()] : undefined) ?? "jpg";
+};
+
 export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbConfig) => {
   const url = cleanImageUrl(imageUrl);
   if (!url) {
     return undefined;
   }
 
-  const cacheKey = `${url}\n${config.webUrl}\n${config.proxyUrl}`;
-  const cacheRead = readExpiringCache(vtbImageCache, cacheKey, Date.now());
-  vtbImageCache = cacheRead.cache;
-  const cached = cacheRead.value;
-  if (cached) {
-    return cached;
+  // 文件名只取决于 URL：共享目录命中时直接复用文件，不再重新下载。
+  const fileName = createHashedMediaFileName(VTB_IMAGE_FILE_PREFIX, url, guessVtbImageExtension(url));
+  if (await sharedMediaFileExists(config.imageDirectory, fileName)) {
+    return buildNapcatFileUrl(config.napcatImageDirectory, fileName);
   }
 
   const requestHeaders = createVtbRequestHeaders(
@@ -925,17 +943,26 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
     },
   );
   recordVtbRequestSuccess(url);
-  // 压缩放在请求保护之外：本地重编码失败不应记入 B 站接口的冷却状态。
-  const file = `base64://${Buffer.from(await prepareImageForUpload(bytes)).toString("base64")}`;
-  vtbImageCache = writeExpiringCache(
-    vtbImageCache,
-    cacheKey,
-    file,
-    VTB_IMAGE_CACHE_MS,
-    Date.now(),
-  );
-  return file;
+
+  // 共享文件只传路径，原图直接落盘交给 NapCat 读取；目录不可写时才退回
+  // 压缩后的 base64（压缩保证不会撑爆 NapCat 的 50MiB 单帧上限）。
+  try {
+    await writeSharedMediaFile(config.imageDirectory, fileName, bytes);
+    return buildNapcatFileUrl(config.napcatImageDirectory, fileName);
+  } catch {
+    return `base64://${Buffer.from(await prepareImageForUpload(bytes)).toString("base64")}`;
+  }
 };
+
+/** 清理共享目录里过期的 VTB 图片文件；视频产物由视频清理单独负责。 */
+export const cleanupStaleVtbImageFiles = async (
+  config: VtbConfig,
+  maxAgeMs = STALE_VTB_IMAGE_FILE_MAX_AGE_MS,
+) => removeStaleMediaFiles(
+  config.imageDirectory,
+  (fileName) => VTB_IMAGE_FILE_NAME_PATTERN.test(fileName),
+  maxAgeMs,
+);
 
 export type VtbRepository = ReturnType<typeof createVtbRepository>;
 

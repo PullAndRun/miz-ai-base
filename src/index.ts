@@ -12,7 +12,7 @@ import { requiresGatewayRestart, requiresRuntimeReload } from "@/runtime-config"
 import { replaceRuntimeWithFallback, type RuntimeReplacement } from "@/runtime-reload";
 import { startScheduledTasks } from "@/tasks";
 import { cleanupStaleVideoArtifacts } from "@/video";
-import { closeVtbRepository, partitionAvailableVtbSubscriptions, syncConfiguredVtbStreamers } from "@/vtb";
+import { cleanupStaleVtbImageFiles, closeVtbRepository, partitionAvailableVtbSubscriptions, syncConfiguredVtbStreamers } from "@/vtb";
 
 type AppRuntime = {
   config: Awaited<ReturnType<typeof loadConfig>>;
@@ -66,6 +66,16 @@ const main = async (logger: Logger) => {
       }
     } catch (error) {
       logger.warn("miz", "stale video artifact cleanup failed", error);
+    }
+  }
+  if (loadedConfig.vtb.enabled) {
+    try {
+      const removedImages = await cleanupStaleVtbImageFiles(loadedConfig.vtb);
+      if (removedImages.length > 0) {
+        logger.info("miz", "removed stale vtb image files", { count: removedImages.length });
+      }
+    } catch (error) {
+      logger.warn("miz", "stale vtb image cleanup failed", error);
     }
   }
   let runtime = await createConnectedAppRuntime(loadedConfig, logger);

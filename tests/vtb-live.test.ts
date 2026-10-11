@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import type { VtbConfig } from "@/config";
 import { decodeSendGiftV2Payload, normalizeGuardRoleName, normalizeUserToastV2, shouldNotifyVtbContribution } from "@/vtb-live-events";
 import { formatContributionMessage, resolveVtbContributionUserName } from "@/tasks";
@@ -19,12 +22,19 @@ import { UPLOAD_IMAGE_BUDGET_BYTES } from "@/image-compress";
 import { createNoiseJpeg } from "./support/vtb-image-fixture";
 
 const originalFetch = globalThis.fetch;
+const imageRootDirectory = await mkdtemp(path.join(tmpdir(), "miz-vtb-image-test-"));
 const config = {
   userApiUrl: "https://example.test/users?name=",
   liveApiUrl: "https://example.test/live",
   webUrl: "https://www.example.test",
   liveWebUrl: "https://live.example.test",
+  imageDirectory: imageRootDirectory,
+  napcatImageDirectory: "/app/media",
 } as VtbConfig;
+
+afterAll(async () => {
+  await rm(imageRootDirectory, { recursive: true, force: true });
+});
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -752,7 +762,7 @@ describe("Bilibili live lookup", () => {
     expect(calls).toBe(2);
   });
 
-  test("downloads notification images once and sends them as base64", async () => {
+  test("downloads a notification image once and sends it as a shared file", async () => {
     let calls = 0;
     globalThis.fetch = (async () => {
       calls += 1;
@@ -762,9 +772,16 @@ describe("Bilibili live lookup", () => {
 
     const first = await getVtbImageFile(imageUrl, config);
     const second = await getVtbImageFile(imageUrl, config);
-    expect(first).toBe("base64://AQID");
+    expect(first?.startsWith("file:///app/media/miz-vtb-image-")).toBeTrue();
+    expect(first?.endsWith(".png")).toBeTrue();
     expect(second).toBe(first);
     expect(calls).toBe(1);
+
+    const storedBytes = await readFile(path.join(
+      imageRootDirectory,
+      path.posix.basename(new URL(first!).pathname),
+    ));
+    expect([...storedBytes]).toEqual([1, 2, 3]);
 
     const message = createVtbNotificationMessage("开播消息", first);
     const mentioned = prependVtbAtAllMention(message) as Array<{ type: string; data: Record<string, unknown> }>;
@@ -779,22 +796,33 @@ describe("Bilibili live lookup", () => {
     ]);
   });
 
-  test("shrinks a notification image larger than the old 5MB limit", async () => {
+  test("sends a notification image larger than the old 5MB limit through the shared file", async () => {
     const source = await createNoiseJpeg(2200, 1800, 92);
     expect(source.length).toBeGreaterThan(5 * 1024 * 1024);
     globalThis.fetch = (async () => new Response(source, { headers: { "content-type": "image/jpeg" } })) as unknown as typeof fetch;
 
     const file = await getVtbImageFile("https://notification-image.example.test/large.jpg", config);
+    expect(file?.startsWith("file:///app/media/miz-vtb-image-")).toBeTrue();
+    const storedBytes = await readFile(path.join(
+      imageRootDirectory,
+      path.posix.basename(new URL(file!).pathname),
+    ));
+    expect(storedBytes.length).toBe(source.length);
+  });
+
+  test("falls back to a compressed base64 image when the shared directory is unavailable", async () => {
+    const occupiedPath = path.join(imageRootDirectory, "occupied");
+    await writeFile(occupiedPath, "occupied");
+    globalThis.fetch = (async () => new Response(await createNoiseJpeg(1600, 1300, 90), {
+      headers: { "content-type": "image/jpeg" },
+    })) as unknown as typeof fetch;
+
+    const file = await getVtbImageFile(
+      "https://notification-image.example.test/fallback.jpg",
+      { ...config, imageDirectory: path.join(occupiedPath, "images") } as VtbConfig,
+    );
     expect(file?.startsWith("base64://")).toBeTrue();
     const prepared = Buffer.from(file!.slice("base64://".length), "base64");
     expect(prepared.length).toBeLessThanOrEqual(UPLOAD_IMAGE_BUDGET_BYTES);
-  });
-
-  test("rejects an oversized notification image that cannot be decoded", async () => {
-    const bytes = new Uint8Array(5 * 1024 * 1024 + 1);
-    bytes.fill(7);
-    globalThis.fetch = (async () => new Response(bytes, { headers: { "content-type": "image/jpeg" } })) as unknown as typeof fetch;
-
-    await expect(getVtbImageFile("https://notification-image.example.test/broken.jpg", config)).rejects.toThrow("could not be decoded");
   });
 });

@@ -5,6 +5,7 @@ import path from "node:path";
 import { getBilibiliCredentialHeader } from "@/bilibili-credential";
 import type { NetworkConfig, VideoConfig } from "@/config";
 import { isWhitelistedUser } from "@/group-permissions";
+import { buildNapcatFileUrl, removeStaleMediaFiles, resolveSharedMediaDirectory } from "@/napcat-media";
 
 const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 const TRANSCODE_TIMEOUT_MS = 15 * 60_000;
@@ -95,12 +96,8 @@ export const downloadVideo = async ({
   }
 };
 
-export const getNapcatVideoFile = (videoPath: string, config: VideoConfig) => {
-  const napcatPath = path.posix.join(config.napcatMediaDirectory, path.basename(videoPath));
-  const fileUrl = new URL("file:///");
-  fileUrl.pathname = napcatPath;
-  return fileUrl.href;
-};
+export const getNapcatVideoFile = (videoPath: string, config: VideoConfig) =>
+  buildNapcatFileUrl(config.napcatMediaDirectory, path.basename(videoPath));
 
 export const getNapcatVideoBase64 = async (videoPath: string) =>
   `base64://${(await readFile(videoPath)).toString("base64")}`;
@@ -110,24 +107,11 @@ export const deleteDownloadedVideo = (videoPath: string) => rm(videoPath, { forc
 export const cleanupStaleVideoArtifacts = async (
   config: VideoConfig,
   maxAgeMs = STALE_VIDEO_ARTIFACT_MAX_AGE_MS,
-) => {
-  const downloadDirectory = getDownloadDirectory(config);
-  const cutoff = Date.now() - maxAgeMs;
-  const entries = await readdir(downloadDirectory, { withFileTypes: true }).catch(() => []);
-  const removed = (await Promise.all(entries.map(async (entry) => {
-    if (!entry.isFile() || !VIDEO_ARTIFACT_NAME_PATTERN.test(entry.name)) {
-      return undefined;
-    }
-    const artifactPath = path.join(downloadDirectory, entry.name);
-    const artifact = await stat(artifactPath).catch(() => undefined);
-    if (!artifact || artifact.mtimeMs > cutoff) {
-      return undefined;
-    }
-    await rm(artifactPath, { force: true });
-    return artifactPath;
-  }))).filter((artifactPath): artifactPath is string => artifactPath !== undefined);
-  return removed;
-};
+) => removeStaleMediaFiles(
+  getDownloadDirectory(config),
+  (fileName) => VIDEO_ARTIFACT_NAME_PATTERN.test(fileName),
+  maxAgeMs,
+);
 
 export const createVideoSourcePathTemplate = (downloadDirectory: string, requestId: string) =>
   path.join(downloadDirectory, `miz-video-${requestId}-source.%(ext)s`);
@@ -507,11 +491,7 @@ const resolveExecutable = (
   : findExecutable(executable) ?? executable;
 
 const getDownloadDirectory = (config: VideoConfig) =>
-  config.runtimeMode === "docker"
-    ? path.join(process.cwd(), "temp")
-    : process.platform === "win32" && config.downloadDirectory === "/temp"
-    ? path.join(process.cwd(), "temp")
-    : config.downloadDirectory;
+  resolveSharedMediaDirectory(config.runtimeMode, config.downloadDirectory);
 
 const findDownloadedVideo = async (
   output: string,
