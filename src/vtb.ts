@@ -14,6 +14,7 @@ import { getBilibiliCredentialHeader } from "@/bilibili-credential";
 import type { MizConfig, VtbConfig } from "@/config";
 import { createDatabaseClient, getDatabaseUrl } from "@/database";
 import { fetchWithRiskControlProxy, fetchWithRetry, readResponseBytes, readResponseJson } from "@/http";
+import { prepareImageForUpload } from "@/image-compress";
 import { partitionVtbSubscriptionsByGroup } from "@/vtb-subscriptions";
 import { formatVtbBattery } from "@/vtb-contribution";
 
@@ -892,7 +893,7 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
     config.webUrl,
   );
   const requestInit = { headers: requestHeaders } satisfies RequestInit;
-  const file = await runProtectedVtbRequest(
+  const bytes = await runProtectedVtbRequest(
     url,
     requestInit,
     VTB_JSON_REQUEST_INTERVAL_MS,
@@ -920,10 +921,12 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
       if (bytes.length === 0) {
         throw new Error("VTB image response is empty");
       }
-      return `base64://${bytes.toString("base64")}`;
+      return bytes;
     },
   );
   recordVtbRequestSuccess(url);
+  // 压缩放在请求保护之外：本地重编码失败不应记入 B 站接口的冷却状态。
+  const file = `base64://${Buffer.from(await prepareImageForUpload(bytes)).toString("base64")}`;
   vtbImageCache = writeExpiringCache(
     vtbImageCache,
     cacheKey,

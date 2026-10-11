@@ -15,6 +15,8 @@ import {
   resolveVtbStreamer,
   resolveVtbStreamerForQuery,
 } from "@/vtb";
+import { UPLOAD_IMAGE_BUDGET_BYTES } from "@/image-compress";
+import { createNoiseJpeg } from "./support/vtb-image-fixture";
 
 const originalFetch = globalThis.fetch;
 const config = {
@@ -777,12 +779,22 @@ describe("Bilibili live lookup", () => {
     ]);
   });
 
-  test("accepts a notification image larger than the old 5MB limit", async () => {
-    const bytes = new Uint8Array(5 * 1024 * 1024 + 1);
-    bytes[0] = 1;
-    globalThis.fetch = (async () => new Response(bytes, { headers: { "content-type": "image/jpeg" } })) as unknown as typeof fetch;
+  test("shrinks a notification image larger than the old 5MB limit", async () => {
+    const source = await createNoiseJpeg(2200, 1800, 92);
+    expect(source.length).toBeGreaterThan(5 * 1024 * 1024);
+    globalThis.fetch = (async () => new Response(source, { headers: { "content-type": "image/jpeg" } })) as unknown as typeof fetch;
 
     const file = await getVtbImageFile("https://notification-image.example.test/large.jpg", config);
     expect(file?.startsWith("base64://")).toBeTrue();
+    const prepared = Buffer.from(file!.slice("base64://".length), "base64");
+    expect(prepared.length).toBeLessThanOrEqual(UPLOAD_IMAGE_BUDGET_BYTES);
+  });
+
+  test("rejects an oversized notification image that cannot be decoded", async () => {
+    const bytes = new Uint8Array(5 * 1024 * 1024 + 1);
+    bytes.fill(7);
+    globalThis.fetch = (async () => new Response(bytes, { headers: { "content-type": "image/jpeg" } })) as unknown as typeof fetch;
+
+    await expect(getVtbImageFile("https://notification-image.example.test/broken.jpg", config)).rejects.toThrow("could not be decoded");
   });
 });
