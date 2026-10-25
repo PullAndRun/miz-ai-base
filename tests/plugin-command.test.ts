@@ -32,6 +32,25 @@ describe("command parsing", () => {
     });
   });
 
+  test("routes lottery query regardless of spaces around the subcommand", () => {
+    const commands = ["抽奖"];
+    const variants = [
+      "miz 抽奖 查询",
+      "miz抽奖查询",
+      "miz抽奖 查询",
+      "miz   抽奖    查询",
+    ];
+
+    for (const variant of variants) {
+      const commandText = parseCommandText(variant, "miz", commands);
+      expect(commandText).toBeDefined();
+      expect(findPluginCommand(commandText!, commands)).toMatchObject({
+        name: "抽奖",
+        args: "查询",
+      });
+    }
+  });
+
   test("prefers the longest overlapping command", () => {
     expect(findPluginCommand("新闻列表", ["新", "新闻"])).toMatchObject({ name: "新闻", args: "列表" });
   });

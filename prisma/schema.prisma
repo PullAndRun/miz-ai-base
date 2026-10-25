@@ -255,6 +255,7 @@ model GiftLotteryDailyDraw {
 
   @@id([groupId, userId, drawDate])
   @@index([drawDate])
+  @@index([userId, drawnAt])
   @@map("gift_lottery_daily_draws")
 }
 

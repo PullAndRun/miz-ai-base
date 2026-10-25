@@ -18,6 +18,19 @@ export type GiftLotteryDailyDraw = Readonly<{
   coins: number;
 }>;
 
+/** 写入每日记录时同时保存的抽奖时间；查询最近记录时按它筛选。 */
+export type GiftLotteryDrawClaim = GiftLotteryDailyDrawKey & GiftLotteryDailyDraw & Readonly<{
+  drawnAt: Date;
+}>;
+
+export type GiftLotteryHistoryDraw = Readonly<{
+  groupId: string;
+  giftId: number;
+  giftName: string;
+  coins: number;
+  drawnAt: Date;
+}>;
+
 export type GiftLotteryCoinKey = Readonly<{
   /** 群号；私聊用 `private:<用户号>`。 */
   groupId: string;
@@ -37,12 +50,18 @@ export type GiftLotteryCoinRank = Readonly<{
 /** 每日一次的限制依赖这层存储；测试可以注入内存实现。 */
 export type GiftLotteryDrawStore = Readonly<{
   find: (key: GiftLotteryDailyDrawKey) => Promise<GiftLotteryDailyDraw | undefined>;
-  claim: (draw: GiftLotteryDailyDrawKey & GiftLotteryDailyDraw) => Promise<"claimed" | "taken">;
+  claim: (draw: GiftLotteryDrawClaim) => Promise<"claimed" | "taken">;
   release: (key: GiftLotteryDailyDrawKey) => Promise<void>;
   /** 该群该用户累计的迷币。 */
   readCoins: (key: GiftLotteryCoinKey) => Promise<number>;
   /** 发送成功后给该群该用户入账。 */
   addCoins: (key: GiftLotteryCoinKey, amount: number) => Promise<void>;
+  /** 某位用户最近若干天的抽奖记录，按抽奖时间从新到旧排列。 */
+  listRecentByUser: (
+    userId: string,
+    since: Date,
+    limit: number,
+  ) => Promise<readonly GiftLotteryHistoryDraw[]>;
   /** 群里迷币最多的前几名。 */
   listTopCoins: (groupId: string, limit: number) => Promise<readonly GiftLotteryCoinEntry[]>;
   /** 某人在群里的名次，没有记录时返回 undefined。 */
@@ -92,7 +111,7 @@ export const findGiftLotteryDailyDraw = async (
 
 /** 先占位再发奖：唯一键冲突说明这个群当天已经抽过了。 */
 export const claimGiftLotteryDailyDraw = async (
-  draw: GiftLotteryDailyDrawKey & GiftLotteryDailyDraw,
+  draw: GiftLotteryDrawClaim,
 ): Promise<"claimed" | "taken"> => {
   try {
     await requireDrawDatabase().giftLotteryDailyDraw.create({
@@ -103,6 +122,7 @@ export const claimGiftLotteryDailyDraw = async (
         giftId: draw.giftId,
         giftName: draw.giftName,
         coins: draw.coins,
+        drawnAt: draw.drawnAt,
       },
     });
     return "claimed";
@@ -140,6 +160,39 @@ export const addGiftLotteryCoins = async (key: GiftLotteryCoinKey, amount: numbe
   });
 };
 
+/** 查询某位用户最近几天的中奖记录；跨群和私聊记录都算同一个人。 */
+export const listRecentGiftLotteryHistoryDraws = async (
+  userId: string,
+  since: Date,
+  limit: number,
+): Promise<readonly GiftLotteryHistoryDraw[]> => {
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return [];
+  }
+  const rows = await requireDrawDatabase().giftLotteryDailyDraw.findMany({
+    where: {
+      userId,
+      drawnAt: { gte: since },
+    },
+    select: {
+      groupId: true,
+      giftId: true,
+      giftName: true,
+      coins: true,
+      drawnAt: true,
+    },
+    orderBy: [{ drawnAt: "desc" }, { groupId: "asc" }],
+    take: Math.max(1, Math.min(100, Math.floor(limit))),
+  });
+  return rows.map((row) => ({
+    groupId: row.groupId,
+    giftId: row.giftId,
+    giftName: row.giftName,
+    coins: row.coins,
+    drawnAt: row.drawnAt,
+  }));
+};
+
 export const listGiftLotteryTopCoins = async (
   groupId: string,
   limit: number,
@@ -174,6 +227,7 @@ export const giftLotteryDrawStore: GiftLotteryDrawStore = {
   release: releaseGiftLotteryDailyDraw,
   readCoins: readGiftLotteryCoins,
   addCoins: addGiftLotteryCoins,
+  listRecentByUser: listRecentGiftLotteryHistoryDraws,
   listTopCoins: listGiftLotteryTopCoins,
   readCoinRank: readGiftLotteryCoinRank,
 };

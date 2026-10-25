@@ -1,3 +1,4 @@
+import dayjs from "dayjs";
 import type { ForwardMessageContent } from "@/plugins";
 import {
   createBiliGiftMediaSegment,
@@ -285,6 +286,100 @@ export const createBiliGiftLotteryLeaderboardMessage = (
     }),
   ].join("\n");
 };
+export const BILI_GIFT_LOTTERY_HISTORY_DAYS = 10;
+export const BILI_GIFT_LOTTERY_HISTORY_LIMIT = 10;
+/** 单个合并转发节点给标题、日期和礼物行留出的安全长度。 */
+export const BILI_GIFT_LOTTERY_HISTORY_NODE_MAX_LENGTH = 1_800;
+
+export type BiliGiftLotteryHistoryEntry = Readonly<{
+  giftName: string;
+  /** 抽中礼物时记录的迷币价值。 */
+  coins: number;
+  drawnAt: Date;
+}>;
+
+export type BiliGiftLotteryHistoryMessageOptions = Readonly<{
+  commandPrefix?: string;
+  /** 测试或适配不同 QQ 文本上限时可覆盖。 */
+  nodeMaxLength?: number;
+}>;
+
+const formatHistoryNumber = (value: number) => {
+  const rounded = Math.round(Number.isFinite(value) ? value : 0);
+  return String(rounded).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+};
+
+const cleanHistoryText = (value: string, maxLength: number) => {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
+};
+
+const formatHistoryDate = (date: Date) =>
+  dayjs(date).isValid() ? dayjs(date).format("YYYY-MM-DD HH:mm") : "时间未知";
+
+const getHistoryTotalCoins = (entries: readonly BiliGiftLotteryHistoryEntry[]) =>
+  entries.reduce((total, entry) => total + (Number.isFinite(entry.coins) ? entry.coins : 0), 0);
+
+/** 合并转发摘要：条目数和礼物总价值。 */
+export const formatBiliGiftLotteryHistorySummary = (
+  entries: readonly BiliGiftLotteryHistoryEntry[],
+) => `最近${BILI_GIFT_LOTTERY_HISTORY_DAYS}天 ${entries.length} 次 · 总价值 ${formatHistoryNumber(getHistoryTotalCoins(entries))} 迷币`;
+
+/**
+ * 最近抽奖查询：第一行固定是「昵称 最近10次抽奖」。
+ * 内容放得下时只有一个合并节点；放不下时按整条记录拆到后续节点，仍由一次合并转发发送。
+ */
+export const createBiliGiftLotteryHistoryMessages = (
+  nickname: string,
+  entries: readonly BiliGiftLotteryHistoryEntry[],
+  options: BiliGiftLotteryHistoryMessageOptions = {},
+): readonly string[] => {
+  const name = cleanHistoryText(nickname, 40) || "群友";
+  const commandPrefix = options.commandPrefix?.trim() || "miz";
+  const maxNodeLength = Math.max(
+    240,
+    Math.floor(options.nodeMaxLength ?? BILI_GIFT_LOTTERY_HISTORY_NODE_MAX_LENGTH),
+  );
+  const header = [
+    `${name} 最近10次抽奖`,
+    "━━━━━━━━━━━━━━",
+    `📅 最近${BILI_GIFT_LOTTERY_HISTORY_DAYS}天 · 共 ${entries.length} 次`,
+    `💰 礼物总价值 ${formatHistoryNumber(getHistoryTotalCoins(entries))} 迷币`,
+  ].join("\n");
+
+  if (entries.length === 0) {
+    return [
+      `${header}\n\n最近${BILI_GIFT_LOTTERY_HISTORY_DAYS}天还没有抽到礼物。\n发 ${commandPrefix} 抽奖，试试今天的手气吧～`,
+    ];
+  }
+
+  const blocks = entries.map((entry, index) => {
+    const giftName = cleanHistoryText(entry.giftName, 60) || "神秘礼物";
+    return [
+      `${String(index + 1).padStart(2, "0")}. 🎁 ${giftName}`,
+      `    🕒 ${formatHistoryDate(entry.drawnAt)} · 价值 ${formatHistoryNumber(entry.coins)} 迷币`,
+    ].join("\n");
+  });
+  const continuationHeader = `↪ ${name} 最近10次抽奖（续）`;
+  const messages: string[] = [];
+  let current = header;
+
+  for (const block of blocks) {
+    const candidate = `${current}\n\n${block}`;
+    if (candidate.length > maxNodeLength) {
+      messages.push(current);
+      current = `${continuationHeader}\n\n${block}`;
+    } else {
+      current = candidate;
+    }
+  }
+  messages.push(current);
+  return messages;
+};
+
 /** 抽奖转发消息：结果卡片 + 礼物的展示效果。 */
 export const createBiliGiftLotteryForwardMessages = (
   card: string,
