@@ -1,0 +1,9 @@
+# Codex 2026-10-13: resource guardrails + log rotation (base compose unchanged)
+services:
+  miz:
+    mem_limit: 1024m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
