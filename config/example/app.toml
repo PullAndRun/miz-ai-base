@@ -95,6 +95,9 @@ ytDlpLinuxPath = "tools/yt-dlp"
 ytDlpWindowsPath = "tools/yt-dlp.exe"
 ffmpegLinuxPath = "tools/ffmpeg"
 ffmpegWindowsPath = "tools/ffmpeg.exe"
+# 可选：YouTube Netscape Cookie 文件，以及供 yt-dlp 解决 YouTube challenge 的 JS 运行时。
+youtubeCookiesPath = ""
+jsRuntime = ""
 maxConcurrentJobs = 2
 
 [miz.vtb]

@@ -156,6 +156,8 @@ const rawMizConfigSchema = z.object({
       ytDlpWindowsPath: nonEmptyStringSchema.optional(),
       ffmpegLinuxPath: nonEmptyStringSchema.optional(),
       ffmpegWindowsPath: nonEmptyStringSchema.optional(),
+      youtubeCookiesPath: nonEmptyStringSchema.optional(),
+      jsRuntime: nonEmptyStringSchema.optional(),
       maxConcurrentJobs: z.number().int().positive().max(8).optional(),
     })
     .optional(),
@@ -314,6 +316,8 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     ytDlpWindowsPath: config.video?.ytDlpWindowsPath ?? "",
     ffmpegLinuxPath: config.video?.ffmpegLinuxPath ?? "tools/ffmpeg",
     ffmpegWindowsPath: config.video?.ffmpegWindowsPath ?? "tools/ffmpeg.exe",
+    youtubeCookiesPath: config.video?.youtubeCookiesPath ?? "",
+    jsRuntime: config.video?.jsRuntime ?? "",
     maxConcurrentJobs: config.video?.maxConcurrentJobs ?? 2,
   },
   vtb: {
@@ -458,6 +462,8 @@ export type VideoConfig = {
   ytDlpWindowsPath: string;
   ffmpegLinuxPath: string;
   ffmpegWindowsPath: string;
+  youtubeCookiesPath: string;
+  jsRuntime: string;
   maxConcurrentJobs: number;
 };
 

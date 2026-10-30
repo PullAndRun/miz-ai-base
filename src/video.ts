@@ -30,6 +30,17 @@ export const isBilibiliUrl = (value: string, allowedHosts: readonly string[]) =>
   }
 };
 
+export const isYouTubeUrl = (value: string) => {
+  try {
+    const hostname = new URL(value).hostname.toLowerCase();
+    return ["youtube.com", "youtu.be", "youtube-nocookie.com"].some(
+      (allowedHost) => hostname === allowedHost || hostname.endsWith(`.${allowedHost}`),
+    );
+  } catch {
+    return false;
+  }
+};
+
 export const isVideoUrl = (value: string) => {
   try {
     const protocol = new URL(value).protocol;
@@ -173,13 +184,21 @@ export const createFfmpegTranscodeArgs = (sourceVideoPath: string, outputVideoPa
   outputVideoPath,
 ];
 
+type YtDlpRequestOptions = {
+  bilibiliCookieFilePath?: string;
+  youtubeCookiesPath?: string;
+  jsRuntime?: string;
+};
+
 export const createYtDlpRequestArgs = (
   url: string,
   network: NetworkConfig,
-  cookieFilePath?: string,
+  options: YtDlpRequestOptions = {},
 ) => [
   ...(network.proxyUrl ? ["--proxy", network.proxyUrl] : []),
-  ...(cookieFilePath ? ["--cookies", cookieFilePath] : []),
+  ...(options.jsRuntime && isYouTubeUrl(url) ? ["--js-runtimes", options.jsRuntime] : []),
+  ...(options.bilibiliCookieFilePath ? ["--cookies", options.bilibiliCookieFilePath] : []),
+  ...(options.youtubeCookiesPath && isYouTubeUrl(url) ? ["--cookies", options.youtubeCookiesPath] : []),
   url,
 ];
 
@@ -242,7 +261,10 @@ const withYtDlpRequest = async <T>(
   const credentialCookie = await getBilibiliCredentialHeader() ?? "";
   const cookieContents = createYtDlpCookieFileContents(url, config, credentialCookie);
   if (!cookieContents) {
-    return callback(createYtDlpRequestArgs(url, network));
+    return callback(createYtDlpRequestArgs(url, network, {
+      youtubeCookiesPath: config.youtubeCookiesPath,
+      jsRuntime: config.jsRuntime,
+    }));
   }
 
   const cookieDirectory = path.join(tmpdir(), "miz");
@@ -250,7 +272,11 @@ const withYtDlpRequest = async <T>(
   const cookieFilePath = path.join(cookieDirectory, `.miz-yt-dlp-${crypto.randomUUID()}.cookies`);
   await writeFile(cookieFilePath, cookieContents, { encoding: "utf8", flag: "wx", mode: 0o600 });
   try {
-    return await callback(createYtDlpRequestArgs(url, network, cookieFilePath));
+    return await callback(createYtDlpRequestArgs(url, network, {
+      bilibiliCookieFilePath: cookieFilePath,
+      youtubeCookiesPath: config.youtubeCookiesPath,
+      jsRuntime: config.jsRuntime,
+    }));
   } finally {
     await rm(cookieFilePath, { force: true });
   }

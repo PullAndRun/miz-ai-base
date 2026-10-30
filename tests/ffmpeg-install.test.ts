@@ -23,6 +23,8 @@ const videoConfig: VideoConfig = {
   ytDlpWindowsPath: "tools/yt-dlp.exe",
   ffmpegLinuxPath: "tools/ffmpeg",
   ffmpegWindowsPath: "tools/ffmpeg.exe",
+  youtubeCookiesPath: "",
+  jsRuntime: "",
   maxConcurrentJobs: 2,
 };
 

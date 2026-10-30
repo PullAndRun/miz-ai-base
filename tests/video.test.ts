@@ -39,6 +39,8 @@ const videoConfig: VideoConfig = {
   ytDlpWindowsPath: "tools/yt-dlp.exe",
   ffmpegLinuxPath: "tools/ffmpeg",
   ffmpegWindowsPath: "tools/ffmpeg.exe",
+  youtubeCookiesPath: "",
+  jsRuntime: "",
   maxConcurrentJobs: 2,
 };
 const networkConfig = { proxyUrl: "" };
@@ -201,7 +203,9 @@ describe("Bilibili download authentication", () => {
     "https://www.bilibili.com/video/BV1",
     "https://b23.tv/abc123",
   ])("passes the credential cookie file to yt-dlp for %s", (url) => {
-    expect(createYtDlpRequestArgs(url, networkConfig, "/temp/miz.cookies")).toEqual([
+    expect(createYtDlpRequestArgs(url, networkConfig, {
+      bilibiliCookieFilePath: "/temp/miz.cookies",
+    })).toEqual([
       "--cookies",
       "/temp/miz.cookies",
       url,
@@ -248,7 +252,7 @@ describe("Bilibili download authentication", () => {
     expect(createYtDlpRequestArgs(
       "https://www.bilibili.com/video/BV1",
       { proxyUrl: "http://proxy.example.test:7890" },
-      "/temp/miz.cookies",
+      { bilibiliCookieFilePath: "/temp/miz.cookies" },
     )).toEqual([
       "--proxy",
       "http://proxy.example.test:7890",
@@ -256,6 +260,29 @@ describe("Bilibili download authentication", () => {
       "/temp/miz.cookies",
       "https://www.bilibili.com/video/BV1",
     ]);
+  });
+
+  test("passes YouTube cookies and the JavaScript runtime only to YouTube", () => {
+    const options = {
+      youtubeCookiesPath: "/app/config/secrets/youtube-cookies.txt",
+      jsRuntime: "node:/app/tools/node-runtime/node",
+    };
+    expect(createYtDlpRequestArgs(
+      "https://www.youtube.com/watch?v=test",
+      networkConfig,
+      options,
+    )).toEqual([
+      "--js-runtimes",
+      "node:/app/tools/node-runtime/node",
+      "--cookies",
+      "/app/config/secrets/youtube-cookies.txt",
+      "https://www.youtube.com/watch?v=test",
+    ]);
+    expect(createYtDlpRequestArgs(
+      "https://x.com/example/status/1",
+      networkConfig,
+      options,
+    )).toEqual(["https://x.com/example/status/1"]);
   });
 });
 
