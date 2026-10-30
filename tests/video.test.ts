@@ -148,10 +148,19 @@ describe("ffmpeg video transcoding", () => {
     expect(args.at(-1)).toBe("output.mp4");
   });
 
-  test("downloads the best source before FFmpeg transcodes it", () => {
-    expect(createYtDlpVideoFormatArgs()).toEqual([
+  test("preserves the best Bilibili stream before FFmpeg transcodes it", () => {
+    expect(createYtDlpVideoFormatArgs(true)).toEqual([
       "--format",
       "bv*+ba/b",
+      "--merge-output-format",
+      "mkv",
+    ]);
+  });
+
+  test("caps external videos at 1080p to avoid oversized 4K downloads", () => {
+    expect(createYtDlpVideoFormatArgs()).toEqual([
+      "--format",
+      "bv*[height<=1080][vcodec^=avc1]+ba[acodec^=mp4a]/bv*[height<=1080]+ba/b[height<=1080]/b",
       "--merge-output-format",
       "mkv",
     ]);

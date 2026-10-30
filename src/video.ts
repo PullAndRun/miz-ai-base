@@ -12,7 +12,7 @@ const TRANSCODE_TIMEOUT_MS = 15 * 60_000;
 const PROCESS_FORCE_KILL_DELAY_MS = 5_000;
 const MAX_CAPTURED_PROCESS_OUTPUT_BYTES = 1024 * 1024;
 const YT_DLP_DOWNLOAD_RETRY_COUNT = 20;
-const YT_DLP_OUTER_RETRY_COUNT = 1;
+const YT_DLP_OUTER_RETRY_COUNT = 3;
 const YT_DLP_OUTER_RETRY_DELAY_MS = 2_000;
 export const STALE_VIDEO_ARTIFACT_MAX_AGE_MS = 24 * 60 * 60_000;
 const VIDEO_ARTIFACT_NAME_PATTERN = /^miz-video-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?:-source)?\./i;
@@ -58,6 +58,7 @@ export const downloadVideo = async ({
   const downloadStartedAt = Date.now();
   const requestId = crypto.randomUUID();
   const transcodedVideoPath = createTranscodedVideoPath(downloadDirectory, requestId);
+  const preserveBilibiliStreams = isBilibiliUrl(url, config.bilibiliHosts);
   const args = [
     "--no-playlist",
     "--no-progress",
@@ -66,13 +67,17 @@ export const downloadVideo = async ({
     String(YT_DLP_DOWNLOAD_RETRY_COUNT),
     "--fragment-retries",
     String(YT_DLP_DOWNLOAD_RETRY_COUNT),
+    "--extractor-retries",
+    "3",
+    "--socket-timeout",
+    "30",
     "--retry-sleep",
     "http:exp=1:20",
     "--retry-sleep",
     "fragment:exp=1:20",
     "--output",
     createVideoSourcePathTemplate(downloadDirectory, requestId),
-    ...createYtDlpVideoFormatArgs(),
+    ...createYtDlpVideoFormatArgs(preserveBilibiliStreams),
     ...createYtDlpFfmpegLocationArgs(config),
     "--print",
     "after_move:filepath",
@@ -119,9 +124,11 @@ export const createVideoSourcePathTemplate = (downloadDirectory: string, request
 export const createTranscodedVideoPath = (downloadDirectory: string, requestId: string) =>
   path.join(downloadDirectory, `miz-video-${requestId}.mp4`);
 
-export const createYtDlpVideoFormatArgs = () => [
+export const createYtDlpVideoFormatArgs = (preserveBilibiliStreams = false) => [
   "--format",
-  "bv*+ba/b",
+  preserveBilibiliStreams
+    ? "bv*+ba/b"
+    : "bv*[height<=1080][vcodec^=avc1]+ba[acodec^=mp4a]/bv*[height<=1080]+ba/b[height<=1080]/b",
   "--merge-output-format",
   "mkv",
 ];
