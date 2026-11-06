@@ -82,6 +82,8 @@ const rawMizConfigSchema = z.object({
       cron: nonEmptyStringSchema.optional(),
       apiUrl: nonEmptyStringSchema.optional(),
       imageBaseUrl: nonEmptyStringSchema.optional(),
+      sendIntervalMs: z.number().int().min(10_000).max(10 * 60_000).optional(),
+      sendJitterMs: z.number().int().min(0).max(60_000).optional(),
     })
     .optional(),
   news: z
@@ -259,6 +261,8 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
     cron: config.wallpaper?.cron ?? "0 8 * * *",
     apiUrl: config.wallpaper?.apiUrl ?? "",
     imageBaseUrl: config.wallpaper?.imageBaseUrl ?? "",
+    sendIntervalMs: config.wallpaper?.sendIntervalMs ?? 30_000,
+    sendJitterMs: config.wallpaper?.sendJitterMs ?? 10_000,
   },
   news: {
     enabled: config.news?.enabled ?? true,
@@ -390,6 +394,8 @@ export type WallpaperConfig = {
   cron: string;
   apiUrl: string;
   imageBaseUrl: string;
+  sendIntervalMs: number;
+  sendJitterMs: number;
 };
 
 export type NewsConfig = {

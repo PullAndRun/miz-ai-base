@@ -15,7 +15,7 @@ import {
   queryFf14Market,
   selectFf14BatchAlertItems,
 } from "@/ff14";
-import { createWallpaperMessage, getDailyWallpaper } from "@/wallpaper";
+import { createWallpaperMessage, getDailyWallpaper, getWallpaperSendDelayMs } from "@/wallpaper";
 import { settleWithConcurrency, startWithConcurrency } from "@/concurrency";
 import { getGroupIds } from "@/group-ids";
 import { deliverUnsentNews, fetchFinanceNews, formatScheduledNewsItems } from "@/news";
@@ -63,8 +63,6 @@ import {
 
 const ALL_GROUPS_DELIVERED_MARKER = "*";
 const SCHEDULED_DELIVERY_CONCURRENCY = 5;
-const WALLPAPER_DELIVERY_CONCURRENCY = 3;
-const WALLPAPER_SEND_INTERVAL_MS = 2_000;
 const FF14_PRICE_ALERT_DELIVERY_RETENTION_MS = 3 * 24 * 60 * 60_000;
 const FF14_BATCH_SELL_ALERT_MENTION = "FF14 售卖提醒，请看上面。";
 const VTB_INITIAL_DYNAMIC_MAX_AGE_MS = 60 * 60_000;
@@ -1729,27 +1727,31 @@ const sendDailyWallpaper = async (config: MizConfig, gateway: Gateway, logger: L
     return;
   }
 
-  const waitForSendSlot = createIntervalGate(WALLPAPER_SEND_INTERVAL_MS);
-  const results = await settleWithConcurrency(
-    groupIds,
-    WALLPAPER_DELIVERY_CONCURRENCY,
-    async (groupId) => {
-      await waitForSendSlot();
-      await gateway.sendGroupMessageWithoutRetry(groupId, createWallpaperMessage(wallpaper));
-    },
-  );
+  const { sendIntervalMs, sendJitterMs } = config.wallpaper;
+  const deliveryStartedAt = Date.now();
   let sentCount = 0;
-  for (const [index, result] of results.entries()) {
-    const groupId = groupIds[index];
-    if (result.status === "fulfilled") {
-      sentCount += 1;
-      logger.info("plugin", "daily wallpaper sent", { groupId, wallpaperId: wallpaper.id });
-      continue;
+  logger.info("plugin", "wallpaper task delivery started", {
+    groups: groupIds.length,
+    sendIntervalMs,
+    sendJitterMs,
+  });
+
+  // Deliver strictly one group at a time. The pause starts after the previous
+  // send completes, so slow API calls never overlap with the next group.
+  for (const [index, groupId] of groupIds.entries()) {
+    if (index > 0) {
+      await wait(getWallpaperSendDelayMs(sendIntervalMs, sendJitterMs));
     }
 
-    logGroupDeliveryFailure(logger, "daily wallpaper delivery failed", {
-      groupId,
-    }, result.reason);
+    try {
+      await gateway.sendGroupMessageWithoutRetry(groupId, createWallpaperMessage(wallpaper));
+      sentCount += 1;
+      logger.info("plugin", "daily wallpaper sent", { groupId, wallpaperId: wallpaper.id });
+    } catch (error) {
+      logGroupDeliveryFailure(logger, "daily wallpaper delivery failed", {
+        groupId,
+      }, error);
+    }
   }
 
   logger.info("plugin", "wallpaper task delivery completed", {
@@ -1757,6 +1759,7 @@ const sendDailyWallpaper = async (config: MizConfig, gateway: Gateway, logger: L
     sent: sentCount,
     failed: groupIds.length - sentCount,
     wallpaperId: wallpaper.id,
+    durationMs: Date.now() - deliveryStartedAt,
   });
 };
 
@@ -2056,15 +2059,6 @@ const createNoopTask = (): TaskRuntime => ({
 });
 
 const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
-
-const createIntervalGate = (intervalMilliseconds: number) => {
-  let nextStartAt = Date.now();
-  return async () => {
-    const startAt = nextStartAt;
-    nextStartAt += intervalMilliseconds;
-    await wait(Math.max(0, startAt - Date.now()));
-  };
-};
 
 const hasVtbApiEndpoints = (config: MizConfig["vtb"]) =>
   Boolean(

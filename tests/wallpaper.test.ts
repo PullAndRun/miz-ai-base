@@ -1,10 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createWallpaperMessage, getDailyWallpaper } from "@/wallpaper";
+import { createWallpaperMessage, getDailyWallpaper, getWallpaperSendDelayMs } from "@/wallpaper";
 
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+describe("daily wallpaper pacing", () => {
+  test("keeps group deliveries at least 30 seconds apart", () => {
+    expect(getWallpaperSendDelayMs(30_000, 10_000, () => 0)).toBe(30_000);
+    expect(getWallpaperSendDelayMs(30_000, 10_000, () => 0.5)).toBe(35_000);
+    expect(getWallpaperSendDelayMs(30_000, 10_000, () => 0.999_999)).toBe(39_999);
+  });
 });
 
 describe("daily wallpaper cache", () => {

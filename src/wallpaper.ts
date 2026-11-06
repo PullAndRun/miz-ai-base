@@ -52,6 +52,16 @@ export const getDailyWallpaper = (apiUrl: string, imageBaseUrl: string): Promise
   return pendingRequest;
 };
 
+/**
+ * Adds a small irregular pause between group deliveries so a daily broadcast
+ * does not look like a tightly timed blast to QQ's risk controls.
+ */
+export const getWallpaperSendDelayMs = (
+  intervalMs: number,
+  jitterMs: number,
+  random: () => number = Math.random,
+) => intervalMs + Math.floor(random() * jitterMs);
+
 export const createWallpaperMessage = (wallpaper: Wallpaper, now = new Date()) => [
   {
     type: "text",

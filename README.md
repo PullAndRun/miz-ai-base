@@ -152,7 +152,7 @@ Docker 模式最后再合并：
 | `[miz.recall]` | 可以撤回迷子群消息的用户白名单；群主和管理员无需加入白名单。 |
 | `[miz.video]` | 视频开关、白名单、B 站域名、下载目录、NapCat 媒体目录、工具路径，以及视频任务并发上限 `maxConcurrentJobs`（默认 2，最大 8）。 |
 | `[miz.news]` | 财经新闻接口、目标群和定时表达式。 |
-| `[miz.wallpaper]` | Bing 官方元数据接口、图片基址、开关和定时表达式。 |
+| `[miz.wallpaper]` | Bing 官方元数据接口、图片基址、开关、定时表达式，以及群发间隔 `sendIntervalMs`（默认 30000 毫秒）和随机抖动 `sendJitterMs`（默认 10000 毫秒）。 |
 | `[miz.ff14]` | Universalis 市场接口及其前端使用的物品搜索接口、返回条数、低价提醒开关、定时表达式、批量查价参考条数 `batchSampleSize`（默认 5）和管理白名单；每条 `priceAlerts` 可单独配置提醒成员列表 `priceAlertAtUserIds`，每条 `batchQueries` 配置一个群的批量查价清单，并用 `alertEnabled`、`alertAtUserIds` 控制定时售卖提醒。 |
 | `[miz.vtb]` | B 站数据接口、网页与直播基址、轮询策略、实时大航海/打赏连接限流、缓存及管理白名单。 |
 
@@ -160,7 +160,7 @@ VTB 实时事件默认只连接当前正在直播的房间；`liveEventMaxConnec
 
 在 `config/vtb.toml` 的订阅块中设置 `contributionStreamers = ["主播昵称"]`，即可为该群开启实时事件感谢；该主播必须同时存在于 `streamers`。舰长、提督、总督加入大航海和续费都会推送，普通礼物累计价值达到 `miz.vtb.contributionMinAmount` 元才推送，直播间红包开始时也会提醒群员进入直播间抢红包。执行 `miz vtb unsubscribe contribution <主播昵称>` 后，该群的打赏、舰长、续费和红包等所有实时事件都会关闭；事件仍会保留用于下播汇总。
 
-未填写对应接口地址时，依赖该接口的命令会提示尚未配置，相关定时任务会自动停用并记录原因。示例配置已填写 Bing 官方地址。
+未填写对应接口地址时，依赖该接口的命令会提示尚未配置，相关定时任务会自动停用并记录原因。示例配置已填写 Bing 官方地址。每日风景图按群串行发送，默认在上一群发送完成后再等待 30–40 秒，避免短时间内集中群发触发 QQ 风控。
 
 ### VTB 订阅
 

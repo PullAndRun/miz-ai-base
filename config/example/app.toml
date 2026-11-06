@@ -38,6 +38,9 @@ enabled = true
 cron = "0 8 * * *"
 apiUrl = ""
 imageBaseUrl = ""
+# 群与群之间至少等待 30 秒，并额外随机等待 0–10 秒，避免 QQ 风控。
+sendIntervalMs = 30000
+sendJitterMs = 10000
 
 [miz.news]
 enabled = true
