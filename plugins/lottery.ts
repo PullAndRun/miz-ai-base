@@ -125,7 +125,7 @@ const loadMemberName = async (
     .catch(() => undefined),
 );
 
-/** 私聊或接口取昵称失败时，尝试直接读 NapCat 消息里的发送者名片/昵称。 */
+/** 私聊或接口取昵称失败时，尝试直接读 SnowLuma 消息里的发送者名片/昵称。 */
 const readSenderName = (message: BiliGiftLotteryContext["message"]) => {
   const sender = message.raw.sender;
   if (!sender || typeof sender !== "object") {
@@ -486,7 +486,7 @@ export const handleBiliGiftLotteryCommand = async ({
       logger.warn("plugin", "bilibili gift lottery delivery timed out with an unknown result", {
         relativePath: media.relativePath,
       });
-      // 超时只是没拿到回执：NapCat 往往还在发，卡片可能已经进群。
+      // 超时只是没拿到回执：SnowLuma 往往还在发，卡片可能已经进群。
       // 名额和迷币都照算，既不让人白多抽一次，也不会出现卡片中奖却不入账。
       await creditCoins();
       await reply(createUnknownDeliveryMessage(draw.gift.name, coins, totalCoins));

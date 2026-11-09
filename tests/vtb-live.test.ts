@@ -29,7 +29,7 @@ const config = {
   webUrl: "https://www.example.test",
   liveWebUrl: "https://live.example.test",
   imageDirectory: imageRootDirectory,
-  napcatImageDirectory: "/app/media",
+  snowlumaImageDirectory: "/app/media",
 } as VtbConfig;
 
 afterAll(async () => {

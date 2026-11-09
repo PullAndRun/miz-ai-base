@@ -17,9 +17,9 @@ export const resolveSharedMediaDirectory = (runtimeMode: RuntimeMode, configured
       : configuredDirectory;
 
 /** SnowLuma 视角下的 file:// 地址，例如 file:///app/media/miz-vtb-image-xxx.jpg。 */
-export const buildNapcatFileUrl = (napcatDirectory: string, fileName: string) => {
+export const buildSnowLumaFileUrl = (snowlumaDirectory: string, fileName: string) => {
   const fileUrl = new URL("file:///");
-  fileUrl.pathname = path.posix.join(napcatDirectory, fileName);
+  fileUrl.pathname = path.posix.join(snowlumaDirectory, fileName);
   return fileUrl.href;
 };
 

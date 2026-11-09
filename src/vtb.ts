@@ -15,7 +15,7 @@ import type { MizConfig, VtbConfig } from "@/config";
 import { createDatabaseClient, getDatabaseUrl } from "@/database";
 import { fetchWithRiskControlProxy, fetchWithRetry, readResponseBytes, readResponseJson } from "@/http";
 import { prepareImageForUpload } from "@/image-compress";
-import { buildNapcatFileUrl, createHashedMediaFileName, removeStaleMediaFiles, sharedMediaFileExists, writeSharedMediaFile } from "@/napcat-media";
+import { buildSnowLumaFileUrl, createHashedMediaFileName, removeStaleMediaFiles, sharedMediaFileExists, writeSharedMediaFile } from "@/snowluma-media";
 import { partitionVtbSubscriptionsByGroup } from "@/vtb-subscriptions";
 import { formatVtbBattery } from "@/vtb-contribution";
 
@@ -904,7 +904,7 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
   // 文件名只取决于 URL：共享目录命中时直接复用文件，不再重新下载。
   const fileName = createHashedMediaFileName(VTB_IMAGE_FILE_PREFIX, url, guessVtbImageExtension(url));
   if (await sharedMediaFileExists(config.imageDirectory, fileName)) {
-    return buildNapcatFileUrl(config.napcatImageDirectory, fileName);
+    return buildSnowLumaFileUrl(config.snowlumaImageDirectory, fileName);
   }
 
   const requestHeaders = createVtbRequestHeaders(
@@ -948,7 +948,7 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
   // 压缩后的 base64（压缩保证不会撑爆常见 OneBot 的 50MiB 单帧上限）。
   try {
     await writeSharedMediaFile(config.imageDirectory, fileName, bytes);
-    return buildNapcatFileUrl(config.napcatImageDirectory, fileName);
+    return buildSnowLumaFileUrl(config.snowlumaImageDirectory, fileName);
   } catch {
     return `base64://${Buffer.from(await prepareImageForUpload(bytes)).toString("base64")}`;
   }

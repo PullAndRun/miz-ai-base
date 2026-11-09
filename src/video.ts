@@ -5,7 +5,7 @@ import path from "node:path";
 import { getBilibiliCredentialHeader } from "@/bilibili-credential";
 import type { NetworkConfig, VideoConfig } from "@/config";
 import { isWhitelistedUser } from "@/group-permissions";
-import { buildNapcatFileUrl, removeStaleMediaFiles, resolveSharedMediaDirectory } from "@/napcat-media";
+import { buildSnowLumaFileUrl, removeStaleMediaFiles, resolveSharedMediaDirectory } from "@/snowluma-media";
 
 const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 const TRANSCODE_TIMEOUT_MS = 15 * 60_000;
@@ -112,10 +112,10 @@ export const downloadVideo = async ({
   }
 };
 
-export const getNapcatVideoFile = (videoPath: string, config: VideoConfig) =>
-  buildNapcatFileUrl(config.napcatMediaDirectory, path.basename(videoPath));
+export const getSnowLumaVideoFile = (videoPath: string, config: VideoConfig) =>
+  buildSnowLumaFileUrl(config.snowlumaMediaDirectory, path.basename(videoPath));
 
-export const getNapcatVideoBase64 = async (videoPath: string) =>
+export const getSnowLumaVideoBase64 = async (videoPath: string) =>
   `base64://${(await readFile(videoPath)).toString("base64")}`;
 
 export const deleteDownloadedVideo = (videoPath: string) => rm(videoPath, { force: true });

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { rename, rm } from "node:fs/promises";
 import { FF14_BATCH_SAMPLE_SIZE, normalizeFf14ItemQueryName } from "@/ff14";
-import { resolveSharedMediaDirectory } from "@/napcat-media";
+import { resolveSharedMediaDirectory } from "@/snowluma-media";
 
 const logLevelSchema = z.enum(["debug", "info", "warn", "error", "off"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
@@ -52,8 +52,6 @@ const rawMizConfigSchema = z.object({
     password: nonEmptyStringSchema,
   }),
   snowluma: clientRuntimeSchema,
-  // Legacy name kept so existing app.toml files keep loading during migration.
-  naplink: clientRuntimeSchema,
   plugins: z
     .object({
       commandPrefix: nonEmptyStringSchema.optional(),
@@ -157,7 +155,7 @@ const rawMizConfigSchema = z.object({
       whitelistUserIds: z.array(targetIdSchema).optional(),
       bilibiliHosts: z.array(nonEmptyStringSchema).min(1).optional(),
       downloadDirectory: nonEmptyStringSchema.optional(),
-      napcatMediaDirectory: nonEmptyStringSchema.optional(),
+      snowlumaMediaDirectory: nonEmptyStringSchema.optional(),
       ytDlpLinuxPath: nonEmptyStringSchema.optional(),
       ytDlpWindowsPath: nonEmptyStringSchema.optional(),
       ffmpegLinuxPath: nonEmptyStringSchema.optional(),
@@ -220,7 +218,7 @@ const rawMizConfigSchema = z.object({
 });
 
 const mizConfigSchema = rawMizConfigSchema.transform((config) => {
-  const clientRuntime = config.snowluma ?? config.naplink;
+  const clientRuntime = config.snowluma;
   return {
   runtime: {
     mode: getRuntimeMode(),
@@ -321,7 +319,7 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => {
     whitelistUserIds: config.video?.whitelistUserIds ?? [],
     bilibiliHosts: config.video?.bilibiliHosts ?? [],
     downloadDirectory: config.video?.downloadDirectory ?? "/temp",
-    napcatMediaDirectory: config.video?.napcatMediaDirectory ?? "/app/media",
+    snowlumaMediaDirectory: config.video?.snowlumaMediaDirectory ?? "/app/media",
     ytDlpLinuxPath: config.video?.ytDlpLinuxPath ?? "",
     ytDlpWindowsPath: config.video?.ytDlpWindowsPath ?? "",
     ffmpegLinuxPath: config.video?.ffmpegLinuxPath ?? "tools/ffmpeg",
@@ -367,7 +365,7 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => {
     ].map((userId) => [String(userId), userId])).values()),
     proxyUrl: config.network?.proxyUrl ?? "",
     imageDirectory: resolveSharedMediaDirectory(getRuntimeMode(), config.video?.downloadDirectory ?? "/temp"),
-    napcatImageDirectory: config.video?.napcatMediaDirectory ?? "/app/media",
+    snowlumaImageDirectory: config.video?.snowlumaMediaDirectory ?? "/app/media",
     subscriptions: (config.vtb?.subscriptions ?? []).map((subscription) => ({
       ...subscription,
       ...(subscription.atAllStreamers === undefined
@@ -470,7 +468,7 @@ export type VideoConfig = {
   whitelistUserIds: Array<string | number>;
   bilibiliHosts: string[];
   downloadDirectory: string;
-  napcatMediaDirectory: string;
+  snowlumaMediaDirectory: string;
   ytDlpLinuxPath: string;
   ytDlpWindowsPath: string;
   ffmpegLinuxPath: string;
@@ -518,7 +516,7 @@ export type VtbConfig = {
   /** bot 侧写入通知图片的共享目录（与视频共用，Docker 下为项目 temp/）。 */
   imageDirectory: string;
   /** SnowLuma 读取同一目录的路径，file:// 地址以此拼接。 */
-  napcatImageDirectory: string;
+  snowlumaImageDirectory: string;
   subscriptions: ReadonlyArray<{
     readonly groupId: string | number;
     readonly streamers: readonly string[];

@@ -228,7 +228,7 @@ docker compose up -d
 
 Docker 模式发送视频时，miz 先通过扫码登录保存的 B 站凭据和 `[miz.network].proxyUrl` 调用 yt-dlp 下载最佳视频和音频，再统一通过稳定版 FFmpeg 转码为 H.264/AAC MP4，结果写入项目的 `temp` 目录。
 
-视频发送依次尝试三种方式：先把 `napcatMediaDirectory` 下的 `file:///` 路径作为普通 `video` 消息交给 SnowLuma；失败后改用 `base64://...` 的 `video` 消息；仍失败时，再把文件 `video` 消息段作为单节点合并转发发送。三种发送均禁用自动重试，并在任一方式失败（包括超时）后继续下一种。使用文件和转发方式时，SnowLuma 必须能读取 `napcatMediaDirectory`，Docker 部署需要把同一个宿主机 `temp` 目录挂载到该路径。
+视频发送依次尝试三种方式：先把 `snowlumaMediaDirectory` 下的 `file:///` 路径作为普通 `video` 消息交给 SnowLuma；失败后改用 `base64://...` 的 `video` 消息；仍失败时，再把文件 `video` 消息段作为单节点合并转发发送。三种发送均禁用自动重试，并在任一方式失败（包括超时）后继续下一种。使用文件和转发方式时，SnowLuma 必须能读取 `snowlumaMediaDirectory`，Docker 部署需要把同一个宿主机 `temp` 目录挂载到该路径。
 
 ```yaml
 services:
@@ -241,7 +241,7 @@ services:
 
 ```toml
 [miz.video]
-napcatMediaDirectory = "/app/media"
+snowlumaMediaDirectory = "/app/media"
 ```
 
 ## 命令
@@ -382,7 +382,7 @@ bun audit
 
 ### 视频下载成功但 QQ 发送失败
 
-先检查 SnowLuma 日志中的具体富媒体错误，并确认 miz 的项目 `temp` 目录与 SnowLuma 的 `napcatMediaDirectory` 指向同一份宿主机目录、SnowLuma 有读取权限；文件路径发送失败后，miz 还会自动尝试 Base64 和单节点合并转发。
+先检查 SnowLuma 日志中的具体富媒体错误，并确认 miz 的项目 `temp` 目录与 SnowLuma 的 `snowlumaMediaDirectory` 指向同一份宿主机目录、SnowLuma 有读取权限；文件路径发送失败后，miz 还会自动尝试 Base64 和单节点合并转发。
 
 ### VTB、新闻、壁纸或 FF14 功能提示未配置
 

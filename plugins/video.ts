@@ -154,7 +154,7 @@ const processVideo = async ({
       logger.error("plugin", "video processing failed", error);
     }
     await reply(deliveryAttempted
-      ? "共享文件、Base64 和文件转发都没能把视频发出去。请稍后再试；如果持续失败，请检查 NapCat 和 QQ 的富媒体发送状态。"
+      ? "共享文件、Base64 和文件转发都没能把视频发出去。请稍后再试；如果持续失败，请检查 SnowLuma 和 QQ 的富媒体发送状态。"
       : "视频刚才在下载或转码时卡住了，稍后再试一次吧。如果内容需要登录，请让管理员检查对应站点的登录配置。");
   }
 };

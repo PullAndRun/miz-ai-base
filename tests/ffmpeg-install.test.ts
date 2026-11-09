@@ -18,7 +18,7 @@ const videoConfig: VideoConfig = {
   whitelistUserIds: [],
   bilibiliHosts: ["bilibili.com"],
   downloadDirectory: "/temp",
-  napcatMediaDirectory: "/app/media",
+  snowlumaMediaDirectory: "/app/media",
   ytDlpLinuxPath: "tools/yt-dlp",
   ytDlpWindowsPath: "tools/yt-dlp.exe",
   ffmpegLinuxPath: "tools/ffmpeg",

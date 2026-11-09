@@ -1,8 +1,8 @@
 import type { VideoSegment } from "@snowluma/sdk";
 import type { VideoConfig } from "@/config";
 import {
-  getNapcatVideoBase64,
-  getNapcatVideoFile,
+  getSnowLumaVideoBase64,
+  getSnowLumaVideoFile,
 } from "@/video";
 
 export type VideoDeliveryMode = "file" | "base64" | "forward";
@@ -56,22 +56,22 @@ const createUnknownDeliveryError = (
   },
 );
 
-export const createNapcatVideoMessage = (
+export const createSnowLumaVideoMessage = (
   videoPath: string,
   config: VideoConfig,
 ): VideoSegment => ({
   type: "video",
   data: {
-    file: getNapcatVideoFile(videoPath, config),
+    file: getSnowLumaVideoFile(videoPath, config),
   },
 });
 
-export const createNapcatBase64VideoMessage = async (
+export const createSnowLumaBase64VideoMessage = async (
   videoPath: string,
 ): Promise<VideoSegment> => ({
   type: "video",
   data: {
-    file: await getNapcatVideoBase64(videoPath),
+    file: await getSnowLumaVideoBase64(videoPath),
   },
 });
 
@@ -102,14 +102,14 @@ export const deliverVideoWithFallback = async (
     }
   };
 
-  const fileMessage = createNapcatVideoMessage(videoPath, config);
+  const fileMessage = createSnowLumaVideoMessage(videoPath, config);
   const fileResult = await attempt("file", () => sendVideoMessage(fileMessage));
   if (fileResult) {
     return fileResult;
   }
 
   const base64Result = await attempt("base64", async () =>
-    sendVideoMessage(await createNapcatBase64VideoMessage(videoPath)));
+    sendVideoMessage(await createSnowLumaBase64VideoMessage(videoPath)));
   if (base64Result) {
     return base64Result;
   }

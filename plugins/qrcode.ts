@@ -66,7 +66,7 @@ const findImageSource = (value: unknown): string | undefined => {
     }
 
     const data = record.data as Record<string, unknown>;
-    // NapCat's `file` field is often just a cache filename, while `url` is
+    // SnowLuma's `file` field is often just a cache filename, while `url` is
     // the actual downloadable image address. Prefer the latter for decoding.
     for (const source of [data.url, data.file]) {
       if (typeof source === "string" && source.trim()) {

@@ -2,7 +2,7 @@ node_modules/
 logs/
 .bun-cache/
 .npm-cache/
-.tmp-naplink/
+.tmp-snowluma/
 .tmp/
 src/generated/
 *.tgz

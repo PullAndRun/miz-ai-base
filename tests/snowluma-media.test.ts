@@ -3,28 +3,28 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import {
-  buildNapcatFileUrl,
+  buildSnowLumaFileUrl,
   createHashedMediaFileName,
   removeStaleMediaFiles,
   resolveSharedMediaDirectory,
   sharedMediaFileExists,
   writeSharedMediaFile,
-} from "@/napcat-media";
+} from "@/snowluma-media";
 
-const testRootDirectory = await mkdtemp(path.join(tmpdir(), "miz-napcat-media-test-"));
+const testRootDirectory = await mkdtemp(path.join(tmpdir(), "miz-snowluma-media-test-"));
 
 afterAll(async () => {
   await rm(testRootDirectory, { recursive: true, force: true });
 });
 
-describe("napcat shared media files", () => {
+describe("snowluma shared media files", () => {
   test("resolves the shared directory per runtime mode", () => {
     expect(resolveSharedMediaDirectory("docker", "/ignored")).toBe(path.join(process.cwd(), "temp"));
     expect(resolveSharedMediaDirectory("normal", "/data/media")).toBe("/data/media");
   });
 
-  test("builds a file URL for the NapCat-side directory", () => {
-    expect(buildNapcatFileUrl("/app/media", "miz-vtb-image-abc.jpg")).toBe(
+  test("builds a file URL for the SnowLuma-side directory", () => {
+    expect(buildSnowLumaFileUrl("/app/media", "miz-vtb-image-abc.jpg")).toBe(
       "file:///app/media/miz-vtb-image-abc.jpg",
     );
   });

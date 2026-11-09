@@ -1031,7 +1031,7 @@ describe("lottery plugin", () => {
       store,
       gateway: {
         getGroupMemberName: async () => {
-          throw new Error("napcat down");
+          throw new Error("snowluma down");
         },
       },
     });

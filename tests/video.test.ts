@@ -11,8 +11,8 @@ import {
   createYtDlpFfmpegLocationArgs,
   createYtDlpRequestArgs,
   createYtDlpVideoFormatArgs,
-  getNapcatVideoBase64,
-  getNapcatVideoFile,
+  getSnowLumaVideoBase64,
+  getSnowLumaVideoFile,
   isBilibiliUrl,
   isRetryableYtDlpError,
   formatMediaToolVersion,
@@ -22,8 +22,8 @@ import {
 } from "@/video";
 import type { VideoConfig } from "@/config";
 import {
-  createNapcatBase64VideoMessage,
-  createNapcatVideoMessage,
+  createSnowLumaBase64VideoMessage,
+  createSnowLumaVideoMessage,
   deliverVideoWithFallback,
   isVideoDeliveryError,
 } from "@/video-delivery";
@@ -34,7 +34,7 @@ const videoConfig: VideoConfig = {
   whitelistUserIds: [],
   bilibiliHosts: ["bilibili.com", "b23.tv"],
   downloadDirectory: "/temp",
-  napcatMediaDirectory: "/app/media",
+  snowlumaMediaDirectory: "/app/media",
   ytDlpLinuxPath: "tools/yt-dlp",
   ytDlpWindowsPath: "tools/yt-dlp.exe",
   ffmpegLinuxPath: "tools/ffmpeg",
@@ -46,7 +46,7 @@ const videoConfig: VideoConfig = {
 const networkConfig = { proxyUrl: "" };
 
 describe("video download filenames", () => {
-  test("keeps the NapCat-visible temporary filename ASCII-only", () => {
+  test("keeps the SnowLuma-visible temporary filename ASCII-only", () => {
     const sourceTemplate = createVideoSourcePathTemplate(
       "/temp",
       "64c82c6d-1c58-4e2d-bcec-53c48eccb21d",
@@ -66,13 +66,13 @@ describe("video download filenames", () => {
     expect(/^[\x20-\x7E]+$/.test(path.basename(outputPath))).toBeTrue();
   });
 
-  test("gives NapCat a shared file URL without base64", () => {
+  test("gives SnowLuma a shared file URL without base64", () => {
     const videoPath = "C:\\miz\\temp\\miz-video-id.mp4";
 
-    expect(getNapcatVideoFile(videoPath, videoConfig)).toBe(
+    expect(getSnowLumaVideoFile(videoPath, videoConfig)).toBe(
       "file:///app/media/miz-video-id.mp4",
     );
-    expect(createNapcatVideoMessage(videoPath, videoConfig)).toEqual({
+    expect(createSnowLumaVideoMessage(videoPath, videoConfig)).toEqual({
       type: "video",
       data: {
         file: "file:///app/media/miz-video-id.mp4",
@@ -80,16 +80,16 @@ describe("video download filenames", () => {
     });
   });
 
-  test("creates a NapCat Base64 video resource", async () => {
+  test("creates a SnowLuma Base64 video resource", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
     const videoPath = path.join(directory, "video.mp4");
     try {
       await writeFile(videoPath, Buffer.from([0, 1, 2, 253, 254, 255]));
 
-      expect(await getNapcatVideoBase64(videoPath)).toBe(
+      expect(await getSnowLumaVideoBase64(videoPath)).toBe(
         "base64://AAEC/f7/",
       );
-      expect(await createNapcatBase64VideoMessage(videoPath)).toEqual({
+      expect(await createSnowLumaBase64VideoMessage(videoPath)).toEqual({
         type: "video",
         data: {
           file: "base64://AAEC/f7/",
@@ -356,7 +356,7 @@ describe("media tool versions", () => {
 });
 
 describe("video delivery fallback", () => {
-  test("uses the NapCat-readable shared file URL first", async () => {
+  test("uses the SnowLuma-readable shared file URL first", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "miz-video-test-"));
     const videoPath = path.join(directory, "video.mp4");
     const sentFiles: string[] = [];
