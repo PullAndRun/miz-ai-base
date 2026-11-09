@@ -200,8 +200,8 @@ export const parseAction = (args: string): Action | undefined => {
 | --- | --- |
 | `config` | 已完成默认值填充和分层合并的 `MizConfig`。 |
 | `command` | 当前命令名、参数和原始命令文本，仅 `handle` 存在。 |
-| `message` | 归一化后的 NapCat 消息。 |
-| `reply` | 回复当前群或当前私聊，使用 NapLink 的正常重试策略。 |
+| `message` | 归一化后的 OneBot 消息。 |
+| `reply` | 回复当前群或当前私聊，使用 SnowLuma 网关的正常发送策略。 |
 | `replyWithoutRetry` | 回复当前会话但禁用 API 重试，可指定超时。 |
 | `replyForward` | 向当前会话发送合并转发消息。 |
 | `gateway` | 向指定群或用户发送消息，以及获取群列表。 |
@@ -233,7 +233,7 @@ type IncomingMessage = {
 - `text` 是消息中所有文本段拼接后的内容，图片等非文本段不会出现在这里。
 - `groupId` 存在表示群消息；私聊通常只有 `userId`。
 - ID 可能是字符串或数字，比较时统一使用 `String(id)`。
-- `raw` 是原始 OneBot 事件，可用于读取 `sender.role`、CQ/消息段和 NapCat 扩展字段。
+- `raw` 是原始 OneBot 事件，可用于读取 `sender.role`、CQ/消息段和 OneBot 扩展字段。
 - `raw` 内的数据仍是外部输入。读取复杂结构时应进行类型判断或使用 Zod 校验，不要直接断言为可信类型。
 
 只允许群聊使用的功能应尽早返回：

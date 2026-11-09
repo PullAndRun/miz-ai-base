@@ -4,8 +4,8 @@ import path from "node:path";
 import type { RuntimeMode } from "@/config";
 
 /**
- * bot 与 NapCat 共享的媒体目录：bot 写入文件，NapCat 通过挂载读到同一份文件。
- * 用 file:// 发送时 WebSocket 帧里只有路径，不受 NapCat 50MiB 单帧上限约束。
+ * bot 与 SnowLuma 共享的媒体目录：bot 写入文件，SnowLuma 通过挂载读到同一份文件。
+ * 用 file:// 发送时 WebSocket 帧里只有路径，不受常见 OneBot 50MiB 单帧上限约束。
  */
 
 /** Docker 模式固定落项目 temp/；Windows 本机的 "/temp" 占位符同样落到项目 temp/。 */
@@ -16,7 +16,7 @@ export const resolveSharedMediaDirectory = (runtimeMode: RuntimeMode, configured
       ? path.join(process.cwd(), "temp")
       : configuredDirectory;
 
-/** NapCat 视角下的 file:// 地址，例如 file:///app/media/miz-vtb-image-xxx.jpg。 */
+/** SnowLuma 视角下的 file:// 地址，例如 file:///app/media/miz-vtb-image-xxx.jpg。 */
 export const buildNapcatFileUrl = (napcatDirectory: string, fileName: string) => {
   const fileUrl = new URL("file:///");
   fileUrl.pathname = path.posix.join(napcatDirectory, fileName);

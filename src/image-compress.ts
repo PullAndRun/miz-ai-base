@@ -1,7 +1,7 @@
 import { Jimp } from "jimp";
 
 /**
- * NapCat 的 WebSocket 服务器把单帧上限硬编码为 50MiB（maxPayload），超限帧会被
+ * 历史上部分 OneBot WebSocket 服务把单帧上限硬编码为 50MiB，超限帧会被
  * 直接拒绝并断开连接，之后所有 API 调用都收不到响应，表现为 send_group_msg 超时。
  * B 站动态经常附带多张全分辨率原图（曾出现 7 张合计 43MB、base64 后约 58MB），
  * 因此图片必须先压回预算再发送。
@@ -65,7 +65,7 @@ const flattenAlphaOntoWhite = (image: UploadImage) => {
 };
 
 /**
- * 返回可以安全发给 NapCat 的图片字节：小图原样返回，超预算的图片缩小重编码；
+ * 返回可以安全发送的图片字节：小图原样返回，超预算的图片缩小重编码；
  * 无法解码且过大的图片抛错，由调用方降级为纯文字通知。
  */
 export const prepareImageForUpload = async (bytes: Uint8Array): Promise<Uint8Array> => {

@@ -9,7 +9,7 @@ database = ""
 username = ""
 password = ""
 
-[miz.naplink]
+[miz.snowluma]
 logLevel = ""
 connectTimeoutMs = 0
 pingIntervalMs = 0

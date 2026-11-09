@@ -1,6 +1,6 @@
 # miz
 
-基于 Bun、TypeScript、NapLink 与 NapCat 的插件化 QQ 机器人。
+基于 Bun、TypeScript、SnowLuma 官方 SDK 与 SnowLuma 的插件化 QQ 机器人。
 
 miz 面向群聊协作和内容订阅场景，内置提醒、日程、活动报名、群待办、群问答、B 站主播订阅、财经新闻、每日壁纸、视频搬运、二维码、FF14 市场查询等功能。需要持久化的数据通过 Prisma 保存到 PostgreSQL，定时任务在重复触发时会自动避免并发执行。
 
@@ -18,7 +18,7 @@ miz 面向群聊协作和内容订阅场景，内置提醒、日程、活动报�
 
 - [Bun](https://bun.sh/)：运行时、包管理与测试。
 - TypeScript：机器人、插件和脚本的实现语言。
-- [NapLink](https://www.npmjs.com/package/@naplink/naplink)：连接 NapCat OneBot WebSocket 网关。
+- [@snowluma/sdk](https://www.npmjs.com/package/@snowluma/sdk)：连接 SnowLuma OneBot WebSocket 服务。
 - PostgreSQL + Prisma：保存订阅状态、提醒、日程、活动、FAQ、待办和消息投递记录。
 - yt-dlp + 稳定版 FFmpeg：视频下载、合并和 H.264/AAC 转码。
 
@@ -27,12 +27,12 @@ miz 面向群聊协作和内容订阅场景，内置提醒、日程、活动报�
 ### 前置条件
 
 - Bun
-- 已启用 OneBot WebSocket 的 NapCat
+- 已启用 OneBot WebSocket 的 SnowLuma
 - PostgreSQL
 - 视频功能需要 `yt-dlp` 和 `ffmpeg`
 - FFmpeg 请使用稳定发行版；不要使用 Git master/nightly 开发版，后者生成的 MP4 可能被 QQ 富媒体上传拒绝
 
-建议先确认 NapCat WebSocket、访问令牌和 PostgreSQL 均可从 miz 的运行环境访问。
+建议先确认 SnowLuma WebSocket、访问令牌和 PostgreSQL 均可从 miz 的运行环境访问。
 
 ### 1. 获取项目并安装依赖
 
@@ -101,7 +101,7 @@ chmod +x tools/yt-dlp tools/ffmpeg
 bun run start
 ```
 
-启动脚本会依次生成 Prisma Client、执行已有数据库迁移，然后连接 NapCat 并加载插件与定时任务。
+启动脚本会依次生成 Prisma Client、执行已有数据库迁移，然后连接 SnowLuma 并加载插件与定时任务。
 
 开发时可以使用监听模式：
 
@@ -132,15 +132,15 @@ Docker 模式最后再合并：
 
 通用外部 API URL 放在 `app.toml`。`ff14.toml` 只保存低价提醒目标和批量查价清单，`vtb.toml` 只保存群订阅；本机网关、数据库和代理等环境相关地址继续放在 `app.local.toml`，Docker 地址放在 `app.docker.toml`。
 
-运行期间修改 `config` 目录中的 TOML 文件，会重新加载插件和定时任务配置。如果修改了网关地址、NapLink 连接参数等连接级配置，建议重启进程以确保完全生效。
+运行期间修改 `config` 目录中的 TOML 文件，会重新加载插件和定时任务配置。如果修改了网关地址、SnowLuma 连接参数等连接级配置，建议重启进程以确保完全生效。
 
 ### 主要配置段
 
 | 配置段 | 作用 |
 | --- | --- |
-| `[miz.gateway]` | NapCat OneBot WebSocket 地址和访问令牌。 |
+| `[miz.gateway]` | SnowLuma OneBot WebSocket 地址和访问令牌。 |
 | `[miz.postgresql]` | PostgreSQL 主机地址、数据库名、用户名和密码。 |
-| `[miz.naplink]` | 日志级别、连接超时、心跳、API 超时和 API 重试次数；网关断线后会持续自动重连，直至恢复连接。 |
+| `[miz.snowluma]` | 日志级别、连接超时、心跳、API 超时和 API 重试次数；网关断线后会持续自动重连，直至恢复连接。 |
 | `[miz.plugins]` | 命令前缀和插件目录，默认分别为 `miz`、`plugins`。 |
 | `[miz.network]` | 供视频和 VTB 请求使用的代理地址 `proxyUrl`。 |
 | `[miz.reminder]` | 提醒轮询、批量处理数量和管理白名单。 |
@@ -150,7 +150,7 @@ Docker 模式最后再合并：
 | `[miz.todo]` | 群待办提醒、批量处理数量和管理白名单。 |
 | `[miz.broadcast]` | 可以向机器人所在全部群发送广播的用户白名单。 |
 | `[miz.recall]` | 可以撤回迷子群消息的用户白名单；群主和管理员无需加入白名单。 |
-| `[miz.video]` | 视频开关、白名单、B 站域名、下载目录、NapCat 媒体目录、工具路径，以及视频任务并发上限 `maxConcurrentJobs`（默认 2，最大 8）。 |
+| `[miz.video]` | 视频开关、白名单、B 站域名、下载目录、SnowLuma 共享媒体目录、工具路径，以及视频任务并发上限 `maxConcurrentJobs`（默认 2，最大 8）。 |
 | `[miz.news]` | 财经新闻接口、目标群和定时表达式。 |
 | `[miz.wallpaper]` | Bing 官方元数据接口、图片基址、开关、定时表达式，以及群发间隔 `sendIntervalMs`（默认 30000 毫秒）和随机抖动 `sendJitterMs`（默认 10000 毫秒）。 |
 | `[miz.ff14]` | Universalis 市场接口及其前端使用的物品搜索接口、返回条数、低价提醒开关、定时表达式、批量查价参考条数 `batchSampleSize`（默认 5）和管理白名单；每条 `priceAlerts` 可单独配置提醒成员列表 `priceAlertAtUserIds`，每条 `batchQueries` 配置一个群的批量查价清单，并用 `alertEnabled`、`alertAtUserIds` 控制定时售卖提醒。 |
@@ -180,7 +180,7 @@ dynamicAtAllStreamers = ["主播甲"]
 - 动态轮询直连 Bilibili 接口，复用 `miz vtb login` 保存的凭据；未登录时会跳过动态轮询。
 - `atAllStreamers` 控制开播通知是否 `@全体成员`；`dynamicAtAllStreamers` 控制动态通知是否 `@全体成员`，两者都必须对应已订阅的主播。
 - 只有机器人是群主或管理员，且该 QQ 账号在群内仍有可用的 `@全体成员` 次数时，开播或动态通知才会真正 `@全体`；否则发送普通通知。
-- 开播与动态通知的图片优先写入 `[miz.video]` 配置的共享目录并以 `file://` 发送，NapCat 直接读取文件，不受 50MiB 单帧上限影响；共享目录不可写时自动退回压缩后的 base64。
+- 开播与动态通知的图片优先写入 `[miz.video]` 配置的共享目录并以 `file://` 发送，SnowLuma 直接读取文件，不受 50MiB 单帧影响；共享目录不可写时自动退回压缩后的 base64。
 - 群管理员或 VTB 管理员白名单成员可以通过命令直接维护 `config/vtb.toml` 中的订阅。
 
 ### FF14 批量查价
@@ -216,11 +216,11 @@ docker network create diana
 docker compose up -d
 ```
 
-如使用其他网络名称，请同步修改 Compose。NapCat、PostgreSQL、代理等依赖服务也需要加入同一网络，或者在 `config/app.docker.toml` 中填写容器能够访问的地址。
+如使用其他网络名称，请同步修改 Compose。SnowLuma、PostgreSQL、代理等依赖服务也需要加入同一网络，或者在 `config/app.docker.toml` 中填写容器能够访问的地址。
 
 首次执行 `bun run start:docker` 时，会根据 `config/example/app.docker.toml` 自动创建最小的 `config/app.docker.toml`：
 
-- NapCat：`ws://napcat-miz:3000`
+- SnowLuma：`ws://snowluma:3001`
 - PostgreSQL：`http://postgresql:5432`
 - 代理：`http://clash:7890`
 
@@ -228,11 +228,11 @@ docker compose up -d
 
 Docker 模式发送视频时，miz 先通过扫码登录保存的 B 站凭据和 `[miz.network].proxyUrl` 调用 yt-dlp 下载最佳视频和音频，再统一通过稳定版 FFmpeg 转码为 H.264/AAC MP4，结果写入项目的 `temp` 目录。
 
-视频发送依次尝试三种方式：先把 `napcatMediaDirectory` 下的 `file:///` 路径作为普通 `video` 消息交给 NapCat；失败后改用 `base64://...` 的 `video` 消息；仍失败时，再把文件 `video` 消息段作为单节点合并转发发送。三种发送均禁用自动重试，并在任一方式失败（包括超时）后继续下一种。使用文件和转发方式时，NapCat 必须能读取 `napcatMediaDirectory`，Docker 部署需要把同一个宿主机 `temp` 目录挂载到该路径。
+视频发送依次尝试三种方式：先把 `napcatMediaDirectory` 下的 `file:///` 路径作为普通 `video` 消息交给 SnowLuma；失败后改用 `base64://...` 的 `video` 消息；仍失败时，再把文件 `video` 消息段作为单节点合并转发发送。三种发送均禁用自动重试，并在任一方式失败（包括超时）后继续下一种。使用文件和转发方式时，SnowLuma 必须能读取 `napcatMediaDirectory`，Docker 部署需要把同一个宿主机 `temp` 目录挂载到该路径。
 
 ```yaml
 services:
-  napcat:
+  snowluma:
     volumes:
       - ./temp:/app/media
 ```
@@ -372,7 +372,7 @@ bun audit
 | `bun run prisma:migrate` | 使用当前配置执行 `prisma migrate deploy`。 |
 | `bun run prisma:push` | 将 Schema 直接推送到数据库，适合本地开发验证。 |
 
-日志默认输出到控制台。外部接口调用失败时，优先检查接口地址、代理、B 站 Cookie、容器网络、PostgreSQL 和 NapCat 网关状态。
+日志默认输出到控制台。外部接口调用失败时，优先检查接口地址、代理、B 站 Cookie、容器网络、PostgreSQL 和 SnowLuma 网关状态。
 
 ## 常见问题
 
@@ -382,7 +382,7 @@ bun audit
 
 ### 视频下载成功但 QQ 发送失败
 
-先检查 NapCat 日志中的具体富媒体错误，并确认 miz 的项目 `temp` 目录与 NapCat 的 `napcatMediaDirectory` 指向同一份宿主机目录、NapCat 有读取权限；文件路径发送失败后，miz 还会自动尝试 Base64 和单节点合并转发。
+先检查 SnowLuma 日志中的具体富媒体错误，并确认 miz 的项目 `temp` 目录与 SnowLuma 的 `napcatMediaDirectory` 指向同一份宿主机目录、SnowLuma 有读取权限；文件路径发送失败后，miz 还会自动尝试 Base64 和单节点合并转发。
 
 ### VTB、新闻、壁纸或 FF14 功能提示未配置
 

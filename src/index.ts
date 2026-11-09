@@ -54,7 +54,7 @@ const main = async (logger: Logger) => {
   configureBilibiliCredentialStore(getDatabaseUrl(loadedConfig));
   configureGiftLotteryDrawStore(getDatabaseUrl(loadedConfig));
   configureBilibiliApiUrls(loadedConfig.vtb);
-  logger.setLevel?.(loadedConfig.naplink.logLevel);
+  logger.setLevel?.(loadedConfig.snowluma.logLevel);
   if (createdDirectories.length > 0) {
     logger.info("miz", "created missing project directories", { directories: createdDirectories });
   }
@@ -139,7 +139,7 @@ const createConnectedAppRuntime = async (
   config: Awaited<ReturnType<typeof loadConfig>>,
   logger: Logger,
 ): Promise<AppRuntime> => {
-  logger.setLevel?.(config.naplink.logLevel);
+  logger.setLevel?.(config.snowluma.logLevel);
   const gateway = createGateway(config, logger);
   try {
     logger.info("miz", `connecting to ${config.gateway.url}`);
@@ -191,7 +191,7 @@ const replaceAppRuntime = async (
       stopPrevious: previous.stop,
       createNext: () => createConnectedAppRuntime(nextConfig, logger),
       restorePrevious: () => {
-        logger.setLevel?.(previous.config.naplink.logLevel);
+        logger.setLevel?.(previous.config.snowluma.logLevel);
         return createConnectedAppRuntime(previous.config, logger);
       },
       onStopError: (error) => logger.warn(
@@ -205,12 +205,12 @@ const replaceAppRuntime = async (
   return replaceRuntimeWithFallback({
     stopPrevious: previous.stopFeatures,
     createNext: async () => {
-      logger.setLevel?.(nextConfig.naplink.logLevel);
+      logger.setLevel?.(nextConfig.snowluma.logLevel);
       const features = await createFeatureRuntime(nextConfig, previous.gateway, logger);
       return createManagedAppRuntime(nextConfig, previous.gateway, features.stopFeatures);
     },
     restorePrevious: async () => {
-      logger.setLevel?.(previous.config.naplink.logLevel);
+      logger.setLevel?.(previous.config.snowluma.logLevel);
       const features = await createFeatureRuntime(previous.config, previous.gateway, logger);
       return createManagedAppRuntime(previous.config, previous.gateway, features.stopFeatures);
     },

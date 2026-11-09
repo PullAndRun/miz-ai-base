@@ -29,6 +29,16 @@ const ff14BatchQuerySchema = z
     message: "FF14 batch sell alert requires sellPrice",
   });
 
+const clientRuntimeSchema = z
+  .object({
+    logLevel: logLevelSchema.optional(),
+    connectTimeoutMs: nonNegativeIntegerSchema.optional(),
+    pingIntervalMs: nonNegativeIntegerSchema.optional(),
+    apiTimeoutMs: nonNegativeIntegerSchema.optional(),
+    apiRetries: nonNegativeIntegerSchema.optional(),
+  })
+  .optional();
+
 const rawMizConfigSchema = z.object({
   gateway: z.object({
     url: nonEmptyStringSchema,
@@ -41,15 +51,9 @@ const rawMizConfigSchema = z.object({
     username: nonEmptyStringSchema,
     password: nonEmptyStringSchema,
   }),
-  naplink: z
-    .object({
-      logLevel: logLevelSchema.optional(),
-      connectTimeoutMs: nonNegativeIntegerSchema.optional(),
-      pingIntervalMs: nonNegativeIntegerSchema.optional(),
-      apiTimeoutMs: nonNegativeIntegerSchema.optional(),
-      apiRetries: nonNegativeIntegerSchema.optional(),
-    })
-    .optional(),
+  snowluma: clientRuntimeSchema,
+  // Legacy name kept so existing app.toml files keep loading during migration.
+  naplink: clientRuntimeSchema,
   plugins: z
     .object({
       commandPrefix: nonEmptyStringSchema.optional(),
@@ -215,18 +219,20 @@ const rawMizConfigSchema = z.object({
     .optional(),
 });
 
-const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
+const mizConfigSchema = rawMizConfigSchema.transform((config) => {
+  const clientRuntime = config.snowluma ?? config.naplink;
+  return {
   runtime: {
     mode: getRuntimeMode(),
   },
   gateway: config.gateway,
   postgresql: config.postgresql,
-  naplink: {
-    logLevel: config.naplink?.logLevel ?? "info",
-    connectTimeoutMs: config.naplink?.connectTimeoutMs ?? 30_000,
-    pingIntervalMs: config.naplink?.pingIntervalMs ?? 30_000,
-    apiTimeoutMs: config.naplink?.apiTimeoutMs ?? 30_000,
-    apiRetries: config.naplink?.apiRetries ?? 3,
+  snowluma: {
+    logLevel: clientRuntime?.logLevel ?? "info",
+    connectTimeoutMs: clientRuntime?.connectTimeoutMs ?? 30_000,
+    pingIntervalMs: clientRuntime?.pingIntervalMs ?? 30_000,
+    apiTimeoutMs: clientRuntime?.apiTimeoutMs ?? 30_000,
+    apiRetries: clientRuntime?.apiRetries ?? 3,
   },
   plugins: {
     commandPrefix: config.plugins?.commandPrefix ?? "miz",
@@ -378,7 +384,8 @@ const mizConfigSchema = rawMizConfigSchema.transform((config) => ({
         : { contributionStreamers: subscription.contributionStreamers.filter((name) => subscription.streamers.includes(name)) }),
     })),
   },
-}));
+  };
+});
 
 const appConfigSchema = z.object({
   miz: mizConfigSchema,
@@ -510,7 +517,7 @@ export type VtbConfig = {
   proxyUrl: string;
   /** bot 侧写入通知图片的共享目录（与视频共用，Docker 下为项目 temp/）。 */
   imageDirectory: string;
-  /** NapCat 读取同一目录的路径，file:// 地址以此拼接。 */
+  /** SnowLuma 读取同一目录的路径，file:// 地址以此拼接。 */
   napcatImageDirectory: string;
   subscriptions: ReadonlyArray<{
     readonly groupId: string | number;

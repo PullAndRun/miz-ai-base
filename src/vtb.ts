@@ -43,7 +43,7 @@ const VTB_STATS_REQUEST_INTERVAL_MS = 1_000;
 const VTB_FAN_CLUB_REQUEST_INTERVAL_MS = 1_000;
 const VTB_STATS_CACHE_MS = 60_000;
 const VTB_LIVE_QUERY_CACHE_MS = 60_000;
-// 图片先写进 bot/NapCat 共享目录并按 file:// 发送；同名文件在保留期内直接复用。
+// 图片先写进 bot/SnowLuma 共享目录并按 file:// 发送；同名文件在保留期内直接复用。
 const VTB_IMAGE_FILE_PREFIX = "miz-vtb-image-";
 export const STALE_VTB_IMAGE_FILE_MAX_AGE_MS = 24 * 60 * 60_000;
 const VTB_IMAGE_FILE_NAME_PATTERN = /^miz-vtb-image-[0-9a-f]{20}\./;
@@ -889,7 +889,7 @@ export const getVtbDynamics = async (
   return feed;
 };
 
-/** 按 URL 扩展名命名文件；拿不到已知扩展名时退回 jpg（NapCat 按内容识别图片类型）。 */
+/** 按 URL 扩展名命名文件；拿不到已知扩展名时退回 jpg（SnowLuma 按内容识别图片类型）。 */
 const guessVtbImageExtension = (url: string) => {
   const match = /\.([a-z0-9]{2,5})$/i.exec(new URL(url).pathname);
   return (match ? VTB_IMAGE_FILE_EXTENSIONS[match[1].toLowerCase()] : undefined) ?? "jpg";
@@ -944,8 +944,8 @@ export const getVtbImageFile = async (imageUrl: string | undefined, config: VtbC
   );
   recordVtbRequestSuccess(url);
 
-  // 共享文件只传路径，原图直接落盘交给 NapCat 读取；目录不可写时才退回
-  // 压缩后的 base64（压缩保证不会撑爆 NapCat 的 50MiB 单帧上限）。
+  // 共享文件只传路径，原图直接落盘交给 SnowLuma 读取；目录不可写时才退回
+  // 压缩后的 base64（压缩保证不会撑爆常见 OneBot 的 50MiB 单帧上限）。
   try {
     await writeSharedMediaFile(config.imageDirectory, fileName, bytes);
     return buildNapcatFileUrl(config.napcatImageDirectory, fileName);

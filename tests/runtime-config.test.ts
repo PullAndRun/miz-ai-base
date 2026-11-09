@@ -8,7 +8,7 @@ const createConfig = () => ({
     accessToken: "token",
     followedGroupMemberId: 123,
   },
-  naplink: {
+  snowluma: {
     logLevel: "warn",
     connectTimeoutMs: 30_000,
     pingIntervalMs: 30_000,
@@ -19,7 +19,7 @@ const createConfig = () => ({
 } as unknown as MizConfig);
 
 describe("runtime configuration boundaries", () => {
-  test("restarts the gateway for every captured gateway and NapLink setting", () => {
+  test("restarts the gateway for every captured gateway and SnowLuma setting", () => {
     const current = createConfig();
     expect(requiresGatewayRestart(current, {
       ...current,
@@ -31,11 +31,11 @@ describe("runtime configuration boundaries", () => {
     })).toBeTrue();
     expect(requiresGatewayRestart(current, {
       ...current,
-      naplink: { ...current.naplink, logLevel: "info" },
+      snowluma: { ...current.snowluma, logLevel: "info" },
     })).toBeTrue();
     expect(requiresGatewayRestart(current, {
       ...current,
-      naplink: { ...current.naplink, apiTimeoutMs: 5_000 },
+      snowluma: { ...current.snowluma, apiTimeoutMs: 5_000 },
     })).toBeTrue();
   });
 

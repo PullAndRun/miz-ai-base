@@ -1,4 +1,4 @@
-import type { VideoSegment } from "@naplink/naplink";
+import type { VideoSegment } from "@snowluma/sdk";
 import type { VideoConfig } from "@/config";
 import {
   getNapcatVideoBase64,
@@ -91,7 +91,7 @@ export const deliverVideoWithFallback = async (
       await operation();
       return { mode, attempts: [...attempts] };
     } catch (error) {
-      // NapCat may continue uploading after its API request times out. Retrying
+      // The gateway may continue uploading after its API request times out. Retrying
       // with another representation can therefore send duplicates or produce a
       // misleading all-failed message.
       if (options.stopOnTimeout && isVideoSendTimeoutError(error)) {

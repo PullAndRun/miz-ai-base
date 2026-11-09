@@ -6,22 +6,15 @@ import {
   pickGroupMemberDisplayName,
   getSelfSentGroupMessage,
   getRecallHistoryTimeoutMs,
-  resolveNapLinkApiTimeoutMs,
+  resolveSnowLumaApiTimeoutMs,
   getGroupSendPermission,
   isGroupAtAllAvailable,
   isGroupMessageUnavailableError,
-  isIgnorableNapLinkWarning,
-  NAPLINK_RECONNECT_MAX_ATTEMPTS,
 } from "@/gateway";
 
-test("gateway reconnect attempts are unlimited", () => {
-  expect(NAPLINK_RECONNECT_MAX_ATTEMPTS).toBe(Number.POSITIVE_INFINITY);
-});
-
-test("keeps the gateway stale-request window wider than a gift media send", () => {
-  // 30 秒的配置会让网关 60 秒就丢弃挂起请求，礼物特效视频根本发不出去。
-  expect(resolveNapLinkApiTimeoutMs(30_000)).toBe(510_000);
-  expect(resolveNapLinkApiTimeoutMs(600_000)).toBe(600_000);
+test("keeps the gateway request timeout wider than a gift media send", () => {
+  expect(resolveSnowLumaApiTimeoutMs(30_000)).toBe(960_000);
+  expect(resolveSnowLumaApiTimeoutMs(1_200_000)).toBe(1_200_000);
 });
 
 test("recall history lookup always has a short timeout", () => {
@@ -167,14 +160,6 @@ describe("last bot group message tracking", () => {
   });
 });
 
-describe("gateway warning filtering", () => {
-  test("only suppresses the known response-without-request warning", () => {
-    expect(isIgnorableNapLinkWarning("收到未知请求的响应: undefined")).toBeTrue();
-    for (const action of ["send_group_msg", "send_private_msg", "send_forward_msg"]) {
-      expect(isIgnorableNapLinkWarning(`API失败: ${action}`)).toBeFalse();
-    }
-  });
-});
 
 describe("group send permission", () => {
   test("identifies a muted or unavailable group message error", () => {
@@ -182,7 +167,7 @@ describe("group send permission", () => {
     expect(isGroupMessageUnavailableError(new Error("other failure"))).toBeFalse();
   });
 
-  test("blocks NapCat's -1 whole-group mute flag for ordinary members", () => {
+  test("blocks a -1 whole-group mute flag for ordinary members", () => {
     expect(getGroupSendPermission(
       { group_all_shut: -1 },
       { shut_up_timestamp: 0, role: "member" },
@@ -246,7 +231,7 @@ describe("group send permission", () => {
 });
 
 describe("group @all permission", () => {
-  test("supports the current NapCat quota response", () => {
+  test("supports the current OneBot quota response", () => {
     expect(isGroupAtAllAvailable({
       can_at_all: true,
       remain_at_all_count_for_group: 3,

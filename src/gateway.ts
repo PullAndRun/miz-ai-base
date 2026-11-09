@@ -1,4 +1,4 @@
-import { NapLink, type ConnectionState, type Logger as NapLinkLogger } from "@naplink/naplink";
+import { createSnowLumaGatewayClient, type SnowLumaGatewayClient } from "@/snowluma-client";
 import { z } from "zod";
 import { createExpiringCache, readExpiringCache, writeExpiringCache } from "@/cache";
 import { BILI_GIFT_MEDIA_SEND_TIMEOUT_MS } from "@/bili-gift";
@@ -107,7 +107,6 @@ const MESSAGE_DEDUPLICATION_WINDOW_MS = 10 * 60 * 1_000;
 const MAX_DEDUPLICATED_MESSAGE_IDS = 5_000;
 const MAX_TRACKED_GROUP_MESSAGES = 100;
 const RECALL_HISTORY_TIMEOUT_MS = 5_000;
-export const NAPLINK_RECONNECT_MAX_ATTEMPTS = Number.POSITIVE_INFINITY;
 
 export const getRecallHistoryTimeoutMs = (configuredTimeoutMs: number) => configuredTimeoutMs > 0
   ? Math.min(configuredTimeoutMs, RECALL_HISTORY_TIMEOUT_MS)
@@ -154,7 +153,7 @@ export const pickGroupMemberDisplayName = (value: unknown): string | undefined =
   return name.length > 24 ? name.slice(0, 24) + "…" : name;
 };
 
-const napCatEventSchema = z
+const oneBotEventSchema = z
   .looseObject({
     post_type: z.string().optional(),
     message_type: z.string().optional(),
@@ -170,10 +169,15 @@ const napCatEventSchema = z
     self_id: idSchema.optional(),
   });
 
-type NapCatEvent = z.infer<typeof napCatEventSchema>;
+type OneBotGatewayEvent = z.infer<typeof oneBotEventSchema>;
 
 export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
-  const client = createNapLinkClient(config, logger);
+  const client = createSnowLumaGatewayClient({
+    url: config.gateway.url,
+    accessToken: config.gateway.accessToken,
+    requestTimeoutMs: resolveSnowLumaApiTimeoutMs(config.snowluma.apiTimeoutMs),
+    logger,
+  });
   const messageHandlers = new Set<MessageHandler>();
   const canSendGroupMessage = createGroupSendPermissionChecker(client, logger);
   const canMentionAllGroupMembers = createAtAllPermissionChecker(client, logger);
@@ -200,7 +204,7 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
   };
 
   const refreshTrackedGroupMessages = async (groupId: number | string) => {
-    const timeoutMs = getRecallHistoryTimeoutMs(config.naplink.apiTimeoutMs);
+    const timeoutMs = getRecallHistoryTimeoutMs(config.snowluma.apiTimeoutMs);
     try {
       const [loginInfo, history] = await Promise.all([
         callApiWithoutRetry<unknown>(client, "get_login_info", {}, timeoutMs),
@@ -231,8 +235,7 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
   };
 
   const deleteGroupMessage = async (groupId: number | string, messageId: string) => {
-    // NapCat parses its short message ID numerically. Preserve non-numeric IDs
-    // for adapters that use string identifiers.
+    // Preserve non-numeric IDs for OneBot adapters that support string identifiers.
     const numericMessageId = Number(messageId);
     const actionMessageId = Number.isSafeInteger(numericMessageId) && numericMessageId > 0
       ? numericMessageId
@@ -242,7 +245,7 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
         client,
         "delete_msg",
         { message_id: actionMessageId },
-        config.naplink.apiTimeoutMs,
+        config.snowluma.apiTimeoutMs,
       );
     } catch (error) {
       logger.warn("gateway", "bot group message recall failed", { groupId, messageId, error });
@@ -252,7 +255,7 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
 
   return {
     connect: () => client.connect(),
-    dispose: () => client.dispose(),
+    dispose: () => client.close(),
     reportServerInfo: () => reportServerInfo(client, logger),
     getGroupList: async () => {
       try {
@@ -337,7 +340,7 @@ export const createGateway = (config: MizConfig, logger: Logger): Gateway => {
 };
 
 const sendForwardMessage = (
-  client: NapLink,
+  client: SnowLumaGatewayClient,
   target: IncomingMessage,
   messages: readonly ForwardMessageContent[],
   options: ForwardMessageOptions = {},
@@ -374,7 +377,7 @@ const sendForwardMessage = (
 };
 
 const sendForwardMessageWithoutRetry = async (
-  client: NapLink,
+  client: SnowLumaGatewayClient,
   target: IncomingMessage,
   messages: readonly ForwardMessageContent[],
   options: ForwardMessageSendOptions = {},
@@ -412,8 +415,8 @@ const createForwardMessageParams = (
 const createForwardNode = (message: ForwardMessageContent, options: ForwardMessageOptions) => ({
   type: "node",
   data: {
-    name: options.senderName ?? "miz",
-    uin: String(options.senderUin ?? 0),
+    nickname: options.senderName ?? "miz",
+    user_id: Number(options.senderUin ?? 0),
     content:
       typeof message === "string"
         ? [
@@ -429,56 +432,15 @@ const createForwardNode = (message: ForwardMessageContent, options: ForwardMessa
 });
 
 /**
- * NapLink 会丢弃挂起超过 2 × api.timeout 的请求。礼物特效视频的发送上限是
- * BILI_GIFT_MEDIA_SEND_TIMEOUT_MS，所以网关侧的窗口至少要宽过它的一半再加一分钟，
- * 否则长发送还没等到回执就被判成超时（2026-09-15 / 09-20 两次丢迷币就是这么来的）。
+ * The official SnowLuma SDK applies the per-call timeout directly. Keep the
+ * configured timeout, but always allow the full gift-media send time plus a
+ * cleanup margin.
  */
-export const resolveNapLinkApiTimeoutMs = (configuredTimeoutMs: number) =>
-  Math.max(configuredTimeoutMs, Math.ceil(BILI_GIFT_MEDIA_SEND_TIMEOUT_MS / 2) + 60_000);
-
-const createNapLinkClient = (config: MizConfig, logger: Logger) =>
-  new NapLink({
-    connection: {
-      url: config.gateway.url,
-      token: config.gateway.accessToken,
-      timeout: config.naplink.connectTimeoutMs,
-      pingInterval: config.naplink.pingIntervalMs,
-    },
-    reconnect: {
-      enabled: true,
-      maxAttempts: NAPLINK_RECONNECT_MAX_ATTEMPTS,
-    },
-    logging: {
-      level: config.naplink.logLevel,
-      logger: createNapLinkLogger(logger),
-    },
-    api: {
-      timeout: resolveNapLinkApiTimeoutMs(config.naplink.apiTimeoutMs),
-      retries: config.naplink.apiRetries,
-    },
-  });
-
-const createNapLinkLogger = (logger: Logger): NapLinkLogger => ({
-  debug: (message, ...metadata) => logger.debug("gateway", message, metadataOrUndefined(metadata)),
-  info: (message, ...metadata) => logger.info("gateway", message, metadataOrUndefined(metadata)),
-  warn: (message, ...metadata) => {
-    if (isIgnorableNapLinkWarning(message)) {
-      return;
-    }
-
-    logger.warn("gateway", message, metadataOrUndefined(metadata));
-  },
-  error: (message, error, ...metadata) =>
-    logger.error("gateway", message, error ?? metadataOrUndefined(metadata)),
-});
-
-const metadataOrUndefined = (metadata: unknown[]) => (metadata.length === 0 ? undefined : metadata);
-
-export const isIgnorableNapLinkWarning = (message: string) =>
-  message === "收到未知请求的响应: undefined";
+export const resolveSnowLumaApiTimeoutMs = (configuredTimeoutMs: number) =>
+  Math.max(configuredTimeoutMs, BILI_GIFT_MEDIA_SEND_TIMEOUT_MS + 60_000);
 
 const registerEvents = (
-  client: NapLink,
+  client: SnowLumaGatewayClient,
   logger: Logger,
   messageHandlers: Set<MessageHandler>,
   canSendGroupMessage: (groupId: number | string) => Promise<boolean>,
@@ -486,7 +448,7 @@ const registerEvents = (
   followedGroupMemberId: string | number | undefined,
   recordGroupMessage: (groupId: number | string, response: unknown) => void,
 ) => {
-  client.on("state_change", (state: ConnectionState) => {
+  client.on("state_change", (state: string) => {
     logger.info("gateway", `state=${state}`);
   });
 
@@ -499,7 +461,7 @@ const registerEvents = (
   });
 
   client.on("message", (event) => {
-    const parsedEvent = napCatEventSchema.safeParse(event);
+    const parsedEvent = oneBotEventSchema.safeParse(event);
     if (!parsedEvent.success) {
       logger.warn("gateway", "invalid message event ignored", parsedEvent.error);
       return;
@@ -520,7 +482,7 @@ const registerEvents = (
   });
 
   client.on("message_sent", (event) => {
-    const parsedEvent = napCatEventSchema.safeParse(event);
+    const parsedEvent = oneBotEventSchema.safeParse(event);
     if (!parsedEvent.success) {
       logger.warn("gateway", "invalid sent message event ignored", parsedEvent.error);
       return;
@@ -534,7 +496,7 @@ const registerEvents = (
   });
 
   client.on("notice", (event) => {
-    const parsedEvent = napCatEventSchema.safeParse(event);
+    const parsedEvent = oneBotEventSchema.safeParse(event);
     logger.info("gateway", `event=${parsedEvent.success ? formatEventName(parsedEvent.data) : "unknown"}`);
     if (!parsedEvent.success || !isFollowedMemberLeavingGroup(parsedEvent.data, followedGroupMemberId)) {
       if (parsedEvent.success && isNewGroupMember(parsedEvent.data)) {
@@ -583,7 +545,7 @@ const notifyMessageHandlers = (
   }
 };
 
-const toIncomingMessage = (event: NapCatEvent): IncomingMessage => ({
+const toIncomingMessage = (event: OneBotGatewayEvent): IncomingMessage => ({
   text: extractMessageText(event),
   messageType: event.message_type,
   messageId: event.message_id,
@@ -642,8 +604,7 @@ export const getSelfGroupMessageIdsFromHistory = (response: unknown, selfId: num
 
     return [{
       messageId,
-      // NapCat's message_seq may be the random short message ID. real_seq is
-      // the actual monotonically increasing group sequence.
+      // message_seq may be a random short ID. real_seq is the group sequence.
       sequence: getNumberValue(record, ["real_seq", "realSeq"]),
       time: getNumberValue(record, ["time"]),
       index,
@@ -693,33 +654,14 @@ const createMessageDeduplicator = () => {
   };
 };
 
-type ApiClientWithRetryOptions = {
-  call<T>(
-    method: string,
-    params: Record<string, unknown>,
-    options: { retries: number; timeout?: number },
-  ): Promise<T>;
-};
-
 const callApiWithoutRetry = <T>(
-  client: NapLink,
+  client: SnowLumaGatewayClient,
   method: string,
   params: Record<string, unknown>,
   timeoutMs?: number,
-): Promise<T> => {
-  // NapLink 1.1.0 exposes retry options on ApiClient but not on every public helper.
-  // Keep the no-retry path here for non-idempotent sends and lightweight preflight checks.
-  const apiClient = (client as unknown as { apiClient?: ApiClientWithRetryOptions }).apiClient;
-  if (!apiClient) {
-    throw new Error("NapLink API client is unavailable for a no-retry call");
-  }
+): Promise<T> => client.callApi<T>(method, params, timeoutMs);
 
-  return apiClient.call<T>(method, params, {
-    retries: 0,
-    ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
-  });
-};
-const extractMessageText = (event: NapCatEvent) => {
+const extractMessageText = (event: OneBotGatewayEvent) => {
   const message = event.message;
   if (typeof message === "string") {
     return normalizeAtMentions(message);
@@ -749,7 +691,7 @@ const extractSegmentText = (segment: unknown) => {
 const normalizeAtMentions = (text: string) =>
   text.replace(/\[CQ:at,qq=([^,\]]+)(?:,[^\]]+)?\]/gi, "@$1 ");
 
-const reportServerInfo = async (client: NapLink, logger: Logger) => {
+const reportServerInfo = async (client: SnowLumaGatewayClient, logger: Logger) => {
   try {
     const [loginInfo, status] = await Promise.all([client.getLoginInfo(), client.getStatus()]);
     logger.info("gateway", "login info", loginInfo);
@@ -760,11 +702,11 @@ const reportServerInfo = async (client: NapLink, logger: Logger) => {
 };
 
 const formatEventNameOrUnknown = (event: unknown) => {
-  const parsedEvent = napCatEventSchema.safeParse(event);
+  const parsedEvent = oneBotEventSchema.safeParse(event);
   return parsedEvent.success ? formatEventName(parsedEvent.data) : "unknown";
 };
 
-const formatEventName = (event: NapCatEvent) =>
+const formatEventName = (event: OneBotGatewayEvent) =>
   [
     event.post_type,
     event.message_type ?? event.notice_type ?? event.request_type ?? event.meta_event_type,
@@ -774,7 +716,7 @@ const formatEventName = (event: NapCatEvent) =>
     .join(".");
 
 const isFollowedMemberLeavingGroup = (
-  event: NapCatEvent,
+  event: OneBotGatewayEvent,
   followedGroupMemberId: string | number | undefined,
 ) =>
   followedGroupMemberId !== undefined &&
@@ -783,15 +725,15 @@ const isFollowedMemberLeavingGroup = (
   event.user_id !== undefined &&
   String(event.user_id) === String(followedGroupMemberId);
 
-const isNewGroupMember = (event: NapCatEvent) =>
+const isNewGroupMember = (event: OneBotGatewayEvent) =>
   event.notice_type === "group_increase" &&
   event.group_id !== undefined &&
   event.user_id !== undefined &&
   String(event.user_id) !== String(event.self_id);
 
 const sendNewMemberWelcome = async (
-  client: NapLink,
-  event: NapCatEvent,
+  client: SnowLumaGatewayClient,
+  event: OneBotGatewayEvent,
   logger: Logger,
   canSendGroupMessage: (groupId: number | string) => Promise<boolean>,
   recordGroupMessage: (groupId: number | string, response: unknown) => void,
@@ -844,7 +786,7 @@ const getDisplayName = (value: unknown, keys: readonly string[], seen = new Set<
   return getDisplayName(record.data, keys, seen);
 };
 
-const createGroupSendPermissionChecker = (client: NapLink, logger: Logger) => {
+const createGroupSendPermissionChecker = (client: SnowLumaGatewayClient, logger: Logger) => {
   let selfId: Promise<string | undefined> | undefined;
   let permissionCache = createExpiringCache<string, boolean>(MAX_GROUP_PERMISSION_CACHE_ENTRIES);
   const inFlightChecks = new Map<string, Promise<boolean>>();
@@ -947,7 +889,7 @@ export const getGroupSendPermission = (
   };
 };
 
-const createAtAllPermissionChecker = (client: NapLink, logger: Logger) => {
+const createAtAllPermissionChecker = (client: SnowLumaGatewayClient, logger: Logger) => {
   let cache = createExpiringCache<string, boolean>(MAX_GROUP_PERMISSION_CACHE_ENTRIES);
   let selfId: Promise<string | undefined> | undefined;
   const cachePermission = (key: string, allowed: boolean) => {
@@ -1000,8 +942,8 @@ const createAtAllPermissionChecker = (client: NapLink, logger: Logger) => {
         cachePermission(key, allowed);
         return allowed;
       } catch (error) {
-        // Older NapCat versions can lack this optional action. The role is
-        // still sufficient to preserve the previous @all behavior.
+        // Some OneBot implementations can lack this optional action. The role
+        // is still sufficient to preserve the previous @all behavior.
         logger.warn("gateway", "unable to read @all quota; falling back to role check", { groupId, role, error });
         cachePermission(key, true);
         return true;
